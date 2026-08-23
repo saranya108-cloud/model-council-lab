@@ -1,0 +1,14 @@
+{
+  "task_id": "dev-001",
+  "bug_report": "parse_date() raises ValueError for valid leap-day input '2024-02-29'. Expected: returns a date object. Actual: crashes.",
+  "workspace_id": "ws-dev-001",
+  "allowed_files": ["dates.py"],
+  "visible_test_command": "python3 -m unittest tests.test_dates",
+  "metadata": {
+    "difficulty": "easy",
+    "language": "python",
+    "development_only": true,
+    "excluded_from_heldout": true,
+    "source": "synthetic development fixture"
+  }
+}
