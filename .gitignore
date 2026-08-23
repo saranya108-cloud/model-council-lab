@@ -216,3 +216,28 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Model Council AI artifacts
+
+# Local models and weights
+models/
+checkpoints/
+weights/
+*.gguf
+*.safetensors
+*.bin
+
+# Local datasets and experiment outputs
+data/
+datasets/
+
+# Agent runtime state
+sessions/
+state/
+memory/
+
+# Local experiment logs
+logs/
+
+# Local configuration
+config.local.*
