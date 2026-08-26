@@ -63,14 +63,20 @@ class SubprocessAdapter:
         kind: str = "fake",
         options: dict | None = None,
         python_executable: str | None = None,
+        provider_treatment_config: dict | None = None,
     ) -> None:
         self.identity = identity
         self.kind = kind
         # Deep-frozen so post-construction caller mutation cannot change what
         # the child executes or the recorded adapter configuration digest.
-        from .security import deep_freeze
+        from .security import deep_freeze, normalize_provider_treatment_config
 
         self.options = deep_freeze(dict(options or {}))
+        # Treatment authority is supplied separately from adapter options and
+        # is copied before freeze so later caller mutation cannot change it.
+        self.provider_treatment_config = deep_freeze(
+            normalize_provider_treatment_config(provider_treatment_config)
+        )
         self.python_executable = python_executable or sys.executable
         self.last_scratch_dir: str | None = None
         self.last_attempt_timeout_seconds: float | None = None
@@ -92,6 +98,11 @@ class SubprocessAdapter:
             "model_id": self.identity.model_id,
             "identity": self.identity.to_dict(),
         }
+
+    def persisted_provider_treatment_config(self) -> dict:
+        from .security import canonical_json
+
+        return json.loads(canonical_json(self.provider_treatment_config))
 
     @property
     def execution_profile(self) -> str:

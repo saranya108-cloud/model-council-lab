@@ -59,9 +59,21 @@ def make_spec(run_id, condition="A", seed=7, **limit_kwargs):
     )
 
 
-def make_runner(tmp_path_or_str, kind="fake", options=None, identity=None, monotonic=None):
+def make_runner(
+    tmp_path_or_str,
+    kind="fake",
+    options=None,
+    identity=None,
+    monotonic=None,
+    provider_treatment_config=None,
+):
     root = Path(tmp_path_or_str) / "runs"
-    process = SubprocessAdapter(identity or FAKE_IDENTITY, kind=kind, options=options)
+    process = SubprocessAdapter(
+        identity or FAKE_IDENTITY,
+        kind=kind,
+        options=options,
+        provider_treatment_config=provider_treatment_config,
+    )
     evaluator = ExternalEvaluator(EvaluationConfig())
     return ExperimentRunner(process, evaluator, runs_root=root, monotonic=monotonic), root
 

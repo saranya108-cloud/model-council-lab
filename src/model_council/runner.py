@@ -238,6 +238,8 @@ class ExperimentRunner:
                 {
                     "adapter_kind": self.adapter.kind,
                     "adapter_config_digest": digest_json(self.adapter.options),
+                    "adapter_identity": self.adapter.identity.to_dict(),
+                    "provider_treatment_config": self.adapter.persisted_provider_treatment_config(),
                     "execution_profile": profile,
                     "live_contract_version": LIVE_CONTRACT_VERSION,
                     "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
@@ -296,6 +298,7 @@ class ExperimentRunner:
             "model_identifier": run_spec.model_identifier,
             "adapter_kind": self.adapter.kind,
             "adapter_config_digest": digest_json(self.adapter.options),
+            "provider_treatment_config": self.adapter.persisted_provider_treatment_config(),
             "evaluator_version": self.evaluator.version,
             "evaluator_config_digest": self.evaluator.config_digest,
             "task_id": task_spec.task_id,
@@ -893,6 +896,7 @@ class ExperimentRunner:
             execution_profile=profile,
             adapter_kind=self.adapter.kind,
             adapter_config_digest=digest_json(self.adapter.options),
+            provider_treatment_config=self.adapter.provider_treatment_config,
         )
         identity_used = None
         reported_usage = None

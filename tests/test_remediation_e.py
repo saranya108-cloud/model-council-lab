@@ -134,7 +134,7 @@ class TestRunAuthority(unittest.TestCase):
     def test_authority_record_is_written_and_bound(self):
         with TempRoot() as root:
             runs_root, run_dir = self._success(root, "e-auth-ok")
-            self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v11")
+            self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v12")
             authority = json.loads((run_dir / RUN_AUTHORITY).read_text())
             self.assertEqual(authority["schema"], RUN_AUTHORITY_SCHEMA)
             self.assertEqual(authority["harness_protocol_version"], HARNESS_PROTOCOL_VERSION)

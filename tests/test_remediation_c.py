@@ -389,7 +389,7 @@ class TestRecordDigestRemoved(unittest.TestCase):
 
 class TestPreviouslyClosedFindings(unittest.TestCase):
     def test_trusted_profile_and_live_cannot_use_legacy(self):
-        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v11")
+        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v12")
         with TempRoot() as root:
             runner, _ = make_runner(root, kind="live_stub", options={"return_legacy_response": True})
             result = runner.execute(make_spec("c-reg-legacy", "A"), make_task())

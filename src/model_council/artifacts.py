@@ -39,6 +39,7 @@ from .invocation import (
     bound_raw_evidence,
     invocation_ref,
     serialize_invocation_record,
+    treatment_digest_for_attempt,
     verify_raw_evidence_truncation,
 )
 from .live_contract import LIVE_CONTRACT_VERSION
@@ -49,17 +50,22 @@ from .protocol import (
     execution_profile_for_kind,
 )
 from .roles import (
+    ALLOWED_INPUT_KEYS,
     CONDITION_STAGES,
     CONTEXT_POLICY_VERSION,
     EXPECTED_ARTIFACTS,
     EXTRA_ARTIFACTS,
     PRIMARY_ARTIFACT,
+    ROLE_INSTRUCTIONS,
+    STAGE_OUTPUT_KEYS,
 )
-from .security import contained_path, digest_json, safe_identifier, sha256_bytes, sha256_text
+from .security import contained_path, digest_json, normalize_provider_treatment_config, safe_identifier, sha256_bytes, sha256_text
 from .types import (
+    AdapterIdentity,
     Condition,
     GovernanceViolation,
     IntegrityViolation,
+    ResourceLimits,
     RunSpec,
     STATUS_FAILED_BUDGET,
     STATUS_FAILED_CONTRACT,
@@ -68,6 +74,7 @@ from .types import (
     STATUS_INFRASTRUCTURE_FAILURE,
     STATUS_RETRY_EXHAUSTED,
     STATUS_SUCCEEDED,
+    TaskSpec,
 )
 
 _TERMINAL_STATUSES = frozenset(
@@ -912,6 +919,12 @@ class ArtifactStore:
         )
         execution_binding = _read_frozen_object(run_dir, EXECUTION_BINDING, "execution binding")
         _assert_invocation_profile_binding(run_dir, execution_binding, canonical, manifest_entries)
+        _assert_invocation_treatment_digests(
+            run_dir=run_dir,
+            canonical=canonical,
+            execution_binding=execution_binding,
+            manifest_entries=manifest_entries,
+        )
         _assert_terminal_status_topology(
             run_dir=run_dir,
             expected_roles=expected_roles,
@@ -1096,6 +1109,8 @@ def _reconstruct_treatment(
     required_exec = (
         "adapter_kind",
         "adapter_config_digest",
+        "adapter_identity",
+        "provider_treatment_config",
         "execution_profile",
         "live_contract_version",
         "harness_protocol_version",
@@ -1111,11 +1126,24 @@ def _reconstruct_treatment(
     if execution_binding["live_contract_version"] != LIVE_CONTRACT_VERSION:
         raise IntegrityViolation("execution binding live-contract version mismatch")
     try:
+        provider_treatment_config = normalize_provider_treatment_config(
+            execution_binding["provider_treatment_config"]
+        )
+    except GovernanceViolation as exc:
+        raise IntegrityViolation(
+            "execution binding provider_treatment_config is not valid treatment authority"
+        ) from exc
+    try:
         registry_profile = execution_profile_for_kind(execution_binding["adapter_kind"])
     except Exception as exc:  # noqa: BLE001 - unknown kinds fail closed
         raise IntegrityViolation("execution binding adapter kind is not a registered profile") from exc
     if execution_binding["execution_profile"] != registry_profile:
         raise IntegrityViolation("execution binding profile does not match the trusted kind registry")
+    adapter_identity = _adapter_identity_from_execution_binding(execution_binding)
+    if adapter_identity.key() != canonical.get("model_identifier"):
+        raise IntegrityViolation(
+            "execution binding adapter identity does not match run_spec.json model_identifier"
+        )
     if evaluator_binding.get("evaluator_version") in {None, ""}:
         raise IntegrityViolation("evaluator binding is missing evaluator_version")
     if evaluator_binding.get("evaluator_config_digest") in {None, ""}:
@@ -1130,6 +1158,7 @@ def _reconstruct_treatment(
         "model_identifier": canonical.get("model_identifier"),
         "adapter_kind": execution_binding["adapter_kind"],
         "adapter_config_digest": execution_binding["adapter_config_digest"],
+        "provider_treatment_config": provider_treatment_config,
         "evaluator_version": evaluator_binding["evaluator_version"],
         "evaluator_config_digest": evaluator_binding["evaluator_config_digest"],
         "task_id": canonical.get("task_id"),
@@ -1205,6 +1234,11 @@ def _assert_invocation_profile_binding(
         expected_compat = "pre_live_fake_adapter"
     else:
         raise IntegrityViolation("execution binding has an unsupported execution profile")
+    trusted_identity = _adapter_identity_from_execution_binding(execution_binding)
+    if trusted_identity.key() != expected_model:
+        raise IntegrityViolation(
+            "execution binding adapter identity does not match run_spec.json model_identifier"
+        )
     for entry in manifest_entries:
         if _entry_kind(entry) != KIND_INVOCATION_METADATA:
             continue
@@ -1218,15 +1252,168 @@ def _assert_invocation_profile_binding(
             )
         if record.get("condition") != expected_condition:
             raise IntegrityViolation(f"invocation {ref} condition does not match run_spec.json")
-        configured = record.get("configured_identity") or {}
-        identity_key = configured.get("identity_key") or ":".join(
-            str(configured.get(key, ""))
-            for key in ("provider", "model_id", "model_version", "adapter_name", "adapter_version")
-        )
-        if expected_model and identity_key != expected_model:
-            raise IntegrityViolation(
-                f"invocation {ref} configured identity does not match run_spec.json"
+        for field in ("requested_identity", "configured_identity"):
+            observed = _adapter_identity_from_structured(
+                record.get(field), f"invocation {ref} {field}"
             )
+            if observed != trusted_identity:
+                raise IntegrityViolation(
+                    f"invocation {ref} {field} does not match trusted execution-binding identity"
+                )
+
+
+def _assert_invocation_treatment_digests(
+    *,
+    run_dir: Path,
+    canonical: dict,
+    execution_binding: dict,
+    manifest_entries: list[dict],
+) -> None:
+    """Recompute each attempt digest from trusted run-defining treatment authority."""
+    try:
+        identity = _adapter_identity_from_execution_binding(execution_binding)
+        resource_limits = ResourceLimits(**canonical["resource_limits"])
+        condition = Condition(canonical["condition"])
+    except (TypeError, ValueError, KeyError) as exc:
+        raise IntegrityViolation("run_spec cannot reconstruct attempt treatment authority") from exc
+    if identity.key() != canonical.get("model_identifier"):
+        raise IntegrityViolation(
+            "execution binding adapter identity does not match run_spec.json model_identifier"
+        )
+    task_record = _read_frozen_object(run_dir, TASK_RECORD, "task record")
+    try:
+        provider_treatment_config = normalize_provider_treatment_config(
+            execution_binding["provider_treatment_config"]
+        )
+    except GovernanceViolation as exc:
+        raise IntegrityViolation(
+            "execution binding provider_treatment_config is not valid treatment authority"
+        ) from exc
+    for entry in manifest_entries:
+        if _entry_kind(entry) != KIND_INVOCATION_METADATA:
+            continue
+        ref = entry.get("ref")
+        role = entry.get("role")
+        path = contained_path(run_dir, run_dir / ref)
+        record = _load_json_object(path, f"invocation record {ref}")
+        if role not in ROLE_INSTRUCTIONS:
+            raise IntegrityViolation(f"invocation {ref} role is not a trusted condition role")
+        try:
+            stage_inputs = _stage_inputs_from_trusted_authority(
+                run_dir, condition, role, task_record
+            )
+            expected_input, expected_digest = treatment_digest_for_attempt(
+                condition=condition.value,
+                role=role,
+                role_instruction=ROLE_INSTRUCTIONS[role],
+                stage_inputs=stage_inputs,
+                requested_identity=identity,
+                configured_identity=identity,
+                seed=canonical["seed"],
+                resource_limits=resource_limits,
+                execution_profile=execution_binding["execution_profile"],
+                adapter_kind=execution_binding["adapter_kind"],
+                adapter_config_digest=execution_binding["adapter_config_digest"],
+                live_contract_version=execution_binding["live_contract_version"],
+                harness_protocol_version=execution_binding["harness_protocol_version"],
+                provider_treatment_config=provider_treatment_config,
+            )
+        except (GovernanceViolation, IntegrityViolation, TypeError, ValueError, KeyError, OSError) as exc:
+            raise IntegrityViolation(
+                f"invocation {ref} treatment digest could not be independently reconstructed"
+            ) from exc
+        if record.get("input_content_digest") != expected_input:
+            raise IntegrityViolation(
+                f"invocation {ref} input_content_digest does not match reconstructed model-visible input"
+            )
+        if record.get("treatment_digest") != expected_digest:
+            raise IntegrityViolation(
+                f"invocation {ref} treatment digest does not match reconstructed treatment authority"
+            )
+
+
+def _adapter_identity_from_execution_binding(execution_binding: dict) -> AdapterIdentity:
+    return _adapter_identity_from_structured(
+        execution_binding.get("adapter_identity"),
+        "execution binding adapter_identity",
+    )
+
+
+def _adapter_identity_from_structured(raw: object, label: str) -> AdapterIdentity:
+    if type(raw) is not dict:
+        raise IntegrityViolation(f"{label} must be an object")
+    required = ("provider", "model_id", "model_version", "adapter_name", "adapter_version")
+    missing = [key for key in required if key not in raw]
+    if missing:
+        raise IntegrityViolation(f"{label} missing fields: {missing}")
+    extra = set(raw) - set(required) - {"identity_key"}
+    if extra:
+        raise IntegrityViolation(f"{label} has unexpected fields: {sorted(extra)}")
+    for key in required:
+        value = raw[key]
+        if type(value) is not str or not value:
+            raise IntegrityViolation(f"{label}.{key} must be a non-empty string")
+    identity = AdapterIdentity(
+        provider=raw["provider"],
+        model_id=raw["model_id"],
+        model_version=raw["model_version"],
+        adapter_name=raw["adapter_name"],
+        adapter_version=raw["adapter_version"],
+    )
+    stored_key = raw.get("identity_key")
+    if stored_key is not None and stored_key != identity.key():
+        raise IntegrityViolation(f"{label}.identity_key does not match identity fields")
+    return identity
+
+
+def _task_text_from_record(task_record: dict) -> str:
+    try:
+        return TaskSpec(
+            task_id=task_record["task_id"],
+            bug_report=task_record["bug_report"],
+            workspace_id=task_record["workspace_id"],
+            allowed_files=tuple(task_record["allowed_files"]),
+            visible_test_command=task_record.get("visible_test_command"),
+            snapshot_hash=task_record.get("snapshot_hash"),
+        ).agent_visible_text()
+    except (TypeError, ValueError, KeyError) as exc:
+        raise IntegrityViolation("task record cannot reconstruct agent-visible task text") from exc
+
+
+def _stage_inputs_from_trusted_authority(
+    run_dir: Path, condition: Condition, role: str, task_record: dict
+) -> dict[str, str]:
+    allowed = ALLOWED_INPUT_KEYS.get((condition, role))
+    if allowed is None:
+        raise IntegrityViolation(
+            f"no trusted context policy for condition {condition.value} role {role!r}"
+        )
+    sources = {
+        context_key: (producer, artifact_name)
+        for producer, mapping in STAGE_OUTPUT_KEYS.items()
+        for artifact_name, context_key in mapping.items()
+    }
+    inputs: dict[str, str] = {}
+    for key in sorted(allowed):
+        if key == "task":
+            inputs["task"] = _task_text_from_record(task_record)
+            continue
+        source = sources.get(key)
+        if source is None:
+            raise IntegrityViolation(f"trusted context key {key!r} has no producing stage")
+        producer, artifact_name = source
+        path = contained_path(run_dir, run_dir / producer / f"{artifact_name}.md")
+        if not path.is_file():
+            raise IntegrityViolation(
+                f"cannot reconstruct {role!r} stage inputs; missing {producer}/{artifact_name}.md"
+            )
+        try:
+            inputs[key] = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise IntegrityViolation(
+                f"cannot reconstruct {role!r} stage inputs from {producer}/{artifact_name}.md"
+            ) from exc
+    return inputs
 
 
 def _complete_successful_sealed_topology(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -12,6 +13,59 @@ from typing import Any
 from .errors import GovernanceViolation
 
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+# Provider treatment configuration is opaque bounded JSON, not credentials
+# and not an unbounded options bag. Limits are structural only.
+MAX_PROVIDER_TREATMENT_CONFIG_BYTES = 16_384
+MAX_PROVIDER_TREATMENT_CONFIG_DEPTH = 8
+MAX_PROVIDER_TREATMENT_CONFIG_ITEMS = 64
+MAX_PROVIDER_TREATMENT_CONFIG_STRING_BYTES = 4_096
+
+_SECRET_LIKE_KEY_EXACT = frozenset(
+    {
+        "authorization",
+        "authentication",
+        "api_key",
+        "apikey",
+        "access_token",
+        "refresh_token",
+        "password",
+        "secret",
+        "secrets",
+        "cookie",
+        "cookies",
+        "header",
+        "headers",
+        "set_cookie",
+        "env",
+        "environment",
+        "credential",
+        "credentials",
+        "bearer",
+        "private_key",
+        "auth_token",
+        "api_token",
+        "oauth_token",
+        "id_token",
+        "session_token",
+        "request_headers",
+        "default_headers",
+        "http_headers",
+        "token",
+    }
+)
+_SECRET_LIKE_KEY_FRAGMENTS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "password",
+    "credential",
+    "private_key",
+    "access_token",
+    "refresh_token",
+    "secret",
+    "bearer",
+)
 
 
 def safe_identifier(value: Any, label: str = "identifier") -> str:
@@ -98,6 +152,95 @@ def _stable_sort_key(value: Any) -> tuple[str, str]:
 
 def canonical_json(obj: Any) -> str:
     return json.dumps(_plain(obj), sort_keys=True, separators=(",", ":"))
+
+
+def normalize_provider_treatment_config(
+    value: Any, *, label: str = "provider_treatment_config"
+) -> dict:
+    """Copy opaque JSON-compatible treatment config; reject secrets and junk.
+
+    Neutral code does not interpret provider-specific key meanings. This only
+    enforces generic JSON types, nesting/size bounds, and secret-like key names.
+    """
+    if value is None:
+        value = {}
+    if not isinstance(value, Mapping):
+        raise GovernanceViolation(f"{label} must be a JSON object")
+    normalized = _normalize_json_object(value, label, depth=0)
+    encoded = canonical_json(normalized).encode("utf-8")
+    if len(encoded) > MAX_PROVIDER_TREATMENT_CONFIG_BYTES:
+        raise GovernanceViolation(
+            f"{label} exceeds the {MAX_PROVIDER_TREATMENT_CONFIG_BYTES}-byte bound"
+        )
+    return normalized
+
+
+def _classify_secret_like_key(key: str) -> str:
+    """Normalize separators for secret classification only; do not persist this form."""
+    collapsed = re.sub(r"[-.\s]+", "_", key.strip().lower())
+    return re.sub(r"_+", "_", collapsed).strip("_")
+
+
+def _reject_secret_like_key(key: Any, label: str) -> str:
+    if type(key) is not str or not key:
+        raise GovernanceViolation(f"{label} keys must be non-empty strings")
+    if key.lower().startswith("x-"):
+        raise GovernanceViolation(f"{label} contains forbidden field {key!r}")
+    normalized = _classify_secret_like_key(key)
+    if normalized in _SECRET_LIKE_KEY_EXACT:
+        raise GovernanceViolation(f"{label} contains forbidden field {key!r}")
+    for fragment in _SECRET_LIKE_KEY_FRAGMENTS:
+        if fragment in normalized:
+            raise GovernanceViolation(f"{label} contains forbidden field {key!r}")
+    return key
+
+
+def _normalize_json_object(value: Mapping, label: str, *, depth: int) -> dict:
+    if depth > MAX_PROVIDER_TREATMENT_CONFIG_DEPTH:
+        raise GovernanceViolation(
+            f"{label} exceeds the {MAX_PROVIDER_TREATMENT_CONFIG_DEPTH}-level nesting bound"
+        )
+    data = dict(value)
+    if len(data) > MAX_PROVIDER_TREATMENT_CONFIG_ITEMS:
+        raise GovernanceViolation(
+            f"{label} exceeds the {MAX_PROVIDER_TREATMENT_CONFIG_ITEMS}-item bound"
+        )
+    normalized = {}
+    for key, item in data.items():
+        _reject_secret_like_key(key, label)
+        normalized[key] = _normalize_json_value(item, f"{label}.{key}", depth=depth + 1)
+    return normalized
+
+
+def _normalize_json_value(value: Any, label: str, *, depth: int) -> Any:
+    if depth > MAX_PROVIDER_TREATMENT_CONFIG_DEPTH:
+        raise GovernanceViolation(
+            f"{label} exceeds the {MAX_PROVIDER_TREATMENT_CONFIG_DEPTH}-level nesting bound"
+        )
+    if value is None or type(value) is bool or type(value) is int:
+        return value
+    if type(value) is float:
+        if value != value or value in (float("inf"), float("-inf")):
+            raise GovernanceViolation(f"{label} must be a finite JSON number")
+        return value
+    if type(value) is str:
+        if len(value.encode("utf-8")) > MAX_PROVIDER_TREATMENT_CONFIG_STRING_BYTES:
+            raise GovernanceViolation(
+                f"{label} exceeds the {MAX_PROVIDER_TREATMENT_CONFIG_STRING_BYTES}-byte string bound"
+            )
+        return value
+    if type(value) is list:
+        if len(value) > MAX_PROVIDER_TREATMENT_CONFIG_ITEMS:
+            raise GovernanceViolation(
+                f"{label} exceeds the {MAX_PROVIDER_TREATMENT_CONFIG_ITEMS}-item bound"
+            )
+        return [
+            _normalize_json_value(item, f"{label}[{index}]", depth=depth + 1)
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, Mapping):
+        return _normalize_json_object(value, label, depth=depth)
+    raise GovernanceViolation(f"{label} is not a JSON value ({type(value).__name__})")
 
 
 def source_revision(repo_root: Path | None = None) -> dict:

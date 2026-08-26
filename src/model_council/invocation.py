@@ -332,6 +332,7 @@ def treatment_digest_for_attempt(
     adapter_config_digest: str,
     live_contract_version: str = LIVE_CONTRACT_VERSION,
     harness_protocol_version: str = HARNESS_PROTOCOL_VERSION,
+    provider_treatment_config: Mapping[str, Any] | None = None,
 ) -> tuple[str, str]:
     """Return (input_content_digest, treatment_digest).
 
@@ -366,6 +367,7 @@ def treatment_digest_for_attempt(
         "seed": seed,
         "adapter_kind": adapter_kind,
         "adapter_config_digest": adapter_config_digest,
+        "provider_treatment_config": dict(provider_treatment_config or {}),
     }
     return request.input_content_digest, digest_json(payload)
 

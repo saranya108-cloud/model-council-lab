@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from .types import ProtocolError
 
-HARNESS_PROTOCOL_VERSION = "m1-dev-harness-v11"
+HARNESS_PROTOCOL_VERSION = "m1-dev-harness-v12"
 
 EXECUTION_PROFILE_PRE_LIVE_LEGACY = "pre_live_legacy"
 EXECUTION_PROFILE_LIVE_CONTRACT_V1 = "live_contract_v1"
