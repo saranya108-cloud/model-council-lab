@@ -241,3 +241,5 @@ logs/
 
 # Local configuration
 config.local.*
+
+.DS_Store
