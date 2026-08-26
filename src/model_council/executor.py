@@ -25,8 +25,25 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
+from .live_contract import (
+    LiveContractError,
+    LiveInvocationRequest,
+    NeutralProviderFailure,
+    ProviderCallKind,
+    ProviderCallOutcome,
+    parse_neutral_error,
+    parse_provider_call_outcome,
+)
+from .protocol import (
+    EXECUTION_PROFILE_LIVE_CONTRACT_V1,
+    EXECUTION_PROFILE_PRE_LIVE_LEGACY,
+    HARNESS_PROTOCOL_VERSION,
+    execution_profile_for_kind,
+)
+from .sanitize import WORKER_CRASH_SUMMARY, suppressed_stream_meta
 from .types import (
     AdapterIdentity,
     InfrastructureError,
@@ -56,6 +73,9 @@ class SubprocessAdapter:
         self.options = deep_freeze(dict(options or {}))
         self.python_executable = python_executable or sys.executable
         self.last_scratch_dir: str | None = None
+        self.last_attempt_timeout_seconds: float | None = None
+        self.last_request: dict | None = None
+        self.last_harness_observed_latency_seconds: float | None = None
 
     @property
     def scratch_dir(self) -> str | None:
@@ -73,6 +93,10 @@ class SubprocessAdapter:
             "identity": self.identity.to_dict(),
         }
 
+    @property
+    def execution_profile(self) -> str:
+        return execution_profile_for_kind(self.kind)
+
     def invoke(
         self,
         *,
@@ -80,14 +104,64 @@ class SubprocessAdapter:
         stage_inputs: dict[str, str],
         budget: ResourceLimits,
         seed: int,
+        timeout_seconds: float | None = None,
     ) -> dict:
+        profile = execution_profile_for_kind(self.kind)
+        if profile != EXECUTION_PROFILE_PRE_LIVE_LEGACY:
+            raise ProtocolError(
+                f"adapter kind {self.kind!r} is registered for {profile}; "
+                "legacy invoke() is not permitted"
+            )
+        declared_timeout = float(budget.stage_timeout_seconds)
+        if timeout_seconds is None:
+            attempt_timeout = declared_timeout
+        else:
+            attempt_timeout = float(timeout_seconds)
+        # Runner owns the stage deadline. The executor may only enforce the
+        # remaining time it was granted, and must never enlarge it past the
+        # declared stage timeout.
+        if attempt_timeout > declared_timeout:
+            attempt_timeout = declared_timeout
+        self.last_attempt_timeout_seconds = attempt_timeout
         request = {
+            "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
+            "execution_profile": EXECUTION_PROFILE_PRE_LIVE_LEGACY,
             "adapter": {"kind": self.kind, "options": self._child_options()},
             "role_instruction": role_instruction,
             "stage_inputs": stage_inputs,
             "budget": budget.to_dict(),
             "seed": seed,
         }
+        self.last_request = request
+        payload = self._spawn_worker(request, attempt_timeout)
+        return self._parse_legacy_payload(payload)
+
+    def invoke_live(self, live_request: LiveInvocationRequest) -> ProviderCallOutcome:
+        profile = execution_profile_for_kind(self.kind)
+        if profile != EXECUTION_PROFILE_LIVE_CONTRACT_V1:
+            raise ProtocolError(
+                f"adapter kind {self.kind!r} is registered for {profile}; "
+                "live-contract invoke_live() is not permitted"
+            )
+        if not isinstance(live_request, LiveInvocationRequest):
+            raise ProtocolError("invoke_live requires a runner-built LiveInvocationRequest")
+        attempt_timeout = float(live_request.attempt_timeout_seconds)
+        self.last_attempt_timeout_seconds = attempt_timeout
+        envelope = {
+            "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
+            "execution_profile": EXECUTION_PROFILE_LIVE_CONTRACT_V1,
+            "adapter": {"kind": self.kind, "options": self._child_options()},
+            "live_invocation_request": live_request.to_dict(),
+        }
+        self.last_request = envelope
+        payload = self._spawn_worker(envelope, attempt_timeout)
+        return self._parse_live_payload(payload)
+
+    def _spawn_worker(self, request: dict, attempt_timeout: float) -> dict:
+        if attempt_timeout <= 0:
+            raise StageTimeout(
+                f"adapter process exceeded {attempt_timeout}s and was terminated"
+            )
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "PYTHONPATH": str(_SRC_ROOT),
@@ -101,33 +175,32 @@ class SubprocessAdapter:
         try:
             with tempfile.TemporaryDirectory(prefix="mcl-scratch-") as scratch:
                 self.last_scratch_dir = scratch
-                completed = subprocess.run(
-                    [self.python_executable, "-B", "-m", "model_council.worker"],
-                    input=json.dumps(request),
-                    capture_output=True,
-                    text=True,
-                    timeout=budget.stage_timeout_seconds,
-                    cwd=scratch,
-                    env=env,
-                    **spawn_kwargs,
-                )
+                started = time.monotonic()
+                try:
+                    completed = subprocess.run(
+                        [self.python_executable, "-B", "-m", "model_council.worker"],
+                        input=json.dumps(request),
+                        capture_output=True,
+                        text=True,
+                        timeout=attempt_timeout,
+                        cwd=scratch,
+                        env=env,
+                        **spawn_kwargs,
+                    )
+                finally:
+                    self.last_harness_observed_latency_seconds = time.monotonic() - started
         except subprocess.TimeoutExpired as exc:
             raise StageTimeout(
-                f"adapter process exceeded {budget.stage_timeout_seconds}s and was terminated"
+                f"adapter process exceeded {attempt_timeout}s and was terminated"
             ) from exc
         except OSError as exc:
             raise InfrastructureError(f"failed to spawn adapter process: {exc}") from exc
-        # Note: scratch directory lifecycle is owned by the TemporaryDirectory
-        # context above; on every exit path (success, model failure, timeout,
-        # crash, malformed output) the scratch content is removed. The last
-        # used path is retained for verification/testing purposes only.
 
         if completed.returncode != 0:
-            # Worker crash is a process/infrastructure failure. It must NOT
-            # masquerade as a model failure and consume model retry budget.
+            meta = suppressed_stream_meta(completed.stderr)
             raise InfrastructureError(
-                f"worker exited unexpectedly (exit {completed.returncode}): "
-                f"{completed.stderr.strip()[-500:]}"
+                f"{WORKER_CRASH_SUMMARY} (exit {completed.returncode}; "
+                f"stderr_bytes={meta['bytes']}; stderr_sha256={meta['sha256']})"
             )
         try:
             payload = json.loads(completed.stdout)
@@ -137,20 +210,55 @@ class SubprocessAdapter:
             raise ProtocolError("worker response missing required 'ok' field")
         if not payload["ok"]:
             error_class = payload.get("error_class")
+            message = payload.get("message")
+            if not isinstance(message, str):
+                message = f"worker reported {error_class}"
+            if error_class == "ProtocolError":
+                raise ProtocolError(message)
+            if error_class == "InfrastructureError":
+                raise InfrastructureError(message)
             if error_class == "ModelFailure":
-                message = payload.get("message")
-                if not isinstance(message, str):
-                    raise ProtocolError("ModelFailure payload missing string 'message'")
                 raise ModelFailure(message)
+            if error_class == "NeutralProviderFailure":
+                try:
+                    error = parse_neutral_error(payload.get("error"))
+                except LiveContractError as exc:
+                    raise ProtocolError(
+                        f"NeutralProviderFailure payload was not a valid NeutralError: {exc}"
+                    ) from exc
+                raise NeutralProviderFailure(error)
             raise InfrastructureError(
-                f"worker reported {error_class}: {payload.get('message')}"
+                f"worker reported {error_class}: {message}"
             )
+        return payload
+
+    def _parse_legacy_payload(self, payload: dict) -> dict:
+        if payload.get("execution_profile") not in (None, EXECUTION_PROFILE_PRE_LIVE_LEGACY):
+            raise ProtocolError("legacy worker envelope carried a non-legacy execution profile")
+        if "outcome" in payload:
+            raise ProtocolError("legacy worker envelope must not include a live outcome")
         response = payload.get("response")
         if not isinstance(response, dict):
             raise ProtocolError("worker response missing structured 'response' object")
         self._validate_usage_fields(response)
         self._validate_identity_used(response)
         return response
+
+    def _parse_live_payload(self, payload: dict) -> ProviderCallOutcome:
+        if payload.get("execution_profile") != EXECUTION_PROFILE_LIVE_CONTRACT_V1:
+            raise ProtocolError("live worker envelope missing live_contract_v1 execution profile")
+        if "response" in payload:
+            raise ProtocolError("live adapter returned a legacy response envelope")
+        raw_outcome = payload.get("outcome")
+        try:
+            outcome = parse_provider_call_outcome(raw_outcome)
+        except LiveContractError as exc:
+            raise ProtocolError(f"live worker returned an invalid ProviderCallOutcome: {exc}") from exc
+        if outcome.kind is not ProviderCallKind.SUCCESS:
+            if outcome.error is None:
+                raise ProtocolError("live error outcome is missing NeutralError evidence")
+            raise NeutralProviderFailure(outcome.error, outcome=outcome)
+        return outcome
 
     @staticmethod
     def _validate_usage_fields(response: dict) -> None:

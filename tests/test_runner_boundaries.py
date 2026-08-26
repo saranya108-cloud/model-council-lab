@@ -18,6 +18,7 @@ from helpers import (
     make_runner,
     make_spec,
     make_task,
+    transient_failure_options,
 )
 
 OTHER_IDENTITY = AdapterIdentity(
@@ -97,11 +98,21 @@ class TestBudgetEnforcement(unittest.TestCase):
     def test_over_input_budget_rejected_on_harness_estimate(self):
         with TempRoot() as root:
             runner, _ = make_runner(root)
-            result = runner.execute(
-                make_spec("bud-1", "A", max_input_tokens_per_stage=5), make_task()
-            )
+            calls = {"n": 0}
+            original = runner.adapter.invoke
+
+            def invoke(**kwargs):
+                calls["n"] += 1
+                return original(**kwargs)
+
+            with patch.object(runner.adapter, "invoke", side_effect=invoke):
+                result = runner.execute(
+                    make_spec("bud-1", "A", max_input_tokens_per_stage=5), make_task()
+                )
             self.assertEqual(result.status, "failed_budget")
             self.assertIn("input budget exceeded", result.stage_results[0].error)
+            self.assertEqual(calls["n"], 0)
+            self.assertIsNone(result.final_candidate_ref)
 
     def test_over_output_budget_counts_full_structured_response(self):
         with TempRoot() as root:
@@ -395,7 +406,7 @@ class TestFailureTaxonomy(unittest.TestCase):
 
     def test_transient_model_failure_retries_then_succeeds(self):
         with TempRoot() as root:
-            runner, _ = make_runner(root, options={"fail_if_seed_lt": 8})
+            runner, _ = make_runner(root, options=transient_failure_options(root))
             result = runner.execute(make_spec("tax-1", "A", seed=7), make_task())
             self.assertEqual(result.status, "succeeded")
             self.assertEqual(result.retries_used, 1)
@@ -415,7 +426,7 @@ class TestFailureTaxonomy(unittest.TestCase):
             self.assertEqual(result.status, "infrastructure_failure")
             self.assertEqual(result.retries_used, 0)
             payload = self.assert_terminal_record(root, "tax-3", "infrastructure_failure")
-            self.assertIn("worker exited unexpectedly", payload["error"])
+            self.assertIn("worker process crashed", payload["error"])
 
     def test_malformed_stdout_is_infrastructure_failure_not_model_retry(self):
         with TempRoot() as root:

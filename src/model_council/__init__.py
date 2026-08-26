@@ -9,7 +9,33 @@ from .roles import (
     CONTEXT_POLICY_VERSION,
     validate_stage_sequence,
 )
-from .runner import HARNESS_PROTOCOL_VERSION, ExperimentRunner
+from .live_contract import (
+    LIVE_CONTRACT_VERSION,
+    LiveContractError,
+    LiveInvocationRequest,
+    NeutralError,
+    NeutralProviderFailure,
+    ProviderCallKind,
+    ProviderCallOutcome,
+    ProviderErrorCategory,
+    UnavailableReason,
+    build_live_invocation_request,
+    parse_live_invocation_request,
+    parse_neutral_error,
+    parse_provider_call_outcome,
+)
+from .retry_policy import (
+    NONRETRYABLE_PROVIDER_CATEGORIES,
+    RETRYABLE_PROVIDER_CATEGORIES,
+    is_retry_candidate,
+)
+from .protocol import (
+    EXECUTION_PROFILE_LIVE_CONTRACT_V1,
+    EXECUTION_PROFILE_PRE_LIVE_LEGACY,
+    HARNESS_PROTOCOL_VERSION,
+    execution_profile_for_kind,
+)
+from .runner import ExperimentRunner
 from .security import safe_identifier
 from .types import (
     STATUS_FAILED_BUDGET,
@@ -51,12 +77,24 @@ __all__ = [
     "EvaluationOutcome",
     "ExternalEvaluator",
     "ExperimentRunner",
+    "EXECUTION_PROFILE_LIVE_CONTRACT_V1",
+    "EXECUTION_PROFILE_PRE_LIVE_LEGACY",
     "HARNESS_PROTOCOL_VERSION",
+    "LIVE_CONTRACT_VERSION",
+    "LiveContractError",
+    "LiveInvocationRequest",
     "Finding",
     "GovernanceViolation",
     "InfrastructureError",
     "IntegrityViolation",
     "ModelFailure",
+    "NONRETRYABLE_PROVIDER_CATEGORIES",
+    "NeutralError",
+    "NeutralProviderFailure",
+    "ProviderCallKind",
+    "ProviderCallOutcome",
+    "ProviderErrorCategory",
+    "RETRYABLE_PROVIDER_CATEGORIES",
     "ResourceLimits",
     "RunResult",
     "RunSpec",
@@ -72,6 +110,13 @@ __all__ = [
     "StageTimeout",
     "SubprocessAdapter",
     "TaskSpec",
+    "UnavailableReason",
+    "build_live_invocation_request",
+    "execution_profile_for_kind",
+    "is_retry_candidate",
+    "parse_live_invocation_request",
+    "parse_neutral_error",
+    "parse_provider_call_outcome",
     "safe_identifier",
     "validate_dispositions",
 ]

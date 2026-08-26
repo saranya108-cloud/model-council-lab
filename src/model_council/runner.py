@@ -5,11 +5,15 @@ Second-audit remediation:
     actual identity is compared against it after EVERY invocation; drift is a
     terminal governance failure. Parent attributes are not trusted alone.
   - F2: usage metrics are validated protocol data (integers, non-negative,
-    required). Budgets are enforced on an independently computed, documented
-    deterministic approximation covering ALL model-visible input (role
-    instruction + stage inputs) and the COMPLETE structured response
-    (artifacts + structured fields), not just one text field. Child-reported
-    values are recorded separately and never labeled "verified".
+    required). Input ceilings are enforced BEFORE every runner-authorized
+    adapter invocation on a cumulative per-stage estimate. Output and tool
+    ceilings are enforced after the response is received. Budgets use an
+    independently computed, documented deterministic approximation covering
+    ALL model-visible input (role instruction + stage inputs) and the COMPLETE
+    structured response (artifacts + structured fields), not just one text
+    field. Child-reported values are recorded separately and never labeled
+    "verified". A single monotonic stage deadline spans all attempts; retries
+    reuse the original treatment parameters including seed.
   - F5: sealed stages are re-verified against authoritative parent hashes
     before every downstream transition and before evaluation.
   - F6: once a safe run namespace exists, ANY later failure produces a
@@ -37,6 +41,27 @@ from .artifacts import (
 )
 from .executor import SubprocessAdapter
 from .evaluator import EvaluationConfig, ExternalEvaluator
+from .invocation import (
+    build_invocation_record,
+    raw_text_from_untrusted_response,
+    treatment_digest_for_attempt,
+)
+from .live_contract import (
+    LIVE_CONTRACT_VERSION,
+    LiveContractError,
+    NeutralProviderFailure,
+    ProviderCallKind,
+    build_live_invocation_request,
+    map_live_outcome_to_stage_response,
+)
+from .protocol import (
+    EXECUTION_PROFILE_LIVE_CONTRACT_V1,
+    EXECUTION_PROFILE_PRE_LIVE_LEGACY,
+    HARNESS_PROTOCOL_VERSION,
+    execution_profile_for_kind,
+)
+from .retry_policy import is_retry_candidate
+from .sanitize import WORKER_SANITIZED_FAILURE, sanitize_exception
 from .roles import (
     ALLOWED_INPUT_KEYS,
     CONDITION_STAGES,
@@ -74,8 +99,6 @@ from .types import (
     validate_dispositions,
     validate_findings,
 )
-
-HARNESS_PROTOCOL_VERSION = "m1-dev-harness-v3"
 
 # Documented deterministic usage approximation (Finding 2):
 # tokens ~= whitespace-delimited word count over the original model-visible
@@ -121,6 +144,25 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+class _StageDeadline:
+    """Runner-owned monotonic deadline covering the entire stage lifecycle."""
+
+    def __init__(self, monotonic, timeout_seconds: float) -> None:
+        self._monotonic = monotonic
+        self.timeout_seconds = float(timeout_seconds)
+        self.started_at = float(monotonic())
+        self.deadline_at = self.started_at + self.timeout_seconds
+
+    def remaining(self) -> float:
+        return self.deadline_at - float(self._monotonic())
+
+    def require(self, where: str) -> float:
+        remaining = self.remaining()
+        if remaining <= 0:
+            raise StageTimeout(f"stage deadline expired {where}")
+        return remaining
+
+
 class _RunState:
     def __init__(self) -> None:
         self.status: str = STATUS_SUCCEEDED
@@ -144,10 +186,14 @@ class ExperimentRunner:
         adapter: SubprocessAdapter,
         evaluator: ExternalEvaluator,
         runs_root: Path | str,
+        monotonic=None,
     ) -> None:
         self.adapter = adapter
         self.evaluator = evaluator
         self.runs_root = Path(runs_root)
+        # Injectable monotonic clock for stage-deadline tests. Production uses
+        # time.monotonic; wall-clock UTC is used only for human-readable records.
+        self._monotonic = monotonic or time.monotonic
 
     # ------------------------------------------------------------------ public
 
@@ -175,7 +221,39 @@ class ExperimentRunner:
             # terminalization boundary.  Setup failures therefore cannot leave
             # a valid run directory without run_result.json.
             state.task_text = task_spec.agent_visible_text()
+            store.write_source_provenance(dict(state.source_provenance or {}))
+            store.write_task_record(
+                {
+                    "task_id": task_spec.task_id,
+                    "bug_report": task_spec.bug_report,
+                    "workspace_id": task_spec.workspace_id,
+                    "allowed_files": list(task_spec.allowed_files),
+                    "visible_test_command": task_spec.visible_test_command,
+                    "snapshot_hash": task_spec.snapshot_hash,
+                    "task_content_hash": task_spec.content_hash,
+                }
+            )
+            profile = execution_profile_for_kind(self.adapter.kind)
+            store.write_execution_binding(
+                {
+                    "adapter_kind": self.adapter.kind,
+                    "adapter_config_digest": digest_json(self.adapter.options),
+                    "execution_profile": profile,
+                    "live_contract_version": LIVE_CONTRACT_VERSION,
+                    "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
+                    "context_policy_version": CONTEXT_POLICY_VERSION,
+                }
+            )
+            store.write_evaluator_binding(
+                {
+                    "evaluator_version": self.evaluator.version,
+                    "evaluator_config_digest": self.evaluator.config_digest,
+                }
+            )
+            declaration = self._treatment_declaration(run_spec, task_spec)
             state.treatment_hash = self._treatment_hash(run_spec, task_spec)
+            store.write_treatment_declaration(declaration, state.treatment_hash)
+            store.freeze_run_authority()
             # Preflight identity check uses the configured adapter identity;
             # per-invocation actual identity is re-verified from child output.
             if self.adapter.identity.key() != run_spec.model_identifier:
@@ -199,13 +277,32 @@ class ExperimentRunner:
             )
         except Exception as exc:  # noqa: BLE001 - terminal finalization boundary (F6)
             state.status = STATUS_INFRASTRUCTURE_FAILURE
-            state.error = f"{type(exc).__name__}: {exc}"
+            state.error = sanitize_exception(exc, fallback=WORKER_SANITIZED_FAILURE)
         finally:
             self._write_terminal_record(store, run_spec, task_spec, state, run_started, wall_start)
 
         return self._build_result(run_spec, state, run_started)
 
     # ------------------------------------------------------------- provenance
+
+    def _treatment_declaration(self, run_spec: RunSpec, task_spec: TaskSpec) -> dict:
+        return {
+            "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
+            "condition": run_spec.condition.value,
+            "prompt_version": run_spec.prompt_version,
+            "context_policy_version": CONTEXT_POLICY_VERSION,
+            "resource_limits": run_spec.resource_limits.to_dict(),
+            "seed": run_spec.seed,
+            "model_identifier": run_spec.model_identifier,
+            "adapter_kind": self.adapter.kind,
+            "adapter_config_digest": digest_json(self.adapter.options),
+            "evaluator_version": self.evaluator.version,
+            "evaluator_config_digest": self.evaluator.config_digest,
+            "task_id": task_spec.task_id,
+            "task_content_hash": task_spec.content_hash,
+            "execution_profile": execution_profile_for_kind(self.adapter.kind),
+            "live_contract_version": LIVE_CONTRACT_VERSION,
+        }
 
     def _treatment_hash(self, run_spec: RunSpec, task_spec: TaskSpec) -> str:
         """Hash of the DECLARED experimental treatment/configuration.
@@ -216,23 +313,7 @@ class ExperimentRunner:
         Does NOT cryptographically prove the entire source tree; see the
         separately recorded Git source revision / dirty flag for that.
         """
-        return digest_json(
-            {
-                "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
-                "condition": run_spec.condition.value,
-                "prompt_version": run_spec.prompt_version,
-                "context_policy_version": CONTEXT_POLICY_VERSION,
-                "resource_limits": run_spec.resource_limits.to_dict(),
-                "seed": run_spec.seed,
-                "model_identifier": run_spec.model_identifier,
-                "adapter_kind": self.adapter.kind,
-                "adapter_config_digest": digest_json(self.adapter.options),
-                "evaluator_version": self.evaluator.version,
-                "evaluator_config_digest": self.evaluator.config_digest,
-                "task_id": task_spec.task_id,
-                "task_content_hash": task_spec.content_hash,
-            }
-        )
+        return digest_json(self._treatment_declaration(run_spec, task_spec))
 
     # ----------------------------------------------------------------- stages
 
@@ -254,20 +335,68 @@ class ExperimentRunner:
                 state.status = _terminal_for_failure(outcome)
                 return
 
-            # F7 atomic finalization: persist everything BEFORE any success is
-            # recorded. A persistence failure raises GovernanceViolation /
-            # IntegrityViolation and leaves this stage unrecorded-as-successful.
             validate_stage_sequence(run_spec.condition, tuple(state.executed_roles) + (role,))
-            refs: list[str] = []
+            # F7 atomic finalization: persist everything BEFORE any success is
+            # recorded. Deadline expiry at any point before the success
+            # transition rolls back promoted artifacts and seals.
+            try:
+                refs = self._commit_stage_transaction(
+                    store=store,
+                    run_spec=run_spec,
+                    role=role,
+                    outcome=outcome,
+                )
+                # Authoritative success transition: no committed topology may
+                # remain if this check expires. This closes the post-commit
+                # gap before StageResult / context / evaluation.
+                outcome.deadline.require("before applying stage success")
+            except StageTimeout as exc:
+                store.abort_uncommitted_stage(role)
+                if not store.invocation_attempt_exists(role, outcome.attempt):
+                    self._record_stage_invocation(
+                        store=store,
+                        run_spec=run_spec,
+                        role=role,
+                        attempt=outcome.attempt,
+                        attempt_timeout_seconds=outcome.deadline.remaining(),
+                        stage_inputs=outcome.stage_inputs,
+                        tokens_in=outcome.usage_estimated["tokens_in"],
+                        tokens_out=outcome.usage_estimated["tokens_out"],
+                        cumulative_tokens_in=outcome.usage_estimated.get(
+                            "cumulative_tokens_in", outcome.usage_estimated["tokens_in"]
+                        ),
+                        retry_decision="stop",
+                        retry_rationale="retry_budget_exhausted",
+                        contract_verdict="passed",
+                        identity_verdict="passed",
+                        failure_class="timeout",
+                        response=outcome.response,
+                        provider_outcome=getattr(outcome, "provider_outcome", None),
+                        invocation_began=True,
+                        projected_tokens_in=outcome.usage_estimated["tokens_in"],
+                        consumed_tokens_in=outcome.usage_estimated["tokens_in"],
+                        promoted_artifact_refs=(),
+                    )
+                state.stage_results.append(
+                    _StageOutcome.retry_exhausted(
+                        role,
+                        outcome.attempt,
+                        outcome.started_at,
+                        "timeout",
+                        str(exc),
+                    ).failure_result
+                )
+                state.retries_used += max(outcome.attempt - 1, 0)
+                state.status = STATUS_RETRY_EXHAUSTED
+                return
+            except Exception:
+                store.abort_uncommitted_stage(role)
+                raise
             is_final = tuple(state.executed_roles) + (role,) == workflow
             for artifact_name, content in outcome.artifacts.items():
-                ref = store.write(role, artifact_name, content)
-                refs.append(ref)
                 key = STAGE_OUTPUT_KEYS[role].get(artifact_name)
                 if key:
                     context[key] = content
-            store.seal_stage(role)
-            store.verify_sealed_stage(role)
 
             result = StageResult(
                 role=role,
@@ -301,7 +430,60 @@ class ExperimentRunner:
                     if name == PRIMARY_ARTIFACT.get(role)
                 )
 
+    def _commit_stage_transaction(
+        self,
+        *,
+        store: ArtifactStore,
+        run_spec: RunSpec,
+        role: str,
+        outcome,
+    ) -> list[str]:
+        deadline = outcome.deadline
+        deadline.require("before promoted artifact writes")
+        for artifact_name, content in outcome.artifacts.items():
+            store.write_staged(role, artifact_name, content)
+            deadline.require("during artifact persistence")
+        deadline.require("before promoted artifact commit")
+        promoted = store.commit_staged_artifacts(role)
+        refs = [promoted[name] for name in outcome.artifacts]
+        deadline.require("before invocation evidence bind")
+        self._record_stage_invocation(
+            store=store,
+            run_spec=run_spec,
+            role=role,
+            attempt=outcome.attempt,
+            attempt_timeout_seconds=outcome.attempt_timeout_seconds,
+            stage_inputs=outcome.stage_inputs,
+            tokens_in=outcome.usage_estimated["tokens_in"],
+            tokens_out=outcome.usage_estimated["tokens_out"],
+            cumulative_tokens_in=outcome.usage_estimated.get(
+                "cumulative_tokens_in", outcome.usage_estimated["tokens_in"]
+            ),
+            retry_decision="promote",
+            retry_rationale="stage_succeeded",
+            contract_verdict="passed",
+            identity_verdict="passed",
+            failure_class=None,
+            response=outcome.response,
+            provider_outcome=getattr(outcome, "provider_outcome", None),
+            promoted_artifact_refs=tuple(refs),
+            invocation_began=True,
+            projected_tokens_in=outcome.usage_estimated["tokens_in"],
+            consumed_tokens_in=outcome.usage_estimated["tokens_in"],
+        )
+        deadline.require("before successful stage sealing")
+        store.seal_stage(
+            role,
+            expected_attempts=outcome.attempt,
+            before_persist=lambda: deadline.require("before seal persist"),
+        )
+        deadline.require("before declaring stage success")
+        store.verify_sealed_stage(role)
+        return refs
+
     def _execute_stage(self, run_spec: RunSpec, role: str, context, store, state: _RunState):
+        budget = run_spec.resource_limits
+        deadline = _StageDeadline(self._monotonic, budget.stage_timeout_seconds)
         allowed_keys = sorted(ALLOWED_INPUT_KEYS[(run_spec.condition, role)])
         missing = [key for key in allowed_keys if key not in context]
         if missing:
@@ -309,45 +491,348 @@ class ExperimentRunner:
                 f"stage {role} requires context keys {missing} not produced by prior stages"
             )
         stage_inputs = {key: context[key] for key in allowed_keys}
-        budget = run_spec.resource_limits
+        role_instruction = ROLE_INSTRUCTIONS[role]
         max_attempts = budget.max_stage_retries + 1
+        estimated_in = _estimate_tokens_in(role_instruction, stage_inputs)
+        cumulative_input = 0
 
         for attempt in range(1, max_attempts + 1):
             started = _utcnow()
+            remaining = deadline.remaining()
+            persist = {
+                "store": store,
+                "run_spec": run_spec,
+                "role": role,
+                "attempt": attempt,
+                "attempt_timeout_seconds": remaining,
+                "stage_inputs": stage_inputs,
+                "tokens_in": estimated_in,
+                "projected_tokens_in": estimated_in,
+                "invocation_began": False,
+                "consumed_tokens_in": 0,
+            }
             try:
-                response = self.adapter.invoke(
-                    role_instruction=ROLE_INSTRUCTIONS[role],
-                    stage_inputs=stage_inputs,
-                    budget=budget,
-                    seed=run_spec.seed + attempt - 1,
-                )
-            except StageTimeout as exc:
+                deadline.require("before starting an attempt")
+            except StageTimeout:
+                remaining = deadline.remaining()
+                persist["attempt_timeout_seconds"] = remaining
                 if attempt == max_attempts:
+                    self._record_stage_invocation(
+                        **persist,
+                        tokens_out=0,
+                        cumulative_tokens_in=cumulative_input,
+                        retry_decision="stop",
+                        retry_rationale="retry_budget_exhausted",
+                        contract_verdict="not_evaluated",
+                        identity_verdict="not_evaluated",
+                        failure_class="timeout",
+                    )
+                    return _StageOutcome.retry_exhausted(
+                        role,
+                        attempt,
+                        started,
+                        "timeout",
+                        "stage deadline exhausted before adapter invocation",
+                    )
+                self._record_stage_invocation(
+                    **persist,
+                    tokens_out=0,
+                    cumulative_tokens_in=cumulative_input,
+                    retry_decision="retry",
+                    retry_rationale="retry_candidate_remaining",
+                    contract_verdict="not_evaluated",
+                    identity_verdict="not_evaluated",
+                    failure_class="timeout",
+                )
+                continue  # exhausted time still consumes preregistered retry budget
+            if cumulative_input + estimated_in > budget.max_input_tokens_per_stage:
+                self._record_stage_invocation(
+                    **persist,
+                    tokens_out=0,
+                    cumulative_tokens_in=cumulative_input,
+                    retry_decision="stop",
+                    retry_rationale="failed_budget",
+                    contract_verdict="not_evaluated",
+                    identity_verdict="not_evaluated",
+                    failure_class="budget",
+                )
+                return _StageOutcome.hard_failure(
+                    role,
+                    attempt,
+                    started,
+                    (
+                        f"input budget exceeded in stage {role!r} (harness-estimated): "
+                        f"{cumulative_input + estimated_in} > {budget.max_input_tokens_per_stage}"
+                    ),
+                    tokens_in=0,
+                    tokens_out=0,
+                    usage_estimated={
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                        "projected_tokens_in": estimated_in,
+                        "consumed_tokens_in": 0,
+                        "cumulative_tokens_in": cumulative_input,
+                        "invocation_began": False,
+                    },
+                    usage_source="harness_estimated_enforced",
+                )
+            response = None
+            provider_outcome = None
+            try:
+                # Remaining time is executor enforcement, not treatment.
+                # Seed and resource limits stay identical across retries.
+                remaining = deadline.require("immediately before process launch")
+                persist["attempt_timeout_seconds"] = remaining
+                persist["invocation_began"] = True
+                persist["consumed_tokens_in"] = estimated_in
+                response, provider_outcome = self._invoke_authorized_attempt(
+                    run_spec,
+                    role,
+                    role_instruction,
+                    stage_inputs,
+                    budget,
+                    remaining,
+                )
+                deadline.require("immediately after invocation returns")
+            except StageTimeout as exc:
+                if persist["invocation_began"]:
+                    cumulative_input += estimated_in
+                if attempt == max_attempts:
+                    self._record_stage_invocation(
+                        **persist,
+                        tokens_out=0,
+                        cumulative_tokens_in=cumulative_input,
+                        retry_decision="stop",
+                        retry_rationale="retry_budget_exhausted",
+                        contract_verdict="not_evaluated",
+                        identity_verdict="not_evaluated",
+                        failure_class="timeout",
+                        response=response,
+                        provider_outcome=provider_outcome,
+                    )
                     return _StageOutcome.retry_exhausted(
                         role, attempt, started, "timeout", str(exc)
                     )
+                self._record_stage_invocation(
+                    **persist,
+                    tokens_out=0,
+                    cumulative_tokens_in=cumulative_input,
+                    retry_decision="retry",
+                    retry_rationale="retry_candidate_remaining",
+                    contract_verdict="not_evaluated",
+                    identity_verdict="not_evaluated",
+                    failure_class="timeout",
+                    response=response,
+                    provider_outcome=provider_outcome,
+                )
                 continue  # enforced timeouts consume preregistered retry budget
             except ModelFailure as exc:
+                cumulative_input += estimated_in
                 if attempt == max_attempts:
+                    self._record_stage_invocation(
+                        **persist,
+                        tokens_out=0,
+                        cumulative_tokens_in=cumulative_input,
+                        retry_decision="stop",
+                        retry_rationale="retry_budget_exhausted",
+                        contract_verdict="not_evaluated",
+                        identity_verdict="not_evaluated",
+                        failure_class="model",
+                    )
                     return _StageOutcome.retry_exhausted(role, attempt, started, "model", str(exc))
-                continue  # structured provider failure consumes retry budget
+                self._record_stage_invocation(
+                    **persist,
+                    tokens_out=0,
+                    cumulative_tokens_in=cumulative_input,
+                    retry_decision="retry",
+                    retry_rationale="retry_candidate_remaining",
+                    contract_verdict="not_evaluated",
+                    identity_verdict="not_evaluated",
+                    failure_class="model",
+                )
+                continue  # structured pre-live model failure consumes retry budget
+            except NeutralProviderFailure as exc:
+                cumulative_input += estimated_in
+                # Provider retry hints are evidence only. Runner policy, remaining
+                # attempts, deadline, and input ceiling decide whether another call
+                # is authorized.
+                if is_retry_candidate(exc.error.category):
+                    if attempt == max_attempts:
+                        self._record_stage_invocation(
+                            **persist,
+                            tokens_out=0,
+                            cumulative_tokens_in=cumulative_input,
+                            retry_decision="stop",
+                            retry_rationale="retry_budget_exhausted",
+                            contract_verdict="not_evaluated",
+                            identity_verdict="not_evaluated",
+                            failure_class="provider",
+                            neutral_error=exc.error,
+                            provider_outcome=exc.outcome,
+                        )
+                        return _StageOutcome.retry_exhausted(
+                            role,
+                            attempt,
+                            started,
+                            "provider",
+                            f"{exc.error.category.value}: {exc.error.sanitized_message}",
+                        )
+                    self._record_stage_invocation(
+                        **persist,
+                        tokens_out=0,
+                        cumulative_tokens_in=cumulative_input,
+                        retry_decision="retry",
+                        retry_rationale="retry_candidate_remaining",
+                        contract_verdict="not_evaluated",
+                        identity_verdict="not_evaluated",
+                        failure_class="provider",
+                        neutral_error=exc.error,
+                        provider_outcome=exc.outcome,
+                    )
+                    continue
+                self._record_stage_invocation(
+                    **persist,
+                    tokens_out=0,
+                    cumulative_tokens_in=cumulative_input,
+                    retry_decision="stop",
+                    retry_rationale="provider_nonretryable",
+                    contract_verdict="not_evaluated",
+                    identity_verdict="not_evaluated",
+                    failure_class="provider",
+                    neutral_error=exc.error,
+                    provider_outcome=exc.outcome,
+                )
+                return _StageOutcome.hard_failure(
+                    role,
+                    attempt,
+                    started,
+                    (
+                        f"provider/transport failure in stage {role!r} "
+                        f"({exc.error.category.value}): {exc.error.sanitized_message}"
+                    ),
+                )
+            except (ProtocolError, InfrastructureError):
+                if persist["invocation_began"]:
+                    cumulative_input += estimated_in
+                    persist["consumed_tokens_in"] = estimated_in
+                self._record_stage_invocation(
+                    **persist,
+                    tokens_out=0,
+                    cumulative_tokens_in=cumulative_input,
+                    retry_decision="stop",
+                    retry_rationale="infrastructure_failure",
+                    contract_verdict="not_evaluated",
+                    identity_verdict="not_evaluated",
+                    failure_class="infrastructure",
+                    response=response,
+                    provider_outcome=provider_outcome,
+                )
+                raise
             # ProtocolError / InfrastructureError propagate immediately:
             # infrastructure failures never consume model retry budget (F9).
 
+            cumulative_input += estimated_in
+            persist["provider_outcome"] = provider_outcome
+
             identity_error = self._check_identity(run_spec, role, response)
             if identity_error:
+                self._record_stage_invocation(
+                    **persist,
+                    tokens_out=_estimate_tokens_out(response),
+                    cumulative_tokens_in=cumulative_input,
+                    retry_decision="stop",
+                    retry_rationale="identity_mismatch",
+                    contract_verdict="not_evaluated",
+                    identity_verdict="failed",
+                    failure_class="governance",
+                    response=response,
+                )
                 raise GovernanceViolation(identity_error)
 
-            budget_error = self._check_budget(
-                role, budget, response, role_instruction=ROLE_INSTRUCTIONS[role],
-                stage_inputs=stage_inputs,
-            )
+            budget_error = self._check_output_and_tool_budget(role, budget, response)
             if budget_error:
-                return _StageOutcome.hard_failure(role, attempt, started, budget_error)
+                self._record_stage_invocation(
+                    **persist,
+                    tokens_out=_estimate_tokens_out(response),
+                    cumulative_tokens_in=cumulative_input,
+                    retry_decision="stop",
+                    retry_rationale="failed_budget",
+                    contract_verdict="not_evaluated",
+                    identity_verdict="passed",
+                    failure_class="budget",
+                    response=response,
+                )
+                return _StageOutcome.hard_failure(
+                    role,
+                    attempt,
+                    started,
+                    budget_error,
+                    tokens_in=estimated_in,
+                    tokens_out=_estimate_tokens_out(response),
+                    usage_estimated={
+                        "tokens_in": estimated_in,
+                        "tokens_out": _estimate_tokens_out(response),
+                    },
+                    usage_source="harness_estimated_enforced",
+                )
 
             contract_error = self._check_contract(role, response, state)
             if contract_error:
-                return _StageOutcome.hard_failure(role, attempt, started, contract_error)
+                self._record_stage_invocation(
+                    **persist,
+                    tokens_out=_estimate_tokens_out(response),
+                    cumulative_tokens_in=cumulative_input,
+                    retry_decision="stop",
+                    retry_rationale="failed_contract",
+                    contract_verdict="failed",
+                    identity_verdict="passed",
+                    failure_class="contract",
+                    response=response,
+                )
+                return _StageOutcome.hard_failure(
+                    role,
+                    attempt,
+                    started,
+                    contract_error,
+                    tokens_in=estimated_in,
+                    tokens_out=_estimate_tokens_out(response),
+                    usage_estimated={
+                        "tokens_in": estimated_in,
+                        "tokens_out": _estimate_tokens_out(response),
+                    },
+                    usage_source="harness_estimated_enforced",
+                )
+
+            try:
+                deadline.require("after live response validation")
+            except StageTimeout as exc:
+                if attempt == max_attempts:
+                    self._record_stage_invocation(
+                        **persist,
+                        tokens_out=_estimate_tokens_out(response),
+                        cumulative_tokens_in=cumulative_input,
+                        retry_decision="stop",
+                        retry_rationale="retry_budget_exhausted",
+                        contract_verdict="passed",
+                        identity_verdict="passed",
+                        failure_class="timeout",
+                        response=response,
+                    )
+                    return _StageOutcome.retry_exhausted(
+                        role, attempt, started, "timeout", str(exc)
+                    )
+                self._record_stage_invocation(
+                    **persist,
+                    tokens_out=_estimate_tokens_out(response),
+                    cumulative_tokens_in=cumulative_input,
+                    retry_decision="retry",
+                    retry_rationale="retry_candidate_remaining",
+                    contract_verdict="passed",
+                    identity_verdict="passed",
+                    failure_class="timeout",
+                    response=response,
+                )
+                continue
 
             return _StageOutcome.success(
                 role=role,
@@ -356,14 +841,150 @@ class ExperimentRunner:
                 response=response,
                 artifacts=dict(response["artifacts"]),
                 stage_inputs=stage_inputs,
+                attempt_timeout_seconds=remaining,
                 usage_estimated={
-                    "tokens_in": _estimate_tokens_in(ROLE_INSTRUCTIONS[role], stage_inputs),
+                    "tokens_in": estimated_in,
                     "tokens_out": _estimate_tokens_out(response),
+                    "cumulative_tokens_in": cumulative_input,
                 },
                 identity_used=response["identity_used"],
+                provider_outcome=provider_outcome,
+                deadline=deadline,
             )
 
         raise InfrastructureError("unreachable retry loop exit")
+
+    def _record_stage_invocation(
+        self,
+        *,
+        store: ArtifactStore,
+        run_spec: RunSpec,
+        role: str,
+        attempt: int,
+        attempt_timeout_seconds: float,
+        stage_inputs: Mapping[str, str],
+        tokens_in: int,
+        tokens_out: int,
+        cumulative_tokens_in: int,
+        retry_decision: str,
+        retry_rationale: str,
+        contract_verdict: str,
+        identity_verdict: str,
+        failure_class: str | None,
+        response=None,
+        neutral_error=None,
+        provider_outcome=None,
+        promoted_artifact_refs=(),
+        invocation_began: bool = False,
+        projected_tokens_in: int | None = None,
+        consumed_tokens_in: int | None = None,
+    ) -> None:
+        budget = run_spec.resource_limits
+        profile = execution_profile_for_kind(self.adapter.kind)
+        input_digest, treatment_digest = treatment_digest_for_attempt(
+            condition=run_spec.condition.value,
+            role=role,
+            role_instruction=ROLE_INSTRUCTIONS[role],
+            stage_inputs=stage_inputs,
+            requested_identity=self.adapter.identity,
+            configured_identity=self.adapter.identity,
+            seed=run_spec.seed,
+            resource_limits=budget,
+            execution_profile=profile,
+            adapter_kind=self.adapter.kind,
+            adapter_config_digest=digest_json(self.adapter.options),
+        )
+        identity_used = None
+        reported_usage = None
+        if profile == EXECUTION_PROFILE_PRE_LIVE_LEGACY and isinstance(response, Mapping):
+            identity_used = response.get("identity_used")
+            reported_usage = {
+                key: response.get(key) for key in ("tokens_in", "tokens_out", "tool_uses")
+            }
+        raw_text = None
+        if profile == EXECUTION_PROFILE_LIVE_CONTRACT_V1:
+            if provider_outcome is not None and provider_outcome.raw_output.value is not None:
+                raw_text = provider_outcome.raw_output.value
+            elif provider_outcome is not None and provider_outcome.stage_output is not None:
+                raw_text = provider_outcome.stage_output.get("text")
+        else:
+            raw_text = raw_text_from_untrusted_response(response)
+        latency = None
+        if invocation_began:
+            latency = self.adapter.last_harness_observed_latency_seconds
+        record = build_invocation_record(
+            run_id=run_spec.run_id,
+            condition=run_spec.condition.value,
+            role=role,
+            attempt=attempt,
+            requested_identity=self.adapter.identity,
+            configured_identity=self.adapter.identity,
+            stage_timeout_seconds=budget.stage_timeout_seconds,
+            attempt_timeout_seconds=float(attempt_timeout_seconds),
+            input_content_digest=input_digest,
+            treatment_digest=treatment_digest,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cumulative_tokens_in=cumulative_tokens_in,
+            retry_decision=retry_decision,
+            retry_rationale=retry_rationale,
+            contract_verdict=contract_verdict,
+            identity_verdict=identity_verdict,
+            failure_class=failure_class,
+            promoted_artifact_refs=promoted_artifact_refs,
+            identity_used=identity_used,
+            reported_usage=reported_usage,
+            neutral_error=neutral_error,
+            provider_outcome=provider_outcome,
+            execution_profile=profile,
+            invocation_began=invocation_began,
+            projected_tokens_in=projected_tokens_in,
+            consumed_tokens_in=consumed_tokens_in,
+            harness_observed_latency_seconds=latency,
+        )
+        store.record_invocation(role, attempt, record, raw_text)
+
+    def _invoke_authorized_attempt(
+        self,
+        run_spec: RunSpec,
+        role: str,
+        role_instruction: str,
+        stage_inputs: Mapping[str, str],
+        budget,
+        remaining: float,
+    ):
+        profile = execution_profile_for_kind(self.adapter.kind)
+        if profile == EXECUTION_PROFILE_LIVE_CONTRACT_V1:
+            live_request = build_live_invocation_request(
+                condition=run_spec.condition.value,
+                role=role,
+                role_instruction=role_instruction,
+                stage_inputs=stage_inputs,
+                requested_identity=self.adapter.identity,
+                configured_identity=self.adapter.identity,
+                seed=run_spec.seed,
+                max_output_tokens=budget.max_output_tokens_per_stage,
+                max_tool_calls=budget.max_tool_calls_per_stage,
+                attempt_timeout_seconds=remaining,
+            )
+            outcome = self.adapter.invoke_live(live_request)
+            if outcome.kind is not ProviderCallKind.SUCCESS:
+                raise ProtocolError("invoke_live returned a non-success outcome without raising")
+            try:
+                response = map_live_outcome_to_stage_response(outcome, live_request)
+            except LiveContractError as exc:
+                raise ProtocolError(f"live outcome could not map to stage artifacts: {exc}") from exc
+            return response, outcome
+        if profile == EXECUTION_PROFILE_PRE_LIVE_LEGACY:
+            response = self.adapter.invoke(
+                role_instruction=role_instruction,
+                stage_inputs=stage_inputs,
+                budget=budget,
+                seed=run_spec.seed,
+                timeout_seconds=remaining,
+            )
+            return response, None
+        raise ProtocolError(f"unsupported execution profile {profile!r}")
 
     @staticmethod
     def _check_identity(run_spec: RunSpec, role: str, response: dict) -> str | None:
@@ -380,14 +1001,8 @@ class ExperimentRunner:
         return None
 
     @staticmethod
-    def _check_budget(role, budget, response, *, role_instruction, stage_inputs) -> str | None:
-        est_in = _estimate_tokens_in(role_instruction, stage_inputs)
+    def _check_output_and_tool_budget(role, budget, response) -> str | None:
         est_out = _estimate_tokens_out(response)
-        if est_in > budget.max_input_tokens_per_stage:
-            return (
-                f"input budget exceeded in stage {role!r} (harness-estimated): "
-                f"{est_in} > {budget.max_input_tokens_per_stage}"
-            )
         if est_out > budget.max_output_tokens_per_stage:
             return (
                 f"output budget exceeded in stage {role!r} (harness-estimated over full "
@@ -442,7 +1057,11 @@ class ExperimentRunner:
                 return None
             if role == "reviser":
                 if not state.verifier_findings:
-                    return None  # Condition B reviser has no finding registry
+                    if structured is not None:
+                        raise ContractViolation(
+                            "Condition B reviser must not emit Condition C structured dispositions"
+                        )
+                    return None
                 dispositions_payload = _require_structured(structured, "dispositions")
                 dispositions = tuple(
                     _parse_disposition(item) for item in dispositions_payload
@@ -485,6 +1104,7 @@ class ExperimentRunner:
         wall_start: float,
     ) -> None:
         payload = {
+            "run_id": run_spec.run_id,
             "status": state.status,
             "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
             "condition": run_spec.condition.value,
@@ -589,7 +1209,7 @@ class _StageOutcome:
         )
 
     @classmethod
-    def hard_failure(cls, role, attempt, started, error):
+    def hard_failure(cls, role, attempt, started, error, **result_fields):
         return cls(
             ok=False,
             failure_result=StageResult(
@@ -599,6 +1219,7 @@ class _StageOutcome:
                 started_at=started,
                 ended_at=_utcnow(),
                 error=error,
+                **result_fields,
             ),
         )
 
@@ -628,6 +1249,11 @@ def _require_structured(structured, key: str):
         raise ContractViolation(
             f"structured payload must be an object, got {type(structured).__name__}"
         )
+    extra = set(structured) - {key}
+    if extra:
+        raise ContractViolation(
+            f"structured payload has unexpected fields: {sorted(extra)}"
+        )
     value = structured.get(key)
     if not isinstance(value, list):
         raise ContractViolation(
@@ -639,6 +1265,9 @@ def _require_structured(structured, key: str):
 def _parse_finding(item) -> Finding:
     if not isinstance(item, dict):
         raise ContractViolation(f"finding must be an object, got {type(item).__name__}")
+    extra = set(item) - {"finding_id", "description", "material"}
+    if extra:
+        raise ContractViolation(f"finding has unexpected fields: {sorted(extra)}")
     finding_id = item.get("finding_id")
     description = item.get("description")
     material = item.get("material", True)
@@ -656,6 +1285,9 @@ def _parse_finding(item) -> Finding:
 def _parse_disposition(item) -> Disposition:
     if not isinstance(item, dict):
         raise ContractViolation(f"disposition must be an object, got {type(item).__name__}")
+    extra = set(item) - {"finding_id", "decision", "rationale"}
+    if extra:
+        raise ContractViolation(f"disposition has unexpected fields: {sorted(extra)}")
     finding_id = item.get("finding_id")
     decision = item.get("decision")
     rationale = item.get("rationale")

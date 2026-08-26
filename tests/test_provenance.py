@@ -285,7 +285,13 @@ class TestArtifactIntegrity(unittest.TestCase):
                 for line in (run_dir / "manifest.jsonl").read_text().splitlines()
                 if line.strip()
             ]
-            candidate_entries = [e for e in manifest if e["role"] == "solver" and e["name"] == "candidate"]
+            candidate_entries = [
+                e
+                for e in manifest
+                if e.get("kind", "model_artifact") == "model_artifact"
+                and e.get("role") == "solver"
+                and e.get("name") == "candidate"
+            ]
             self.assertEqual(len(candidate_entries), 1)
             on_disk = (run_dir / "solver" / "candidate.md").read_bytes()
             import hashlib

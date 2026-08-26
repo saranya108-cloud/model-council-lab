@@ -59,11 +59,26 @@ def make_spec(run_id, condition="A", seed=7, **limit_kwargs):
     )
 
 
-def make_runner(tmp_path_or_str, kind="fake", options=None, identity=None):
+def make_runner(tmp_path_or_str, kind="fake", options=None, identity=None, monotonic=None):
     root = Path(tmp_path_or_str) / "runs"
     process = SubprocessAdapter(identity or FAKE_IDENTITY, kind=kind, options=options)
     evaluator = ExternalEvaluator(EvaluationConfig())
-    return ExperimentRunner(process, evaluator, runs_root=root), root
+    return ExperimentRunner(process, evaluator, runs_root=root, monotonic=monotonic), root
+
+
+def transient_failure_options(state_dir, fail_before_call_count=2, **extra):
+    """Fake-adapter test state: fail the first N-1 subprocess invocations.
+
+    The counter lives outside model-visible treatment. Seed, role instruction,
+    stage inputs, and resource limits stay identical across attempts.
+    """
+    counter = Path(state_dir) / "fake-invocation-counter"
+    options = {
+        "fail_before_call_count": int(fail_before_call_count),
+        "invocation_counter_path": str(counter),
+    }
+    options.update(extra)
+    return options
 
 
 class TempRoot:

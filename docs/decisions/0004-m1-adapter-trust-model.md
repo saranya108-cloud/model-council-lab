@@ -20,6 +20,8 @@ The harness retains authority over experiment configuration, model identity, res
 
 The subprocess boundary provides invocation-protocol isolation and direct-worker timeout enforcement. It is not claimed to be an OS sandbox against malicious project-controlled Python. Same-user hostile-code containment and external cryptographic notarization are outside M1 scope.
 
+The local ArtifactStore, including its `run_authority.json` trust-anchor record, is trusted harness state. Terminal verification detects corruption and inconsistency among run-defining files beneath that anchor. M1 does not defend against a same-user attacker who arbitrarily rewrites the entire trusted ArtifactStore, including the authority record itself. File hashes in the authority record are consistency bindings, not signatures or external attestations.
+
 Future support for genuinely untrusted adapter implementations requires a separately designed isolation boundary.
 
 This decision clarifies implementation trust boundaries. It does not modify the A/B/C/D experimental design of [Decision 0002](0002-mvp-experiment-design.md) or the pilot parameters of [Decision 0003](0003-m1-pilot-parameters.md).
