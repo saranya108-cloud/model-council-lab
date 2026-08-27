@@ -23,12 +23,14 @@ from .live_contract import (
     ObservedNumber,
     ObservedStr,
     ProviderCallKind,
-    ProviderCallOutcome,
     ProviderErrorCategory,
     UnavailableReason,
+    UntrustedStructured,
     build_provider_call_outcome,
+    empty_provider_metadata,
     observed_identity,
     observed_int,
+    observed_provider_metadata,
     observed_str,
     observed_structured,
     unavailable,
@@ -465,6 +467,89 @@ def _live_stub_usage():
     )
 
 
+def _live_stub_provider_metadata(options: Mapping[str, Any]) -> UntrustedStructured:
+    unavailable_raw = options.get("provider_metadata_unavailable")
+    if unavailable_raw is not None:
+        return unavailable_structured(str(unavailable_raw))
+    raw = options.get("provider_metadata")
+    if raw is None:
+        return empty_provider_metadata()
+    if not isinstance(raw, Mapping):
+        raise ValueError("live stub provider_metadata option must be a JSON object")
+    return observed_provider_metadata(dict(raw))
+
+
+def _live_stub_error(
+    options: Mapping[str, Any], category: ProviderErrorCategory
+) -> NeutralError:
+    hint_raw = options.get("provider_retry_hint")
+    if hint_raw is None:
+        hint = ObservedStr(value=None, unavailable_reason=UnavailableReason.NOT_EXPOSED)
+    else:
+        hint = ObservedStr(value=str(hint_raw), unavailable_reason=None)
+    retry_after_raw = options.get("retry_after_seconds")
+    if retry_after_raw is None:
+        retry_after = ObservedNumber(value=None, unavailable_reason=UnavailableReason.NOT_EXPOSED)
+    else:
+        retry_after = ObservedNumber(value=float(retry_after_raw), unavailable_reason=None)
+    http_raw = options.get("neutral_http_status")
+    if http_raw is None:
+        http_status = ObservedInt(value=None, unavailable_reason=UnavailableReason.NOT_EXPOSED)
+    else:
+        http_status = ObservedInt(value=int(http_raw), unavailable_reason=None)
+    return NeutralError(
+        category=category,
+        sanitized_message=f"simulated {category.value}",
+        http_status=http_status,
+        provider_retry_hint=hint,
+        retry_after_seconds=retry_after,
+    )
+
+
+def _live_stub_error_observations(options: Mapping[str, Any], category: ProviderErrorCategory):
+    retain = bool(options.get("retain_observational_evidence"))
+    if category in (
+        ProviderErrorCategory.POLICY_REFUSAL,
+        ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT,
+    ):
+        retain = True
+    if not retain:
+        return {
+            "provider_response_id": unavailable(UnavailableReason.NO_RESPONSE_RECEIVED),
+            "provider_request_id": unavailable(UnavailableReason.NOT_EXPOSED),
+            "provider_response_status": unavailable_int(UnavailableReason.NO_RESPONSE_RECEIVED),
+            "finish_reason": unavailable(UnavailableReason.NO_RESPONSE_RECEIVED),
+            "raw_output": unavailable(UnavailableReason.NO_RESPONSE_RECEIVED),
+            "structured_output": unavailable_structured(UnavailableReason.NO_RESPONSE_RECEIVED),
+        }
+    finish_raw = options.get("finish_reason")
+    if finish_raw is None:
+        if category is ProviderErrorCategory.POLICY_REFUSAL:
+            finish_raw = FinishReason.CONTENT_FILTER.value
+        elif category is ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT:
+            finish_raw = FinishReason.INCOMPLETE.value
+        else:
+            finish_raw = FinishReason.ERROR.value
+    raw_output = options.get("raw_output")
+    if raw_output is None:
+        raw_output = f"simulated {category.value}"
+    structured = options.get("structured_output")
+    status = options.get("provider_response_status", 200)
+    response_id = options.get("provider_response_id", "live-stub-resp")
+    return {
+        "provider_response_id": observed_str(str(response_id)),
+        "provider_request_id": unavailable(UnavailableReason.NOT_EXPOSED),
+        "provider_response_status": observed_int(int(status)),
+        "finish_reason": ObservedStr(value=str(finish_raw), unavailable_reason=None),
+        "raw_output": ObservedStr(value=str(raw_output), unavailable_reason=None),
+        "structured_output": (
+            unavailable_structured(UnavailableReason.NOT_APPLICABLE)
+            if structured is None
+            else observed_structured(structured)
+        ),
+    }
+
+
 def _live_stub_stage_payload(request: LiveInvocationRequest, options: Mapping[str, Any]) -> dict[str, Any]:
     """Deterministic stage bytes for the live-protocol stub. Not a provider."""
     role = request.role
@@ -567,11 +652,9 @@ def live_stub_generate(options: Mapping[str, Any], request: LiveInvocationReques
         }
     error_category = options.get("neutral_error_category")
     if error_category is not None:
-        error = NeutralError(
-            category=ProviderErrorCategory(str(error_category)),
-            sanitized_message=f"simulated {error_category}",
-            http_status=unavailable_int(UnavailableReason.NOT_EXPOSED),
-        )
+        category = ProviderErrorCategory(str(error_category))
+        error = _live_stub_error(options, category)
+        observations = _live_stub_error_observations(options, category)
         return build_provider_call_outcome(
             kind=ProviderCallKind.PROVIDER_ERROR,
             requested_identity=request.requested_identity,
@@ -581,12 +664,6 @@ def live_stub_generate(options: Mapping[str, Any], request: LiveInvocationReques
                 model_id=request.configured_identity.model_id
             ),
             provider_snapshot_identity=unavailable(UnavailableReason.NOT_EXPOSED),
-            provider_response_id=unavailable(UnavailableReason.NO_RESPONSE_RECEIVED),
-            provider_request_id=unavailable(UnavailableReason.NOT_EXPOSED),
-            provider_response_status=unavailable_int(UnavailableReason.NO_RESPONSE_RECEIVED),
-            finish_reason=unavailable(UnavailableReason.NO_RESPONSE_RECEIVED),
-            raw_output=unavailable(UnavailableReason.NO_RESPONSE_RECEIVED),
-            structured_output=unavailable_structured(UnavailableReason.NO_RESPONSE_RECEIVED),
             tool_use_count=0,
             usage=_live_stub_usage(),
             timing=CallTiming(
@@ -595,6 +672,8 @@ def live_stub_generate(options: Mapping[str, Any], request: LiveInvocationReques
             adapter_internal_retry_count=0,
             error=error,
             stage_output=None,
+            provider_metadata=_live_stub_provider_metadata(options),
+            **observations,
         )
     payload = _live_stub_stage_payload(request, options)
     raw_value = payload["text"]
@@ -629,6 +708,7 @@ def live_stub_generate(options: Mapping[str, Any], request: LiveInvocationReques
         adapter_internal_retry_count=0,
         error=None,
         stage_output=payload,
+        provider_metadata=_live_stub_provider_metadata(options),
     )
 
 

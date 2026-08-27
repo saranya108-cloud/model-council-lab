@@ -8,9 +8,11 @@ from __future__ import annotations
 import copy
 import importlib
 import json
+import math
 import sys
 import unittest
 from pathlib import Path
+from types import MappingProxyType
 
 import helpers  # noqa: F401 - installs src on sys.path
 from model_council import (
@@ -37,8 +39,10 @@ from model_council.live_contract import (
     build_provider_call_outcome,
     dumps_live_invocation_request,
     dumps_provider_call_outcome,
+    empty_provider_metadata,
     loads_live_invocation_request,
     loads_provider_call_outcome,
+    map_live_outcome_to_stage_response,
     observed_identity,
     observed_int,
     observed_metrics,
@@ -54,7 +58,14 @@ from model_council.live_contract import (
     unavailable_structured,
     validate_closed_schema,
 )
-from model_council.security import canonical_json
+from model_council.live_contract import empty_provider_metadata
+from model_council.security import (
+    MAX_PROVIDER_TREATMENT_CONFIG_BYTES,
+    MAX_PROVIDER_TREATMENT_CONFIG_DEPTH,
+    MAX_PROVIDER_TREATMENT_CONFIG_ITEMS,
+    MAX_PROVIDER_TREATMENT_CONFIG_STRING_BYTES,
+    canonical_json,
+)
 
 IDENTITY = AdapterIdentity(
     provider="example-provider",
@@ -130,6 +141,7 @@ def make_outcome(**overrides):
             "artifacts": {"candidate": "candidate text", "evidence": "evidence"},
             "structured": None,
         },
+        provider_metadata=empty_provider_metadata(),
     )
     kwargs.update(overrides)
     return build_provider_call_outcome(**kwargs)
@@ -150,6 +162,32 @@ def make_error_outcome(kind=ProviderCallKind.PROVIDER_ERROR, **overrides):
     )
     defaults.update(overrides)
     return make_outcome(**defaults)
+
+
+# Contract fixtures only. These shapes are not imported by production code.
+OPENAI_SHAPED_METADATA = {"service_tier": "flex"}
+NON_OPENAI_SHAPED_METADATA = {"done": True, "total_duration_ns": 0}
+
+
+_UNSET = object()
+
+
+def metadata_wire(value=None, *, unavailable_reason=None):
+    return {
+        "untrusted": True,
+        "value": value,
+        "unavailable_reason": unavailable_reason,
+    }
+
+
+def with_metadata(payload, value=_UNSET, *, unavailable_reason=None):
+    attached = copy.deepcopy(payload)
+    if value is _UNSET:
+        value = {} if unavailable_reason is None else None
+    attached["provider_metadata"] = metadata_wire(
+        value, unavailable_reason=unavailable_reason
+    )
+    return attached
 
 
 class TestLiveInvocationRequest(unittest.TestCase):
@@ -738,6 +776,537 @@ class TestContractIsolation(unittest.TestCase):
         self.assertNotIn("RETRYABLE_PROVIDER_CATEGORIES", source)
         self.assertNotIn("from .retry_policy", source)
         self.assertNotIn("from .runner", source)
+
+
+class TestV4ClosedSchemaAndRoundTrips(unittest.TestCase):
+    def test_live_contract_version_advances_exactly_to_v4(self):
+        self.assertEqual(LIVE_CONTRACT_VERSION, "m1-live-contract-v4")
+        request = make_request()
+        outcome = parse_provider_call_outcome(with_metadata(make_outcome().to_dict()))
+        self.assertEqual(request.contract_version, "m1-live-contract-v4")
+        self.assertEqual(outcome.contract_version, "m1-live-contract-v4")
+
+    def test_v3_outcome_payload_is_rejected(self):
+        payload = make_outcome().to_dict()
+        payload["contract_version"] = "m1-live-contract-v3"
+        payload.pop("provider_metadata", None)
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(payload)
+
+    def test_v3_request_payload_is_rejected(self):
+        payload = make_request().to_dict()
+        payload["contract_version"] = "m1-live-contract-v3"
+        with self.assertRaises(LiveContractError):
+            parse_live_invocation_request(payload)
+
+    def test_missing_provider_metadata_is_invalid(self):
+        payload = make_outcome().to_dict()
+        payload.pop("provider_metadata", None)
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(payload)
+
+    def test_unexpected_outcome_key_is_rejected(self):
+        payload = with_metadata(make_outcome().to_dict())
+        payload["service_tier"] = "flex"
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(payload)
+
+    def test_existing_success_and_error_cases_round_trip_under_v4(self):
+        success = parse_provider_call_outcome(with_metadata(make_outcome().to_dict()))
+        provider = parse_provider_call_outcome(
+            with_metadata(make_error_outcome(ProviderCallKind.PROVIDER_ERROR).to_dict())
+        )
+        transport = parse_provider_call_outcome(
+            with_metadata(
+                make_error_outcome(
+                    ProviderCallKind.TRANSPORT_ERROR,
+                    error=NeutralError(
+                        category=ProviderErrorCategory.TRANSPORT_CONNECTIVITY,
+                        sanitized_message="connection refused",
+                        http_status=unavailable_int(UnavailableReason.NO_RESPONSE_RECEIVED),
+                    ),
+                ).to_dict()
+            )
+        )
+        for outcome in (success, provider, transport):
+            encoded = dumps_provider_call_outcome(outcome)
+            loaded = loads_provider_call_outcome(encoded)
+            self.assertEqual(encoded, dumps_provider_call_outcome(loaded))
+            self.assertEqual(encoded, canonical_json(json.loads(encoded)))
+            self.assertEqual(loaded.contract_version, "m1-live-contract-v4")
+            self.assertEqual(loaded.provider_metadata.to_dict()["untrusted"], True)
+
+    def test_new_categories_round_trip_and_unknown_categories_are_rejected(self):
+        expected = {
+            "quota_exhausted": "QUOTA_EXHAUSTED",
+            "policy_refusal": "POLICY_REFUSAL",
+            "incomplete_provider_result": "INCOMPLETE_PROVIDER_RESULT",
+        }
+        for value, attr in expected.items():
+            with self.subTest(category=value):
+                self.assertEqual(getattr(ProviderErrorCategory, attr).value, value)
+                payload = with_metadata(
+                    make_error_outcome(
+                        error=NeutralError(
+                            category=ProviderErrorCategory(value),
+                            sanitized_message=f"simulated {value}",
+                            http_status=unavailable_int(UnavailableReason.NOT_EXPOSED),
+                        )
+                    ).to_dict()
+                )
+                parsed = parse_provider_call_outcome(payload)
+                self.assertEqual(parsed.kind, ProviderCallKind.PROVIDER_ERROR)
+                self.assertEqual(parsed.error.category.value, value)
+                self.assertIsNone(parsed.stage_output)
+                encoded = dumps_provider_call_outcome(parsed)
+                self.assertEqual(encoded, dumps_provider_call_outcome(loads_provider_call_outcome(encoded)))
+        payload = with_metadata(make_error_outcome().to_dict())
+        for unknown in (
+            "openai_rate_limit_error",
+            "RateLimitError",
+            "done_reason",
+            "content_filter",
+            "quota",
+        ):
+            with self.subTest(unknown=unknown):
+                payload["error"]["category"] = unknown
+                with self.assertRaises(LiveContractError):
+                    parse_provider_call_outcome(payload)
+
+    def test_canonical_serialization_is_deterministic(self):
+        payload = with_metadata(
+            make_outcome().to_dict(),
+            {"zeta": False, "alpha": {"b": 0, "a": ""}},
+        )
+        first = dumps_provider_call_outcome(parse_provider_call_outcome(payload))
+        second = dumps_provider_call_outcome(parse_provider_call_outcome(json.loads(first)))
+        self.assertEqual(first, second)
+        self.assertEqual(first, canonical_json(json.loads(first)))
+        metadata = json.loads(first)["provider_metadata"]["value"]
+        self.assertEqual(list(metadata), ["alpha", "zeta"])
+        self.assertEqual(list(metadata["alpha"]), ["a", "b"])
+
+
+class TestV4SuccessFinishReason(unittest.TestCase):
+    def test_success_allows_completed_and_explicitly_unavailable_reasons(self):
+        completed = parse_provider_call_outcome(with_metadata(make_outcome().to_dict()))
+        self.assertEqual(completed.finish_reason.value, FinishReason.COMPLETED.value)
+        for reason in (UnavailableReason.NOT_EXPOSED, UnavailableReason.NOT_APPLICABLE):
+            payload = with_metadata(make_outcome().to_dict())
+            payload["finish_reason"] = {"value": None, "unavailable_reason": reason.value}
+            parsed = parse_provider_call_outcome(payload)
+            self.assertIsNone(parsed.finish_reason.value)
+            self.assertEqual(parsed.finish_reason.unavailable_reason, reason)
+
+    def test_success_rejects_observed_non_completed_finish_reasons(self):
+        for value in (
+            FinishReason.LENGTH.value,
+            FinishReason.INCOMPLETE.value,
+            FinishReason.TOOL_USE.value,
+            FinishReason.CONTENT_FILTER.value,
+            FinishReason.ERROR.value,
+        ):
+            with self.subTest(finish_reason=value):
+                payload = with_metadata(make_outcome().to_dict())
+                payload["finish_reason"] = {"value": value, "unavailable_reason": None}
+                with self.assertRaises(LiveContractError):
+                    parse_provider_call_outcome(payload)
+
+    def test_success_rejects_no_response_received_finish_reason(self):
+        payload = with_metadata(make_outcome().to_dict())
+        payload["finish_reason"] = {
+            "value": None,
+            "unavailable_reason": UnavailableReason.NO_RESPONSE_RECEIVED.value,
+        }
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(payload)
+
+    def test_error_outcomes_may_observe_incomplete_or_content_filter(self):
+        for value in (FinishReason.INCOMPLETE.value, FinishReason.CONTENT_FILTER.value):
+            payload = with_metadata(make_error_outcome().to_dict())
+            payload["finish_reason"] = {"value": value, "unavailable_reason": None}
+            parsed = parse_provider_call_outcome(payload)
+            self.assertEqual(parsed.finish_reason.value, value)
+            self.assertIsNone(parsed.stage_output)
+
+
+class TestV4RefusalAndIncompleteSemantics(unittest.TestCase):
+    def _error_payload(self, category, **overrides):
+        error = NeutralError(
+            category=category,
+            sanitized_message=f"simulated {category.value}",
+            http_status=observed_int(200),
+        )
+        payload = with_metadata(
+            make_error_outcome(
+                kind=ProviderCallKind.PROVIDER_ERROR,
+                error=error,
+                provider_response_id=observed_str("resp_observed"),
+                provider_response_status=observed_int(200),
+                finish_reason=ObservedStr(
+                    value=overrides.pop("finish_value", FinishReason.CONTENT_FILTER.value),
+                    unavailable_reason=None,
+                ),
+                raw_output=ObservedStr(
+                    value=overrides.pop("raw_value", "partial or refused text"),
+                    unavailable_reason=None,
+                ),
+                structured_output=observed_structured({"note": "observational"}),
+            ).to_dict()
+        )
+        payload["provider_metadata"] = metadata_wire(OPENAI_SHAPED_METADATA)
+        return payload
+
+    def test_policy_refusal_is_provider_error_without_stage_output(self):
+        parsed = parse_provider_call_outcome(
+            self._error_payload(ProviderErrorCategory.POLICY_REFUSAL)
+        )
+        self.assertEqual(parsed.kind, ProviderCallKind.PROVIDER_ERROR)
+        self.assertEqual(parsed.error.category, ProviderErrorCategory.POLICY_REFUSAL)
+        self.assertIsNone(parsed.stage_output)
+        self.assertEqual(parsed.provider_response_id.value, "resp_observed")
+        self.assertEqual(parsed.provider_response_status.value, 200)
+        self.assertEqual(parsed.finish_reason.value, FinishReason.CONTENT_FILTER.value)
+        self.assertEqual(parsed.raw_output.value, "partial or refused text")
+        self.assertEqual(dict(parsed.structured_output.value), {"note": "observational"})
+        self.assertEqual(dict(parsed.provider_metadata.value), OPENAI_SHAPED_METADATA)
+        with self.assertRaises(LiveContractError):
+            map_live_outcome_to_stage_response(parsed, make_request())
+        success_payload = with_metadata(make_outcome().to_dict())
+        success_payload["finish_reason"] = {
+            "value": FinishReason.CONTENT_FILTER.value,
+            "unavailable_reason": None,
+        }
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(success_payload)
+
+    def test_incomplete_result_is_distinct_from_malformed_timeout_and_truncation(self):
+        parsed = parse_provider_call_outcome(
+            self._error_payload(
+                ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT,
+                finish_value=FinishReason.INCOMPLETE.value,
+                raw_value="partial tokens",
+            )
+        )
+        self.assertEqual(parsed.kind, ProviderCallKind.PROVIDER_ERROR)
+        self.assertEqual(parsed.error.category, ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT)
+        self.assertIsNone(parsed.stage_output)
+        self.assertNotEqual(
+            parsed.error.category, ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL
+        )
+        self.assertNotEqual(
+            parsed.error.category, ProviderErrorCategory.TRANSPORT_PROVIDER_TIMEOUT
+        )
+        self.assertEqual(parsed.raw_output.value, "partial tokens")
+        malformed = parse_provider_call_outcome(
+            with_metadata(
+                make_error_outcome(
+                    error=NeutralError(
+                        category=ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL,
+                        sanitized_message="unparseable provider payload",
+                        http_status=unavailable_int(UnavailableReason.NOT_EXPOSED),
+                    )
+                ).to_dict()
+            )
+        )
+        timeout = parse_provider_call_outcome(
+            with_metadata(
+                make_error_outcome(
+                    kind=ProviderCallKind.TRANSPORT_ERROR,
+                    error=NeutralError(
+                        category=ProviderErrorCategory.TRANSPORT_PROVIDER_TIMEOUT,
+                        sanitized_message="provider timed out",
+                        http_status=unavailable_int(UnavailableReason.NO_RESPONSE_RECEIVED),
+                    ),
+                ).to_dict()
+            )
+        )
+        self.assertEqual(malformed.error.category, ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL)
+        self.assertEqual(timeout.error.category, ProviderErrorCategory.TRANSPORT_PROVIDER_TIMEOUT)
+        self.assertNotEqual(parsed.error.category, malformed.error.category)
+        self.assertNotEqual(parsed.error.category, timeout.error.category)
+
+    def test_local_raw_evidence_truncation_does_not_change_incomplete_category(self):
+        from model_council.invocation import MAX_RAW_EVIDENCE_BYTES, bound_raw_evidence
+
+        raw_value = "x" * (MAX_RAW_EVIDENCE_BYTES + 50)
+        parsed = parse_provider_call_outcome(
+            self._error_payload(
+                ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT,
+                finish_value=FinishReason.LENGTH.value,
+                raw_value=raw_value,
+            )
+        )
+        bounded = bound_raw_evidence(parsed.raw_output.value)
+        self.assertTrue(bounded["truncated"])
+        self.assertEqual(
+            parsed.error.category, ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT
+        )
+        self.assertLessEqual(bounded["stored_bytes"], MAX_RAW_EVIDENCE_BYTES)
+        self.assertGreater(bounded["observed_bytes"], MAX_RAW_EVIDENCE_BYTES)
+
+
+class TestV4ProviderMetadata(unittest.TestCase):
+    def test_bounds_are_aliases_of_tranche1_treatment_bounds(self):
+        import model_council.live_contract as live_contract
+
+        self.assertIs(
+            live_contract.MAX_PROVIDER_METADATA_BYTES,
+            MAX_PROVIDER_TREATMENT_CONFIG_BYTES,
+        )
+        self.assertIs(
+            live_contract.MAX_PROVIDER_METADATA_DEPTH,
+            MAX_PROVIDER_TREATMENT_CONFIG_DEPTH,
+        )
+        self.assertIs(
+            live_contract.MAX_PROVIDER_METADATA_ITEMS,
+            MAX_PROVIDER_TREATMENT_CONFIG_ITEMS,
+        )
+        self.assertIs(
+            live_contract.MAX_PROVIDER_METADATA_STRING_BYTES,
+            MAX_PROVIDER_TREATMENT_CONFIG_STRING_BYTES,
+        )
+        self.assertEqual(live_contract.MAX_PROVIDER_METADATA_BYTES, 16_384)
+        self.assertEqual(live_contract.MAX_PROVIDER_METADATA_DEPTH, 8)
+        self.assertEqual(live_contract.MAX_PROVIDER_METADATA_ITEMS, 64)
+        self.assertEqual(live_contract.MAX_PROVIDER_METADATA_STRING_BYTES, 4_096)
+
+    def test_valid_nested_empty_unavailable_and_literal_json_values(self):
+        nested = {"outer": {"inner": ["ok", 0, False, "", None], "count": 0}}
+        parsed = parse_provider_call_outcome(with_metadata(make_outcome().to_dict(), nested))
+        self.assertEqual(_plain_unfrozen(parsed.provider_metadata.value), nested)
+        empty = parse_provider_call_outcome(with_metadata(make_outcome().to_dict(), {}))
+        self.assertEqual(dict(empty.provider_metadata.value), {})
+        self.assertIsNone(empty.provider_metadata.unavailable_reason)
+        unavailable = parse_provider_call_outcome(
+            with_metadata(
+                make_outcome().to_dict(),
+                value=None,
+                unavailable_reason=UnavailableReason.NOT_EXPOSED.value,
+            )
+        )
+        self.assertIsNone(unavailable.provider_metadata.value)
+        self.assertEqual(
+            unavailable.provider_metadata.unavailable_reason, UnavailableReason.NOT_EXPOSED
+        )
+        literals = {"zero": 0, "flag": False, "empty": "", "missing": None}
+        literal = parse_provider_call_outcome(
+            with_metadata(make_outcome().to_dict(), literals)
+        )
+        self.assertEqual(dict(literal.provider_metadata.value), literals)
+        wire = literal.to_dict()["provider_metadata"]
+        self.assertEqual(wire["value"]["zero"], 0)
+        self.assertIs(wire["value"]["flag"], False)
+        self.assertEqual(wire["value"]["empty"], "")
+        self.assertIsNone(wire["value"]["missing"])
+
+    def test_openai_and_non_openai_shaped_fixtures_round_trip(self):
+        openai_shaped = parse_provider_call_outcome(
+            with_metadata(make_outcome().to_dict(), OPENAI_SHAPED_METADATA)
+        )
+        other_shaped = parse_provider_call_outcome(
+            with_metadata(make_outcome().to_dict(), NON_OPENAI_SHAPED_METADATA)
+        )
+        self.assertEqual(dict(openai_shaped.provider_metadata.value), OPENAI_SHAPED_METADATA)
+        self.assertEqual(
+            dict(other_shaped.provider_metadata.value), NON_OPENAI_SHAPED_METADATA
+        )
+        self.assertIs(other_shaped.provider_metadata.value["done"], True)
+        self.assertEqual(other_shaped.provider_metadata.value["total_duration_ns"], 0)
+
+    def test_unavailable_metadata_requires_reason_and_rejects_conflict(self):
+        payload = with_metadata(make_outcome().to_dict(), value=None, unavailable_reason=None)
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(payload)
+        payload = with_metadata(
+            make_outcome().to_dict(),
+            value={"done": True},
+            unavailable_reason=UnavailableReason.NOT_EXPOSED.value,
+        )
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(payload)
+        payload = with_metadata(make_outcome().to_dict(), [])
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(payload)
+
+    def test_oversized_depth_items_string_and_envelope_rejected(self):
+        too_deep = {}
+        cursor = too_deep
+        for _ in range(MAX_PROVIDER_TREATMENT_CONFIG_DEPTH + 1):
+            nxt = {}
+            cursor["k"] = nxt
+            cursor = nxt
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(with_metadata(make_outcome().to_dict(), too_deep))
+        too_many = {f"k{i}": i for i in range(MAX_PROVIDER_TREATMENT_CONFIG_ITEMS + 1)}
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(with_metadata(make_outcome().to_dict(), too_many))
+        too_long = {"blob": "x" * (MAX_PROVIDER_TREATMENT_CONFIG_STRING_BYTES + 1)}
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(with_metadata(make_outcome().to_dict(), too_long))
+        oversized = {"blob": "x" * MAX_PROVIDER_TREATMENT_CONFIG_STRING_BYTES}
+        if len(canonical_json(oversized).encode("utf-8")) <= MAX_PROVIDER_TREATMENT_CONFIG_BYTES:
+            filler = "y" * MAX_PROVIDER_TREATMENT_CONFIG_STRING_BYTES
+            oversized = {f"k{i}": filler for i in range(8)}
+        self.assertGreater(
+            len(canonical_json(oversized).encode("utf-8")),
+            MAX_PROVIDER_TREATMENT_CONFIG_BYTES,
+        )
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(with_metadata(make_outcome().to_dict(), oversized))
+
+    def test_non_json_nan_infinity_and_forbidden_keys_rejected(self):
+        for value in ({"bad": object()}, {"bad": set()}, {"bad": b"bytes"}):
+            with self.subTest(value=value):
+                with self.assertRaises(LiveContractError):
+                    parse_provider_call_outcome(with_metadata(make_outcome().to_dict(), value))
+        for number in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(number=number):
+                with self.assertRaises(LiveContractError):
+                    parse_provider_call_outcome(
+                        with_metadata(make_outcome().to_dict(), {"n": number})
+                    )
+                self.assertTrue(math.isnan(number) or not math.isfinite(number))
+        forbidden = (
+            {"secret": "x"},
+            {"headers": {"a": 1}},
+            {"credential": "x"},
+            {"traceback": "boom"},
+            {"artifact_path": "/tmp/x"},
+            {"evaluator_config": {"k": 1}},
+            {"retry_policy": {"max": 1}},
+            {"should_retry": True},
+            {"nested": {"api_key": "sk-test"}},
+            {"nested": {"runs_root": "/runs"}},
+        )
+        for value in forbidden:
+            with self.subTest(value=value):
+                with self.assertRaises(LiveContractError):
+                    parse_provider_call_outcome(with_metadata(make_outcome().to_dict(), value))
+
+    def test_metadata_is_deep_frozen_and_persists_exactly(self):
+        parsed = parse_provider_call_outcome(
+            with_metadata(make_outcome().to_dict(), {"outer": {"flag": False, "n": 0}})
+        )
+        self.assertIsInstance(parsed.provider_metadata.value, MappingProxyType)
+        self.assertIsInstance(parsed.provider_metadata.value["outer"], MappingProxyType)
+        with self.assertRaises(TypeError):
+            parsed.provider_metadata.value["extra"] = 1
+        with self.assertRaises(TypeError):
+            parsed.provider_metadata.value["outer"]["flag"] = True
+        encoded = parsed.to_dict()
+        self.assertEqual(encoded["provider_metadata"]["value"]["outer"]["n"], 0)
+        self.assertIs(encoded["provider_metadata"]["value"]["outer"]["flag"], False)
+
+    def test_conflicting_metadata_cannot_map_into_stage_output_or_trusted_identity(self):
+        payload = with_metadata(
+            make_outcome().to_dict(),
+            {
+                "observed_provider": "attacker-provider",
+                "observed_model_id": "attacker-model",
+                "condition": "C",
+                "seed": 999,
+                "treatment": "override",
+            },
+        )
+        parsed = parse_provider_call_outcome(payload)
+        mapped = map_live_outcome_to_stage_response(parsed, make_request())
+        self.assertNotIn("provider_metadata", mapped)
+        self.assertNotIn("observed_provider", mapped)
+        self.assertNotIn("service_tier", json.dumps(mapped))
+        self.assertEqual(mapped["identity_used"]["provider"], IDENTITY.provider)
+        self.assertEqual(mapped["identity_used"]["model_id"], IDENTITY.model_id)
+        self.assertNotEqual(mapped["identity_used"]["provider"], "attacker-provider")
+        self.assertEqual(mapped["artifacts"], parsed.stage_output["artifacts"])
+
+
+class TestV4RemediationBuilderAndKind(unittest.TestCase):
+    def _builder_kwargs(self):
+        return dict(
+            kind=ProviderCallKind.SUCCESS,
+            requested_identity=IDENTITY,
+            configured_identity=IDENTITY,
+            provider_resolved_identity=unavailable_identity(UnavailableReason.NOT_EXPOSED),
+            invocation_returned_identity=observed_identity(model_id="example-model"),
+            provider_snapshot_identity=unavailable(UnavailableReason.NOT_EXPOSED),
+            provider_response_id=observed_str("resp_123"),
+            provider_request_id=unavailable(UnavailableReason.NOT_EXPOSED),
+            provider_response_status=observed_int(200),
+            finish_reason=ObservedStr(value=FinishReason.COMPLETED.value, unavailable_reason=None),
+            raw_output=ObservedStr(value="candidate text", unavailable_reason=None),
+            structured_output=unavailable_structured(UnavailableReason.NOT_APPLICABLE),
+            tool_use_count=0,
+            usage=usage_all_unavailable(),
+            timing=CallTiming(
+                provider_processing_ms=unavailable_number(UnavailableReason.NOT_EXPOSED),
+            ),
+            adapter_internal_retry_count=0,
+            error=None,
+            stage_output={
+                "text": "candidate text",
+                "artifacts": {"candidate": "candidate text", "evidence": "evidence"},
+                "structured": None,
+            },
+        )
+
+    def test_builder_omission_of_provider_metadata_is_rejected(self):
+        kwargs = self._builder_kwargs()
+        self.assertNotIn("provider_metadata", kwargs)
+        with self.assertRaises(LiveContractError):
+            build_provider_call_outcome(**kwargs)
+        explicit_empty = build_provider_call_outcome(
+            **kwargs, provider_metadata=empty_provider_metadata()
+        )
+        self.assertEqual(dict(explicit_empty.provider_metadata.value), {})
+        self.assertIsNone(explicit_empty.provider_metadata.unavailable_reason)
+        explicit_unavailable = build_provider_call_outcome(
+            **kwargs,
+            provider_metadata=unavailable_structured(UnavailableReason.NOT_EXPOSED),
+        )
+        self.assertIsNone(explicit_unavailable.provider_metadata.value)
+        self.assertEqual(
+            explicit_unavailable.provider_metadata.unavailable_reason,
+            UnavailableReason.NOT_EXPOSED,
+        )
+
+    def test_quota_exhausted_cannot_be_transport_error(self):
+        self._assert_transport_error_rejects(ProviderErrorCategory.QUOTA_EXHAUSTED)
+
+    def test_policy_refusal_cannot_be_transport_error(self):
+        self._assert_transport_error_rejects(ProviderErrorCategory.POLICY_REFUSAL)
+
+    def test_incomplete_provider_result_cannot_be_transport_error(self):
+        self._assert_transport_error_rejects(ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT)
+
+    def _assert_transport_error_rejects(self, category):
+        payload = make_error_outcome(
+            kind=ProviderCallKind.PROVIDER_ERROR,
+            error=NeutralError(
+                category=category,
+                sanitized_message=f"simulated {category.value}",
+                http_status=unavailable_int(UnavailableReason.NOT_EXPOSED),
+            ),
+        ).to_dict()
+        payload["kind"] = ProviderCallKind.TRANSPORT_ERROR.value
+        with self.assertRaises(LiveContractError):
+            parse_provider_call_outcome(payload)
+        with self.assertRaises(LiveContractError):
+            make_error_outcome(
+                kind=ProviderCallKind.TRANSPORT_ERROR,
+                error=NeutralError(
+                    category=category,
+                    sanitized_message=f"simulated {category.value}",
+                    http_status=unavailable_int(UnavailableReason.NOT_EXPOSED),
+                ),
+            )
+
+
+def _plain_unfrozen(value):
+    if isinstance(value, MappingProxyType):
+        return {key: _plain_unfrozen(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_plain_unfrozen(item) for item in value]
+    return value
 
 
 if __name__ == "__main__":

@@ -681,7 +681,7 @@ class TestProviderTreatmentConfigNeutrality(unittest.TestCase):
 class TestProviderTreatmentProtocolV12(unittest.TestCase):
     def test_new_artifacts_identify_harness_protocol_v12(self):
         self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v12")
-        self.assertEqual(LIVE_CONTRACT_VERSION, "m1-live-contract-v3")
+        self.assertEqual(LIVE_CONTRACT_VERSION, "m1-live-contract-v4")
         self.assertEqual(RUN_AUTHORITY_SCHEMA, "m1-run-authority-v1")
         with TempRoot() as root:
             runner, runs_root = make_runner(

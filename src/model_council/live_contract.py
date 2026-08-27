@@ -21,6 +21,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from .errors import GovernanceViolation
 from .roles import (
     ALLOWED_INPUT_KEYS,
     CONDITION_STAGES,
@@ -29,10 +30,24 @@ from .roles import (
     ROLE_REVISER,
     ROLE_VERIFIER,
 )
-from .security import SAFE_IDENTIFIER_RE, canonical_json, deep_freeze, digest_json
+from .security import (
+    MAX_PROVIDER_TREATMENT_CONFIG_BYTES,
+    MAX_PROVIDER_TREATMENT_CONFIG_DEPTH,
+    MAX_PROVIDER_TREATMENT_CONFIG_ITEMS,
+    MAX_PROVIDER_TREATMENT_CONFIG_STRING_BYTES,
+    SAFE_IDENTIFIER_RE,
+    canonical_json,
+    deep_freeze,
+    digest_json,
+    normalize_provider_treatment_config,
+)
 from .types import AdapterIdentity, Condition
 
-LIVE_CONTRACT_VERSION = "m1-live-contract-v3"
+LIVE_CONTRACT_VERSION = "m1-live-contract-v4"
+MAX_PROVIDER_METADATA_BYTES = MAX_PROVIDER_TREATMENT_CONFIG_BYTES
+MAX_PROVIDER_METADATA_DEPTH = MAX_PROVIDER_TREATMENT_CONFIG_DEPTH
+MAX_PROVIDER_METADATA_ITEMS = MAX_PROVIDER_TREATMENT_CONFIG_ITEMS
+MAX_PROVIDER_METADATA_STRING_BYTES = MAX_PROVIDER_TREATMENT_CONFIG_STRING_BYTES
 MESSAGE_REQUEST = "live_invocation_request"
 MESSAGE_OUTCOME = "provider_call_outcome"
 
@@ -242,6 +257,7 @@ _OUTCOME_FIELDS = frozenset(
         "adapter_internal_retry_count",
         "error",
         "stage_output",
+        "provider_metadata",
     }
 )
 
@@ -264,6 +280,7 @@ _PROVIDER_RETRY_HINT_VALUES = frozenset(
     {PROVIDER_RETRY_HINT_SUGGESTED, PROVIDER_RETRY_HINT_DISCOURAGED}
 )
 _EXTRA_METRIC_FIELDS = frozenset({"namespace", "metrics"})
+_PROVIDER_METADATA_OMITTED = object()
 
 
 class LiveContractError(ValueError):
@@ -293,6 +310,18 @@ class ProviderErrorCategory(str, Enum):
     PROVIDER_OVERLOAD_INTERNAL = "provider_overload_internal"
     MALFORMED_PROVIDER_PROTOCOL = "malformed_provider_protocol"
     UNKNOWN_SANITIZED_FAILURE = "unknown_sanitized_failure"
+    QUOTA_EXHAUSTED = "quota_exhausted"
+    POLICY_REFUSAL = "policy_refusal"
+    INCOMPLETE_PROVIDER_RESULT = "incomplete_provider_result"
+
+
+_PROVIDER_ERROR_ONLY_CATEGORIES = frozenset(
+    {
+        ProviderErrorCategory.QUOTA_EXHAUSTED,
+        ProviderErrorCategory.POLICY_REFUSAL,
+        ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT,
+    }
+)
 
 
 class FinishReason(str, Enum):
@@ -544,6 +573,7 @@ class ProviderCallOutcome:
     adapter_internal_retry_count: int
     error: NeutralError | None
     stage_output: Mapping[str, Any] | None
+    provider_metadata: UntrustedStructured
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -567,6 +597,7 @@ class ProviderCallOutcome:
             "adapter_internal_retry_count": self.adapter_internal_retry_count,
             "error": None if self.error is None else self.error.to_dict(),
             "stage_output": None if self.stage_output is None else _plain_json(self.stage_output),
+            "provider_metadata": self.provider_metadata.to_dict(),
         }
 
     def to_json(self) -> str:
@@ -695,7 +726,13 @@ def build_provider_call_outcome(
     adapter_internal_retry_count: int = 0,
     error: NeutralError | None = None,
     stage_output: Mapping[str, Any] | None = None,
+    provider_metadata: UntrustedStructured | object = _PROVIDER_METADATA_OMITTED,
 ) -> ProviderCallOutcome:
+    if not isinstance(provider_metadata, UntrustedStructured):
+        raise LiveContractError(
+            "provider_metadata must be an explicit UntrustedStructured observation; "
+            "builder omission cannot synthesize empty metadata"
+        )
     payload = {
         "contract_version": LIVE_CONTRACT_VERSION,
         "message_type": MESSAGE_OUTCOME,
@@ -717,6 +754,7 @@ def build_provider_call_outcome(
         "adapter_internal_retry_count": adapter_internal_retry_count,
         "error": None if error is None else error.to_dict(),
         "stage_output": None if stage_output is None else dict(stage_output),
+        "provider_metadata": provider_metadata.to_dict(),
     }
     return parse_provider_call_outcome(payload)
 
@@ -741,6 +779,7 @@ def parse_provider_call_outcome(payload: Any) -> ProviderCallOutcome:
     finish = _parse_observed_str(
         data["finish_reason"], "finish_reason", allowed_values={item.value for item in FinishReason}
     )
+    _validate_success_finish_reason(kind, finish)
     raw_output = _parse_observed_str(
         data["raw_output"], "raw_output", allow_empty=True, max_bytes=MAX_TRANSPORT_RAW_BYTES
     )
@@ -772,6 +811,7 @@ def parse_provider_call_outcome(payload: Any) -> ProviderCallOutcome:
         adapter_internal_retry_count=retry_count,
         error=error,
         stage_output=_parse_stage_output(data["stage_output"], kind),
+        provider_metadata=_parse_provider_metadata(data["provider_metadata"]),
     )
     return outcome
 
@@ -854,6 +894,16 @@ def observed_structured(value: Mapping[str, Any]) -> UntrustedStructured:
     parsed = _parse_json_object(value, "structured_output.value", depth=0)
     _reject_oversized_json(parsed, "structured_output.value")
     return UntrustedStructured(value=deep_freeze(parsed), unavailable_reason=None)
+
+
+def observed_provider_metadata(value: Mapping[str, Any]) -> UntrustedStructured:
+    return _parse_provider_metadata(
+        {"untrusted": True, "value": dict(value), "unavailable_reason": None}
+    )
+
+
+def empty_provider_metadata() -> UntrustedStructured:
+    return UntrustedStructured(value=MappingProxyType({}), unavailable_reason=None)
 
 
 # ------------------------------------------------------------------ internals
@@ -1174,6 +1224,62 @@ def _parse_structured_output(payload: Any) -> UntrustedStructured:
     return UntrustedStructured(value=deep_freeze(parsed), unavailable_reason=None)
 
 
+def _parse_provider_metadata(payload: Any) -> UntrustedStructured:
+    data = _closed_object(
+        payload, frozenset({"untrusted", "value", "unavailable_reason"}), "provider_metadata"
+    )
+    if data["untrusted"] is not True:
+        raise LiveContractError("provider_metadata.untrusted must be true")
+    value = data["value"]
+    reason = data["unavailable_reason"]
+    if value is None:
+        return UntrustedStructured(
+            value=None, unavailable_reason=_parse_reason(reason, "provider_metadata")
+        )
+    if reason is not None:
+        raise LiveContractError("provider_metadata cannot combine a value with unavailable_reason")
+    if type(value) is not dict:
+        raise LiveContractError(
+            f"provider_metadata.value must be a JSON object, got {type(value).__name__}"
+        )
+    _reject_dangerous_keys_in_json(value, "provider_metadata.value")
+    try:
+        parsed = normalize_provider_treatment_config(value, label="provider_metadata.value")
+    except GovernanceViolation as exc:
+        raise LiveContractError(str(exc)) from exc
+    return UntrustedStructured(value=deep_freeze(parsed), unavailable_reason=None)
+
+
+def _reject_dangerous_keys_in_json(value: Any, label: str) -> None:
+    if type(value) is dict or isinstance(value, MappingProxyType):
+        for key, item in value.items():
+            if type(key) is not str:
+                raise LiveContractError(f"{label} keys must be strings")
+            _reject_dangerous_key(key, label)
+            _reject_dangerous_keys_in_json(item, f"{label}.{key}")
+        return
+    if type(value) is list or type(value) is tuple:
+        for index, item in enumerate(value):
+            _reject_dangerous_keys_in_json(item, f"{label}[{index}]")
+
+
+def _validate_success_finish_reason(kind: ProviderCallKind, finish: ObservedStr) -> None:
+    if kind is not ProviderCallKind.SUCCESS:
+        return
+    if finish.value is not None:
+        if finish.value != FinishReason.COMPLETED.value:
+            raise LiveContractError(
+                f"success outcomes cannot observe finish_reason {finish.value!r}"
+            )
+        return
+    reason = finish.unavailable_reason
+    if reason not in (UnavailableReason.NOT_EXPOSED, UnavailableReason.NOT_APPLICABLE):
+        raise LiveContractError(
+            "success outcomes cannot use unavailable finish_reason "
+            f"{None if reason is None else reason.value!r}"
+        )
+
+
 def _parse_usage(payload: Any) -> ProviderUsage:
     data = _closed_object(payload, _USAGE_OBJECT_FIELDS, "usage")
     return ProviderUsage(
@@ -1242,8 +1348,13 @@ def _parse_error(payload: Any, kind: ProviderCallKind) -> NeutralError | None:
     for marker in _FORBIDDEN_MESSAGE_MARKERS:
         if marker in lowered:
             raise LiveContractError("error.sanitized_message contains forbidden secret or traceback content")
+    category = _parse_enum(data["category"], ProviderErrorCategory, "error.category")
+    if category in _PROVIDER_ERROR_ONLY_CATEGORIES and kind is not ProviderCallKind.PROVIDER_ERROR:
+        raise LiveContractError(
+            f"{category.value} must be reported as provider_error, not {kind.value}"
+        )
     return NeutralError(
-        category=_parse_enum(data["category"], ProviderErrorCategory, "error.category"),
+        category=category,
         sanitized_message=message,
         http_status=_parse_http_status(data["http_status"], "error.http_status"),
         provider_retry_hint=_parse_observed_str(

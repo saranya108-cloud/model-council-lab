@@ -170,6 +170,9 @@ class TestNeutralFailureTerminalMapping(unittest.TestCase):
             (ProviderErrorCategory.MODEL_UNAVAILABLE, "rp-unavail"),
             (ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL, "rp-malformed"),
             (ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE, "rp-unknown"),
+            (ProviderErrorCategory.QUOTA_EXHAUSTED, "rp-quota"),
+            (ProviderErrorCategory.POLICY_REFUSAL, "rp-refusal"),
+            (ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT, "rp-incomplete"),
         ]
         for category, run_id in cases:
             with self.subTest(category=category.value):
@@ -411,6 +414,185 @@ class TestInternalRetryCount(unittest.TestCase):
         payload["adapter_internal_retry_count"] = 4
         with self.assertRaises(LiveContractError):
             parse_provider_call_outcome(payload)
+
+
+class TestRetryTotalityV4(unittest.TestCase):
+    def test_exact_retry_and_nonretry_mapping_is_total_and_disjoint(self):
+        retry = frozenset(
+            {
+                ProviderErrorCategory.TRANSPORT_CONNECTIVITY,
+                ProviderErrorCategory.TRANSPORT_PROVIDER_TIMEOUT,
+                ProviderErrorCategory.RATE_LIMIT,
+                ProviderErrorCategory.PROVIDER_OVERLOAD_INTERNAL,
+            }
+        )
+        nonretry = frozenset(
+            {
+                ProviderErrorCategory.AUTHENTICATION_CONFIGURATION,
+                ProviderErrorCategory.PERMISSION,
+                ProviderErrorCategory.MODEL_UNAVAILABLE,
+                ProviderErrorCategory.INVALID_REQUEST,
+                ProviderErrorCategory.QUOTA_EXHAUSTED,
+                ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL,
+                ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT,
+                ProviderErrorCategory.POLICY_REFUSAL,
+                ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE,
+            }
+        )
+        self.assertEqual(RETRYABLE_PROVIDER_CATEGORIES, retry)
+        self.assertEqual(NONRETRYABLE_PROVIDER_CATEGORIES, nonretry)
+        self.assertEqual(retry | nonretry, frozenset(ProviderErrorCategory))
+        self.assertFalse(retry & nonretry)
+        for category in retry:
+            self.assertIs(is_retry_candidate(category), True, category)
+        for category in nonretry:
+            self.assertIs(is_retry_candidate(category), False, category)
+
+    def test_non_enum_values_are_type_errors(self):
+        with self.assertRaises(TypeError):
+            is_retry_candidate("rate_limit")
+        with self.assertRaises(TypeError):
+            is_retry_candidate(ProviderErrorCategory.RATE_LIMIT.value)
+        with self.assertRaises(TypeError):
+            is_retry_candidate(None)
+
+    def test_unclassified_category_raises_rather_than_falling_through(self):
+        import model_council.retry_policy as retry_policy
+
+        with patch.object(retry_policy, "RETRYABLE_PROVIDER_CATEGORIES", frozenset()):
+            with patch.object(retry_policy, "NONRETRYABLE_PROVIDER_CATEGORIES", frozenset()):
+                with self.assertRaises((RuntimeError, ValueError)):
+                    retry_policy.is_retry_candidate(ProviderErrorCategory.RATE_LIMIT)
+
+    def test_quota_exhausted_is_distinct_from_rate_limit(self):
+        self.assertNotEqual(
+            ProviderErrorCategory.RATE_LIMIT, ProviderErrorCategory.QUOTA_EXHAUSTED
+        )
+        self.assertNotEqual(
+            ProviderErrorCategory.RATE_LIMIT.value,
+            ProviderErrorCategory.QUOTA_EXHAUSTED.value,
+        )
+        self.assertTrue(is_retry_candidate(ProviderErrorCategory.RATE_LIMIT))
+        self.assertFalse(is_retry_candidate(ProviderErrorCategory.QUOTA_EXHAUSTED))
+
+    def test_provider_hints_cannot_alter_quota_or_refusal_policy(self):
+        from model_council.retry_policy import is_retry_candidate as owned
+
+        self.assertEqual(list(inspect.signature(owned).parameters), ["category"])
+        for category in (
+            ProviderErrorCategory.QUOTA_EXHAUSTED,
+            ProviderErrorCategory.POLICY_REFUSAL,
+            ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT,
+            ProviderErrorCategory.RATE_LIMIT,
+        ):
+            first = is_retry_candidate(category)
+            second = is_retry_candidate(category)
+            self.assertEqual(first, second, category)
+            self.assertEqual(first, category in RETRYABLE_PROVIDER_CATEGORIES)
+
+
+class TestPolicyRefusalAndIncompleteLiveStub(unittest.TestCase):
+    def test_policy_refusal_is_one_call_without_promotion_or_evaluation(self):
+        from test_invocation_evidence import _load_record
+
+        with TempRoot() as root:
+            counter = Path(root) / "live-invocation-counter"
+            runner, runs_root = make_runner(
+                root,
+                kind="live_stub",
+                options={
+                    "invocation_counter_path": str(counter),
+                    "neutral_error_category": ProviderErrorCategory.POLICY_REFUSAL.value,
+                    "retain_observational_evidence": True,
+                    "finish_reason": "content_filter",
+                    "raw_output": "refused by policy",
+                    "provider_response_id": "resp_refuse",
+                    "provider_response_status": 200,
+                    "provider_metadata": {"service_tier": "flex"},
+                },
+            )
+            result = runner.execute(
+                make_spec("t2-refuse", "A", max_stage_retries=3), make_task()
+            )
+            self.assertEqual(counter.read_text(encoding="utf-8").strip(), "1")
+            self.assertEqual(result.status, "infrastructure_failure")
+            self.assertEqual(result.retries_used, 0)
+            run_dir = runs_root / "t2-refuse"
+            self.assertFalse((run_dir / "solver" / "candidate.md").exists())
+            self.assertFalse((run_dir / "seals" / "solver.json").exists())
+            self.assertFalse((run_dir / "evaluation.json").exists())
+            self.assertIsNone(result.metadata.get("evaluation"))
+            record = _load_record(run_dir, "solver", 1)
+            outcome = record["adapter_evidence"]["provider_call_outcome"]
+            self.assertEqual(outcome["kind"], "provider_error")
+            self.assertEqual(outcome["error"]["category"], "policy_refusal")
+            self.assertIsNone(outcome["stage_output"])
+            self.assertEqual(outcome["provider_response_id"]["value"], "resp_refuse")
+            self.assertEqual(outcome["finish_reason"]["value"], "content_filter")
+            self.assertEqual(outcome["raw_output"]["value"], "refused by policy")
+            self.assertEqual(outcome["provider_metadata"]["value"], {"service_tier": "flex"})
+            self.assertEqual(record["retry_decision"], "stop")
+            self.assertEqual(record["failure_class"], "provider")
+            self.assertEqual(len(list((run_dir / "invocations" / "solver").iterdir())), 1)
+
+    def test_incomplete_result_retains_raw_evidence_without_promotion(self):
+        from model_council.invocation import MAX_RAW_EVIDENCE_BYTES
+        from test_invocation_evidence import _load_record
+
+        long_raw = "partial-" + ("x" * (MAX_RAW_EVIDENCE_BYTES + 80))
+        with TempRoot() as root:
+            counter = Path(root) / "live-invocation-counter"
+            runner, runs_root = make_runner(
+                root,
+                kind="live_stub",
+                options={
+                    "invocation_counter_path": str(counter),
+                    "neutral_error_category": ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT.value,
+                    "retain_observational_evidence": True,
+                    "finish_reason": "incomplete",
+                    "raw_output": long_raw,
+                    "provider_response_id": "resp_incomplete",
+                    "provider_response_status": 200,
+                    "provider_metadata": {"done": False, "total_duration_ns": 0},
+                },
+            )
+            result = runner.execute(
+                make_spec("t2-incomplete", "A", max_stage_retries=3), make_task()
+            )
+            self.assertEqual(counter.read_text(encoding="utf-8").strip(), "1")
+            self.assertEqual(result.status, "infrastructure_failure")
+            run_dir = runs_root / "t2-incomplete"
+            self.assertFalse((run_dir / "solver" / "candidate.md").exists())
+            self.assertFalse((run_dir / "seals" / "solver.json").exists())
+            record = _load_record(run_dir, "solver", 1)
+            outcome = record["adapter_evidence"]["provider_call_outcome"]
+            self.assertEqual(outcome["error"]["category"], "incomplete_provider_result")
+            self.assertIsNone(outcome["stage_output"])
+            self.assertEqual(outcome["raw_output"]["value"], long_raw)
+            self.assertTrue(record["raw_output"]["truncated"])
+            self.assertNotEqual(outcome["error"]["category"], "malformed_provider_protocol")
+            self.assertNotEqual(outcome["error"]["category"], "transport_provider_timeout")
+            self.assertEqual(len(list((run_dir / "invocations" / "solver").iterdir())), 1)
+
+    def test_quota_exhausted_does_not_retry_even_with_retry_hint(self):
+        with TempRoot() as root:
+            counter = Path(root) / "live-invocation-counter"
+            runner, _ = make_runner(
+                root,
+                kind="live_stub",
+                options={
+                    "invocation_counter_path": str(counter),
+                    "neutral_error_category": ProviderErrorCategory.QUOTA_EXHAUSTED.value,
+                    "provider_retry_hint": PROVIDER_RETRY_HINT_SUGGESTED,
+                    "retry_after_seconds": 2,
+                },
+            )
+            result = runner.execute(
+                make_spec("t2-quota", "A", max_stage_retries=3), make_task()
+            )
+            self.assertEqual(counter.read_text(encoding="utf-8").strip(), "1")
+            self.assertEqual(result.status, "infrastructure_failure")
+            self.assertIn("quota_exhausted", result.stage_results[0].error)
 
 
 if __name__ == "__main__":

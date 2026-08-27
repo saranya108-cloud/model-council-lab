@@ -329,5 +329,129 @@ class TestLiveOutcomeMapping(unittest.TestCase):
             self.assertIsNone(record["adapter_evidence"]["provider_call_outcome"])
 
 
+class TestLiveContractV4Binding(unittest.TestCase):
+    def test_v4_appears_in_binding_declaration_authority_outcome_and_attempt_digest(self):
+        from model_council.artifacts import RUN_AUTHORITY, RUN_AUTHORITY_SCHEMA
+        from model_council.invocation import INVOCATION_SCHEMA
+        from test_provider_treatment_config import (
+            _expected_attempt_digest_from_trusted_authority,
+            _persisted_binding,
+            _persisted_declaration,
+        )
+
+        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v12")
+        self.assertEqual(LIVE_CONTRACT_VERSION, "m1-live-contract-v4")
+        self.assertEqual(CONTRACT_VERSION, "m1-live-contract-v4")
+        self.assertEqual(EXECUTION_PROFILE_LIVE_CONTRACT_V1, "live_contract_v1")
+        self.assertEqual(INVOCATION_SCHEMA, "m1-invocation-record-v2")
+        self.assertEqual(RUN_AUTHORITY_SCHEMA, "m1-run-authority-v1")
+        with TempRoot() as root:
+            runner, runs_root = make_runner(root, kind="live_stub")
+            result = runner.execute(make_spec("t2-v4-bind", "A"), make_task())
+            self.assertEqual(result.status, "succeeded")
+            run_dir = runs_root / "t2-v4-bind"
+            binding = _persisted_binding(run_dir)
+            declaration = _persisted_declaration(run_dir)["declaration"]
+            authority = json.loads((run_dir / RUN_AUTHORITY).read_text())
+            record = _load_record(run_dir, "solver", 1)
+            outcome = record["adapter_evidence"]["provider_call_outcome"]
+            self.assertEqual(binding["harness_protocol_version"], "m1-dev-harness-v12")
+            self.assertEqual(declaration["harness_protocol_version"], "m1-dev-harness-v12")
+            self.assertEqual(authority["harness_protocol_version"], "m1-dev-harness-v12")
+            self.assertEqual(binding["live_contract_version"], "m1-live-contract-v4")
+            self.assertEqual(declaration["live_contract_version"], "m1-live-contract-v4")
+            self.assertEqual(authority["live_contract_version"], "m1-live-contract-v4")
+            self.assertEqual(authority["schema"], "m1-run-authority-v1")
+            self.assertEqual(outcome["contract_version"], "m1-live-contract-v4")
+            self.assertEqual(
+                record["treatment_digest"],
+                _expected_attempt_digest_from_trusted_authority(run_dir, "solver"),
+            )
+
+    def test_frozen_historical_tags_remain_unchanged(self):
+        import subprocess
+
+        root = Path(__file__).resolve().parents[1]
+        harness = subprocess.run(
+            ["git", "rev-parse", "m1-neutral-live-harness^{}"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        baseline = subprocess.run(
+            ["git", "rev-parse", "m1-dev-baseline^{}"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(harness.stdout.strip(), "0a1feb021c9d81f156fb5fe29600eda22d9b414f")
+        self.assertEqual(baseline.stdout.strip(), "9eacf2ffdb4ac89ad756f656ec8b4a4da37feb65")
+
+
+class TestProviderMetadataIsolation(unittest.TestCase):
+    def test_metadata_persists_on_outcome_but_does_not_propagate_or_override_authority(self):
+        from model_council.artifacts import ArtifactStore
+        from test_provider_treatment_config import (
+            _expected_attempt_digest_from_trusted_authority,
+            _persisted_binding,
+            _persisted_declaration,
+        )
+
+        metadata = {
+            "service_tier": "flex",
+            "done": True,
+            "observed_provider": "attacker-provider",
+            "observed_model_id": "attacker-model",
+            "condition": "C",
+            "seed": 999,
+        }
+        with TempRoot() as root:
+            runner, runs_root = make_runner(
+                root,
+                kind="live_stub",
+                options={"provider_metadata": metadata},
+            )
+            result = runner.execute(make_spec("t2-meta-iso", "A"), make_task())
+            self.assertEqual(result.status, "succeeded")
+            run_dir = runs_root / "t2-meta-iso"
+            record = _load_record(run_dir, "solver", 1)
+            outcome = record["adapter_evidence"]["provider_call_outcome"]
+            self.assertEqual(outcome["provider_metadata"]["value"], metadata)
+            candidate = (run_dir / "solver" / "candidate.md").read_text(encoding="utf-8")
+            evidence = (run_dir / "solver" / "evidence.md").read_text(encoding="utf-8")
+            evaluation = json.loads((run_dir / "evaluation.json").read_text())
+            binding = _persisted_binding(run_dir)
+            declaration = _persisted_declaration(run_dir)
+            dumped = json.dumps(
+                {
+                    "candidate": candidate,
+                    "evidence": evidence,
+                    "evaluation": evaluation,
+                    "binding": binding,
+                    "declaration": declaration,
+                    "result": json.loads((run_dir / "run_result.json").read_text()),
+                }
+            )
+            self.assertNotIn("service_tier", dumped)
+            self.assertNotIn("attacker-provider", dumped)
+            self.assertNotIn("attacker-model", dumped)
+            self.assertEqual(
+                record["requested_identity"]["provider"], FAKE_IDENTITY.provider
+            )
+            self.assertEqual(
+                record["configured_identity"]["model_id"], FAKE_IDENTITY.model_id
+            )
+            self.assertEqual(
+                record["treatment_digest"],
+                _expected_attempt_digest_from_trusted_authority(run_dir, "solver"),
+            )
+            self.assertEqual(record["retry_decision"], "promote")
+            report = ArtifactStore.verify_terminal_run(runs_root, "t2-meta-iso")
+            self.assertTrue(report["terminal_verified"])
+            self.assertEqual(report["terminal_status"], "succeeded")
+
+
 if __name__ == "__main__":
     unittest.main()
