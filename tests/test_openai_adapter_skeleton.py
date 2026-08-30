@@ -44,6 +44,7 @@ _FAKE_CREDENTIAL = "mcl-test-openai-runtime-credential-not-real"
 _HOST_KEY = "OPENAI_API_KEY"
 _CHILD_KEY = "MCL_OPENAI_API_KEY"
 _OPENAI_KIND = "openai_responses"
+_OPENAI_SDK_VERSION = "2.54.0"
 _AMBIENT_SECRET_ENV = {
     "HOME": "/tmp/mcl-test-home",
     "HTTP_PROXY": "http://127.0.0.1:9",
@@ -63,6 +64,253 @@ _AMBIENT_SECRET_ENV = {
     "DEBUG": "1",
     "PYTHONDEBUG": "1",
 }
+
+_OPENAI_SDK_COMPATIBILITY_PROBE = r'''
+import importlib.metadata
+import importlib.util
+import inspect
+import json
+
+if importlib.util.find_spec("openai") is None:
+    print(json.dumps({"sdk": "absent"}, sort_keys=True))
+    raise SystemExit(0)
+
+import httpx
+import openai
+from openai import OpenAI
+from openai.types.responses import (
+    Response,
+    ResponseOutputMessage,
+    ResponseOutputRefusal,
+    ResponseOutputText,
+)
+from openai.types.responses.response import IncompleteDetails
+
+from model_council.live_contract import ProviderCallKind
+from model_council.openai_adapter import (
+    build_openai_responses_request,
+    translate_openai_responses_result,
+)
+from model_council.security import canonical_json
+from test_openai_adapter_translation import _solver_envelope, _solver_request
+
+EXPECTED_VERSION = "2.54.0"
+assert importlib.metadata.version("openai") == EXPECTED_VERSION
+assert openai.__version__ == EXPECTED_VERSION
+
+constructor = inspect.signature(OpenAI)
+assert {"api_key", "timeout", "max_retries", "http_client"} <= set(
+    constructor.parameters
+)
+assert constructor.parameters["max_retries"].default == 2
+assert openai.DEFAULT_MAX_RETRIES == 2
+assert openai.DEFAULT_TIMEOUT.as_dict() == {
+    "connect": 5.0,
+    "read": 600,
+    "write": 600,
+    "pool": 600,
+}
+
+required_status_errors = (
+    openai.BadRequestError,
+    openai.AuthenticationError,
+    openai.PermissionDeniedError,
+    openai.NotFoundError,
+    openai.ConflictError,
+    openai.UnprocessableEntityError,
+    openai.RateLimitError,
+    openai.InternalServerError,
+)
+assert all(issubclass(cls, openai.APIStatusError) for cls in required_status_errors)
+assert issubclass(openai.APITimeoutError, openai.APIConnectionError)
+assert issubclass(openai.APIConnectionError, openai.APIError)
+
+request = _solver_request()
+envelope = _solver_envelope()
+approved = build_openai_responses_request(request, {})
+expected_keys = {
+    "background",
+    "input",
+    "instructions",
+    "model",
+    "parallel_tool_calls",
+    "store",
+    "stream",
+    "text",
+    "tool_choice",
+    "tools",
+    "truncation",
+}
+assert set(approved) == expected_keys
+
+success_attempts = 0
+captured_body = None
+captured_timeout = None
+
+def success_handler(http_request):
+    global success_attempts, captured_body, captured_timeout
+    assert http_request.url.host == "network-denied.invalid"
+    assert http_request.url.path == "/v1/responses"
+    success_attempts += 1
+    captured_body = json.loads(http_request.content)
+    captured_timeout = dict(http_request.extensions["timeout"])
+    output_text = canonical_json(envelope)
+    return httpx.Response(
+        200,
+        headers={"content-type": "application/json", "x-request-id": "req_offline"},
+        json={
+            "id": "resp_offline",
+            "object": "response",
+            "created_at": 0.0,
+            "status": "completed",
+            "background": False,
+            "error": None,
+            "incomplete_details": None,
+            "instructions": approved["instructions"],
+            "max_output_tokens": None,
+            "max_tool_calls": None,
+            "model": approved["model"],
+            "output": [
+                {
+                    "id": "msg_offline",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "annotations": [],
+                            "logprobs": [],
+                            "text": output_text,
+                        }
+                    ],
+                }
+            ],
+            "parallel_tool_calls": False,
+            "previous_response_id": None,
+            "prompt_cache_key": None,
+            "reasoning": {"effort": None, "summary": None},
+            "safety_identifier": None,
+            "service_tier": "default",
+            "store": False,
+            "temperature": None,
+            "text": {"format": {"type": "text"}, "verbosity": "medium"},
+            "tool_choice": "none",
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 1.0,
+            "truncation": "disabled",
+            "usage": {
+                "input_tokens": 11,
+                "input_tokens_details": {"cached_tokens": 2},
+                "output_tokens": 22,
+                "output_tokens_details": {"reasoning_tokens": 4},
+                "total_tokens": 33,
+            },
+            "metadata": {},
+        },
+    )
+
+client = OpenAI(
+    api_key="not-a-real-openai-key",
+    base_url="https://network-denied.invalid/v1",
+    timeout=httpx.Timeout(7.0),
+    max_retries=0,
+    http_client=httpx.Client(transport=httpx.MockTransport(success_handler)),
+)
+create = inspect.signature(client.responses.create)
+assert expected_keys | {"timeout"} <= set(create.parameters)
+response = client.responses.create(**approved, timeout=3.25)
+assert success_attempts == 1
+assert captured_body == approved
+assert captured_timeout == {
+    "connect": 3.25,
+    "read": 3.25,
+    "write": 3.25,
+    "pool": 3.25,
+}
+assert isinstance(response, Response)
+assert response.object == "response"
+assert response.status == "completed"
+assert response.id == "resp_offline"
+assert response.model == approved["model"]
+assert response.output_text == canonical_json(envelope)
+assert isinstance(response.output[0], ResponseOutputMessage)
+assert response.output[0].type == "message"
+assert response.output[0].status == "completed"
+assert isinstance(response.output[0].content[0], ResponseOutputText)
+assert response.output[0].content[0].type == "output_text"
+assert ResponseOutputRefusal(type="refusal", refusal="synthetic").type == "refusal"
+assert IncompleteDetails(reason="max_output_tokens").reason == "max_output_tokens"
+assert response.usage.input_tokens == 11
+assert response.usage.input_tokens_details.cached_tokens == 2
+assert response.usage.output_tokens == 22
+assert response.usage.output_tokens_details.reasoning_tokens == 4
+assert response.usage.total_tokens == 33
+
+plain = response.model_dump(mode="json")
+assert "output_text" not in plain
+plain["output_text"] = response.output_text
+outcome = translate_openai_responses_result(request, plain)
+assert outcome.kind == ProviderCallKind.SUCCESS
+assert dict(outcome.stage_output) == envelope
+assert outcome.adapter_internal_retry_count == 0
+
+retry_attempts = 0
+
+def rate_limit_handler(http_request):
+    global retry_attempts
+    assert http_request.url.host == "network-denied.invalid"
+    retry_attempts += 1
+    return httpx.Response(
+        429,
+        headers={
+            "content-type": "application/json",
+            "retry-after": "7",
+            "x-request-id": "req_rate_limit",
+        },
+        json={
+            "error": {
+                "message": "synthetic",
+                "type": "rate_limit_error",
+                "code": "rate_limit_exceeded",
+                "param": "model",
+            }
+        },
+    )
+
+retry_client = OpenAI(
+    api_key="not-a-real-openai-key",
+    base_url="https://network-denied.invalid/v1",
+    max_retries=0,
+    http_client=httpx.Client(transport=httpx.MockTransport(rate_limit_handler)),
+)
+try:
+    retry_client.responses.create(**approved)
+except openai.RateLimitError as exc:
+    assert exc.status_code == 429
+    assert exc.request_id == "req_rate_limit"
+    assert exc.type == "rate_limit_error"
+    assert exc.code == "rate_limit_exceeded"
+    assert exc.param == "model"
+    assert exc.response.headers.get("retry-after") == "7"
+else:
+    raise AssertionError("synthetic rate limit did not raise RateLimitError")
+assert retry_attempts == 1
+
+print(
+    json.dumps(
+        {
+            "request_keys": sorted(captured_body),
+            "retry_attempts": retry_attempts,
+            "sdk": EXPECTED_VERSION,
+            "success_attempts": success_attempts,
+            "translation": outcome.kind.value,
+        },
+        sort_keys=True,
+    )
+)
+'''
 
 
 def _assert_secret_absent(test: unittest.TestCase, *blobs) -> None:
@@ -344,7 +592,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
                 self.assertNotEqual(node.module, "openai")
                 self.assertFalse(node.module.startswith("openai."))
 
-    def test_optional_openai_dependency_is_major_bounded(self):
+    def test_optional_openai_dependency_is_exactly_pinned(self):
         path = REPO_ROOT / "requirements-openai.txt"
         self.assertTrue(path.is_file())
         dependency_lines = []
@@ -353,9 +601,56 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
             if not stripped or stripped.startswith("#"):
                 continue
             dependency_lines.append(stripped)
-        self.assertEqual(dependency_lines, ["openai>=2.0.0,<3.0.0"])
+        self.assertEqual(dependency_lines, ["openai==2.54.0"])
         self.assertFalse((REPO_ROOT / "requirements.txt").exists())
         self.assertFalse((REPO_ROOT / "pyproject.toml").exists())
+
+    def test_installed_openai_sdk_is_offline_compatible(self):
+        env = {
+            "PYTHONPATH": os.pathsep.join(
+                (str(REPO_ROOT / "src"), str(REPO_ROOT / "tests"))
+            )
+        }
+        completed = subprocess.run(
+            [sys.executable, "-B", "-c", _OPENAI_SDK_COMPATIBILITY_PROBE],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            "offline OpenAI SDK compatibility subprocess failed:\n"
+            + completed.stderr[:2000],
+        )
+        report = json.loads(completed.stdout)
+        if report == {"sdk": "absent"}:
+            return
+        self.assertEqual(
+            report,
+            {
+                "request_keys": [
+                    "background",
+                    "input",
+                    "instructions",
+                    "model",
+                    "parallel_tool_calls",
+                    "store",
+                    "stream",
+                    "text",
+                    "tool_choice",
+                    "tools",
+                    "truncation",
+                ],
+                "retry_attempts": 1,
+                "sdk": _OPENAI_SDK_VERSION,
+                "success_attempts": 1,
+                "translation": "success",
+            },
+        )
 
     def test_live_worker_requires_explicit_provider_treatment_config(self):
         with TempRoot() as root:

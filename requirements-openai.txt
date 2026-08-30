@@ -1,5 +1,4 @@
 # Optional OpenAI SDK for the openai_responses adapter.
-# Tranche 3 declares a major bound only. Tranche 4 must pin a tested version
-# before request/response translation is accepted.
+# Checkpoint 6 exact-version compatibility passed offline for this pin.
 # Do not install without separate human approval.
-openai>=2.0.0,<3.0.0
+openai==2.54.0
