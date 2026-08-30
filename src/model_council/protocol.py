@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from .types import ProtocolError
 
-HARNESS_PROTOCOL_VERSION = "m1-dev-harness-v12"
+HARNESS_PROTOCOL_VERSION = "m1-dev-harness-v13"
 
 EXECUTION_PROFILE_PRE_LIVE_LEGACY = "pre_live_legacy"
 EXECUTION_PROFILE_LIVE_CONTRACT_V1 = "live_contract_v1"
@@ -31,6 +31,8 @@ ADAPTER_KIND_PROFILES: dict[str, str] = {
     "raw_garbage": EXECUTION_PROFILE_PRE_LIVE_LEGACY,
     # Deterministic live-protocol stub. Not a provider implementation.
     "live_stub": EXECUTION_PROFILE_LIVE_CONTRACT_V1,
+    # OpenAI Responses live adapter. Skeleton only in this tranche.
+    "openai_responses": EXECUTION_PROFILE_LIVE_CONTRACT_V1,
 }
 
 

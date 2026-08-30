@@ -26,7 +26,8 @@ from .protocol import (
     execution_profile_for_kind,
 )
 from .sanitize import WORKER_SANITIZED_FAILURE
-from .types import ModelFailure, ProtocolError
+from .security import deep_freeze, normalize_provider_treatment_config
+from .types import GovernanceViolation, InfrastructureError, ModelFailure, ProtocolError
 
 
 def _fail(error_class: str, message: str) -> int:
@@ -84,7 +85,13 @@ def _main() -> int:
             ),
         )
 
-    options = dict(adapter_spec.get("options") or {})
+    raw_options = adapter_spec.get("options")
+    if raw_options is None:
+        options = {}
+    elif isinstance(raw_options, dict):
+        options = dict(raw_options)
+    else:
+        options = dict(adapter_spec.get("options") or {})
     if expected_profile == EXECUTION_PROFILE_LIVE_CONTRACT_V1:
         return _run_live(kind, options, request)
     if expected_profile == EXECUTION_PROFILE_PRE_LIVE_LEGACY:
@@ -95,12 +102,25 @@ def _main() -> int:
 def _run_live(kind: str, options: dict, request: dict) -> int:
     if kind not in LIVE_REGISTRY:
         return _fail("ProtocolError", f"kind {kind!r} is not a registered live-contract adapter")
+    if "provider_treatment_config" not in request:
+        return _fail("ProtocolError", "live worker request missing provider_treatment_config")
+    try:
+        provider_treatment_config = deep_freeze(
+            normalize_provider_treatment_config(request["provider_treatment_config"])
+        )
+    except GovernanceViolation as exc:
+        return _fail("ProtocolError", str(exc))
     try:
         live_request = parse_live_invocation_request(request.get("live_invocation_request"))
     except LiveContractError as exc:
         return _fail("ProtocolError", f"invalid live invocation request: {exc}")
+    if kind == "openai_responses" and len(options) != 0:
+        return _fail(
+            "ProtocolError",
+            "openai_responses adapter runtime options must be empty",
+        )
     try:
-        result = LIVE_REGISTRY[kind](options, live_request)
+        result = LIVE_REGISTRY[kind](options, provider_treatment_config, live_request)
     except ModelFailure:
         return _fail(
             "ProtocolError",
@@ -111,6 +131,10 @@ def _run_live(kind: str, options: dict, request: dict) -> int:
             "ProtocolError",
             "live adapter raised NeutralProviderFailure; return a ProviderCallOutcome instead",
         )
+    except ProtocolError as exc:
+        return _fail("ProtocolError", str(exc))
+    except InfrastructureError as exc:
+        return _fail("InfrastructureError", str(exc))
     except Exception:
         return _fail("ProtocolError", WORKER_SANITIZED_FAILURE)
     if not isinstance(result, ProviderCallOutcome):

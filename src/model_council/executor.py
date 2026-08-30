@@ -54,6 +54,76 @@ from .types import (
 )
 
 _SRC_ROOT = Path(__file__).resolve().parents[1]
+_OPENAI_CHILD_ENV_KEY = "MCL_OPENAI_API_KEY"
+_OPENAI_HOST_ENV_KEY = "OPENAI_API_KEY"
+_OPENAI_ENV_ASSIGNMENT_PREFIXES = (
+    b"MCL_OPENAI_API_KEY=",
+    b"OPENAI_API_KEY=",
+)
+
+
+def _openai_env_assignment(item: object) -> bool:
+    if isinstance(item, str):
+        encoded = item.encode("utf-8", "surrogateescape")
+    elif isinstance(item, (bytes, bytearray)):
+        encoded = bytes(item)
+    else:
+        return False
+    return encoded.startswith(_OPENAI_ENV_ASSIGNMENT_PREFIXES)
+
+
+def _scrub_openai_env_containers(value: object, seen: set[int]) -> None:
+    ident = id(value)
+    if ident in seen:
+        return
+    seen.add(ident)
+    if type(value) is dict:
+        value.pop(_OPENAI_CHILD_ENV_KEY, None)
+        value.pop(_OPENAI_HOST_ENV_KEY, None)
+        for inner in list(value.values()):
+            _scrub_openai_env_containers(inner, seen)
+        return
+    if type(value) is list:
+        for index, item in enumerate(value):
+            if _openai_env_assignment(item):
+                value[index] = None
+            else:
+                _scrub_openai_env_containers(item, seen)
+
+
+def _scrub_openai_subprocess_exception(exc: BaseException) -> None:
+    """Drop captured buffers and credential-bearing spawn state before discard."""
+    for attr in ("stdout", "stderr", "output"):
+        if hasattr(exc, attr):
+            setattr(exc, attr, None)
+    seen: set[int] = set()
+    tb = getattr(exc, "__traceback__", None)
+    while tb is not None:
+        for val in tb.tb_frame.f_locals.values():
+            _scrub_openai_env_containers(val, seen)
+        tb = tb.tb_next
+    exc.__cause__ = None
+    exc.__context__ = None
+    exc.__traceback__ = None
+
+
+def _openai_nonzero_worker_failure(completed: subprocess.CompletedProcess) -> InfrastructureError:
+    """Build a sanitized crash error, then release secret-bearing subprocess buffers."""
+    exit_status = completed.returncode
+    stderr_text = completed.stderr
+    stderr_bytes = (
+        0
+        if stderr_text is None
+        else len(str(stderr_text).encode("utf-8", "replace"))
+    )
+    completed.stdout = None
+    completed.stderr = None
+    stderr_text = None
+    completed = None
+    return InfrastructureError(
+        f"{WORKER_CRASH_SUMMARY} (exit {exit_status}; "
+        f"stderr_bytes={stderr_bytes}; suppressed=True)"
+    )
 
 
 class SubprocessAdapter:
@@ -71,7 +141,15 @@ class SubprocessAdapter:
         # the child executes or the recorded adapter configuration digest.
         from .security import deep_freeze, normalize_provider_treatment_config
 
-        self.options = deep_freeze(dict(options or {}))
+        if options is None:
+            raw_options = {}
+        elif kind == "openai_responses":
+            from .openai_adapter import materialize_openai_runtime_options
+
+            raw_options = materialize_openai_runtime_options(options)
+        else:
+            raw_options = dict(options or {})
+        self.options = deep_freeze(raw_options)
         # Treatment authority is supplied separately from adapter options and
         # is copied before freeze so later caller mutation cannot change it.
         self.provider_treatment_config = deep_freeze(
@@ -92,6 +170,11 @@ class SubprocessAdapter:
         # the same type-stable ordering as treatment/provenance hashing.
         from .security import canonical_json
 
+        if self.kind == "openai_responses":
+            from .openai_adapter import require_empty_openai_runtime_options
+
+            require_empty_openai_runtime_options(self.options)
+            return {}
         plain_options = json.loads(canonical_json(self.options))
         return {
             **plain_options,
@@ -162,6 +245,7 @@ class SubprocessAdapter:
             "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
             "execution_profile": EXECUTION_PROFILE_LIVE_CONTRACT_V1,
             "adapter": {"kind": self.kind, "options": self._child_options()},
+            "provider_treatment_config": self.persisted_provider_treatment_config(),
             "live_invocation_request": live_request.to_dict(),
         }
         self.last_request = envelope
@@ -183,7 +267,24 @@ class SubprocessAdapter:
             # child cleanly. Descendant containment is NOT claimed; trusted
             # adapters must not intentionally spawn unmanaged descendants.
             spawn_kwargs["start_new_session"] = True
+        openai_timeout = False
+        openai_spawn_failure = None
+        completed = None
         try:
+            if self.kind == "openai_responses":
+                from .openai_adapter import (
+                    CHILD_OPENAI_API_KEY_ENV,
+                    HOST_OPENAI_API_KEY_ENV,
+                    validate_openai_runtime_credential,
+                )
+
+                raw_credential = os.environ.get(HOST_OPENAI_API_KEY_ENV)
+                try:
+                    env[CHILD_OPENAI_API_KEY_ENV] = validate_openai_runtime_credential(
+                        raw_credential
+                    )
+                finally:
+                    raw_credential = None
             with tempfile.TemporaryDirectory(prefix="mcl-scratch-") as scratch:
                 self.last_scratch_dir = scratch
                 started = time.monotonic()
@@ -195,19 +296,48 @@ class SubprocessAdapter:
                         text=True,
                         timeout=attempt_timeout,
                         cwd=scratch,
-                        env=env,
+                        env=dict(env),
                         **spawn_kwargs,
                     )
                 finally:
                     self.last_harness_observed_latency_seconds = time.monotonic() - started
         except subprocess.TimeoutExpired as exc:
+            if self.kind == "openai_responses":
+                _scrub_openai_subprocess_exception(exc)
+                openai_timeout = True
+                exc = None
+            else:
+                raise StageTimeout(
+                    f"adapter process exceeded {attempt_timeout}s and was terminated"
+                ) from exc
+        except OSError as exc:
+            if self.kind == "openai_responses":
+                openai_spawn_failure = f"failed to spawn adapter process: {exc}"
+                _scrub_openai_subprocess_exception(exc)
+                completed = None
+                exc = None
+            else:
+                raise InfrastructureError(
+                    f"failed to spawn adapter process: {exc}"
+                ) from exc
+        finally:
+            env.pop(_OPENAI_CHILD_ENV_KEY, None)
+            if openai_spawn_failure is not None:
+                env.clear()
+                env = None
+
+        if openai_timeout:
             raise StageTimeout(
                 f"adapter process exceeded {attempt_timeout}s and was terminated"
-            ) from exc
-        except OSError as exc:
-            raise InfrastructureError(f"failed to spawn adapter process: {exc}") from exc
+            )
+        if openai_spawn_failure is not None:
+            raise InfrastructureError(openai_spawn_failure)
 
         if completed.returncode != 0:
+            if self.kind == "openai_responses":
+                error = _openai_nonzero_worker_failure(completed)
+                completed = None
+                raise error
             meta = suppressed_stream_meta(completed.stderr)
             raise InfrastructureError(
                 f"{WORKER_CRASH_SUMMARY} (exit {completed.returncode}; "

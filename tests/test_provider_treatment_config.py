@@ -680,7 +680,7 @@ class TestProviderTreatmentConfigNeutrality(unittest.TestCase):
 
 class TestProviderTreatmentProtocolV12(unittest.TestCase):
     def test_new_artifacts_identify_harness_protocol_v12(self):
-        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v12")
+        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v13")
         self.assertEqual(LIVE_CONTRACT_VERSION, "m1-live-contract-v4")
         self.assertEqual(RUN_AUTHORITY_SCHEMA, "m1-run-authority-v1")
         with TempRoot() as root:
@@ -695,10 +695,10 @@ class TestProviderTreatmentProtocolV12(unittest.TestCase):
             authority = json.loads((run_dir / RUN_AUTHORITY).read_text())
             terminal = json.loads((run_dir / "run_result.json").read_text())
             invocation = _load_invocation(run_dir, "solver", 1)
-            self.assertEqual(binding["harness_protocol_version"], "m1-dev-harness-v12")
-            self.assertEqual(declaration["harness_protocol_version"], "m1-dev-harness-v12")
-            self.assertEqual(authority["harness_protocol_version"], "m1-dev-harness-v12")
-            self.assertEqual(terminal["harness_protocol_version"], "m1-dev-harness-v12")
+            self.assertEqual(binding["harness_protocol_version"], "m1-dev-harness-v13")
+            self.assertEqual(declaration["harness_protocol_version"], "m1-dev-harness-v13")
+            self.assertEqual(authority["harness_protocol_version"], "m1-dev-harness-v13")
+            self.assertEqual(terminal["harness_protocol_version"], "m1-dev-harness-v13")
             expected = _expected_attempt_digest_from_trusted_authority(run_dir, "solver")
             self.assertEqual(invocation["treatment_digest"], expected)
             v11 = treatment_digest_for_attempt(

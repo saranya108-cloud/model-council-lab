@@ -41,6 +41,7 @@ from .live_contract import (
     unavailable_structured,
     ProviderUsage,
 )
+from .openai_adapter import openai_responses_skeleton
 from .types import ModelFailure
 
 
@@ -632,11 +633,17 @@ def _live_stub_stage_payload(request: LiveInvocationRequest, options: Mapping[st
     return {"text": text, "artifacts": artifacts, "structured": structured}
 
 
-def live_stub_generate(options: Mapping[str, Any], request: LiveInvocationRequest):
+def live_stub_generate(
+    options: Mapping[str, Any],
+    provider_treatment_config: Mapping[str, Any],
+    request: LiveInvocationRequest,
+):
     """Live-contract test stub. Returns ProviderCallOutcome, never a legacy dict.
 
     Test hooks live in trusted adapter options, not in the experimental treatment.
+    Provider treatment is required by the live worker envelope and ignored here.
     """
+    del provider_treatment_config
     _next_fake_invocation_count(options)
     if options.get("raise_model_failure"):
         raise ModelFailure("live stub must not use legacy ModelFailure")
@@ -727,6 +734,7 @@ REGISTRY = {
 # Live-contract adapters. Invoked only after worker handshake validation.
 LIVE_REGISTRY = {
     "live_stub": live_stub_generate,
+    "openai_responses": openai_responses_skeleton,
 }
 
 _overlap = set(REGISTRY) & set(LIVE_REGISTRY)
