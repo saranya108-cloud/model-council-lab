@@ -752,16 +752,22 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
                 "model_council.openai_adapter.build_openai_client"
             ) as factory:
                 with patch(
-                    "socket.socket",
-                    side_effect=AssertionError("network path opened"),
-                ):
+                    "model_council.openai_adapter._perform_openai_responses_transport"
+                ) as transport:
                     with patch(
-                        "socket.create_connection",
+                        "socket.socket",
                         side_effect=AssertionError("network path opened"),
                     ):
-                        with self.assertRaises(ProtocolError) as ctx:
-                            openai_responses_skeleton({}, deep_freeze({}), make_request())
+                        with patch(
+                            "socket.create_connection",
+                            side_effect=AssertionError("network path opened"),
+                        ):
+                            with self.assertRaises(ProtocolError) as ctx:
+                                openai_responses_skeleton(
+                                    {}, deep_freeze({}), make_request()
+                                )
             factory.assert_not_called()
+            transport.assert_not_called()
         self.assertIn("translation is not implemented", str(ctx.exception))
         _assert_secret_absent(self, str(ctx.exception), repr(ctx.exception))
         self.assertNotIn(_CHILD_KEY, os.environ)
@@ -773,17 +779,27 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
         self.assertNotIn("build_openai_client", dir(sys.modules["model_council.worker"]))
         seen = {}
 
-        def factory(*, api_key):
+        def factory(*, api_key, max_retries):
             seen["api_key"] = api_key
+            seen["max_retries"] = max_retries
             return {"sentinel": True}
 
         secret = openai_mod.RuntimeSecret(_FAKE_CREDENTIAL)
         _assert_secret_absent(self, repr(secret), str(secret))
         self.assertFalse(hasattr(secret, "to_dict"))
         self.assertFalse(hasattr(secret, "to_json"))
+        factory_src = inspect.getsource(openai_mod._default_openai_client_factory)
+        builder_src = inspect.getsource(openai_mod.build_openai_client)
+        self.assertIn("max_retries=0", factory_src)
+        self.assertIn("max_retries=0", builder_src)
+        self.assertIn(
+            "max_retries",
+            inspect.signature(openai_mod._default_openai_client_factory).parameters,
+        )
         client = openai_mod.build_openai_client(secret, client_factory=factory)
         self.assertEqual(client, {"sentinel": True})
         self.assertEqual(seen["api_key"], _FAKE_CREDENTIAL)
+        self.assertEqual(seen["max_retries"], 0)
         with patch.object(
             openai_mod,
             "_default_openai_client_factory",
@@ -806,7 +822,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
 
         client = build_openai_client(
             RuntimeSecret(_FAKE_CREDENTIAL),
-            client_factory=lambda *, api_key: _FakeSDKClient(api_key),
+            client_factory=lambda *, api_key, max_retries: _FakeSDKClient(api_key),
         )
         with self.assertRaises(TypeError):
             json.dumps({"client": client})
@@ -1029,7 +1045,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
     def test_secret_bearing_client_factory_exception_is_replaced_without_chain(self):
         from model_council.openai_adapter import RuntimeSecret, build_openai_client
 
-        def exploding_factory(*, api_key):
+        def exploding_factory(*, api_key, max_retries):
             raise RuntimeError(
                 f"sdk failed api_key={api_key} Authorization: Bearer {api_key}"
             )
@@ -1250,7 +1266,7 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
     def test_client_factory_secret_bearing_failure_graph_is_sanitized(self):
         from model_council.openai_adapter import RuntimeSecret, build_openai_client
 
-        def exploding_factory(*, api_key):
+        def exploding_factory(*, api_key, max_retries):
             cause = RuntimeError("nested " + api_key)
             raise RuntimeError("sdk failed Authorization: Bearer " + api_key) from cause
 
@@ -1333,7 +1349,8 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
             self.fail("consumed RuntimeSecret still retained the raw credential")
         seen = []
 
-        def factory(*, api_key):
+        def factory(*, api_key, max_retries):
+            self.assertEqual(max_retries, 0)
             seen.append(api_key)
             return {"sentinel": True}
 

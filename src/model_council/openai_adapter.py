@@ -13,6 +13,7 @@ import json
 import os
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from .errors import InfrastructureError, ProtocolError
@@ -61,6 +62,8 @@ OPENAI_REFUSAL_MESSAGE = "openai provider refused the request"
 OPENAI_INCOMPLETE_MESSAGE = "openai provider result was incomplete"
 OPENAI_TOOL_CALL_MESSAGE = "openai provider returned a tool call"
 OPENAI_MALFORMED_MESSAGE = "openai provider response was malformed"
+OPENAI_TRANSPORT_REQUEST_INVALID = "openai transport request is invalid"
+OPENAI_TRANSPORT_TIMEOUT_INVALID = "openai residual timeout is invalid"
 
 _OPENAI_REASONING_EFFORT = frozenset({"none", "low", "medium", "high", "xhigh", "max"})
 _OPENAI_REASONING_SUMMARY = frozenset({"auto", "concise", "detailed"})
@@ -133,6 +136,31 @@ _OPENAI_STATEFUL_KEYS = frozenset(
         "store",
     }
 )
+_OPENAI_TRANSPORT_REQUIRED_KEYS = frozenset(
+    {
+        "model",
+        "instructions",
+        "input",
+        "store",
+        "stream",
+        "background",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "truncation",
+        "text",
+    }
+)
+_OPENAI_TRANSPORT_OPTIONAL_KEYS = frozenset({"reasoning"})
+_OPENAI_TRANSPORT_ALLOWED_KEYS = (
+    _OPENAI_TRANSPORT_REQUIRED_KEYS | _OPENAI_TRANSPORT_OPTIONAL_KEYS
+)
+_OPENAI_TRANSPORT_TEXT_KEYS = frozenset({"format", "verbosity"})
+_OPENAI_TRANSPORT_FORMAT_KEYS = frozenset({"type", "name", "strict", "schema"})
+_OPENAI_TRANSPORT_REASONING_KEYS = frozenset({"effort", "summary"})
+_OPENAI_TRANSPORT_MISSING = object()
+_OPENAI_429_QUOTA_CODE = "insufficient_quota"
+_OPENAI_429_RATE_LIMIT_CODE = "rate_limit_exceeded"
 
 
 class RuntimeSecret:
@@ -956,10 +984,12 @@ def translate_openai_responses_result(request: Any, provider_response: Any):
         return _openai_error_outcome(request, owned, _malformed_protocol())
 
 
-def _default_openai_client_factory(*, api_key: str) -> Any:
+def _default_openai_client_factory(*, api_key: str, max_retries: int) -> Any:
+    if type(max_retries) is not int or max_retries != 0:
+        raise InfrastructureError(OPENAI_CLIENT_INIT_FAILURE)
     from openai import OpenAI
 
-    return OpenAI(api_key=api_key)
+    return OpenAI(api_key=api_key, max_retries=0)
 
 
 def build_openai_client(
@@ -979,7 +1009,7 @@ def build_openai_client(
     try:
         api_key = runtime_credential.reveal_for_client_factory()
         try:
-            client = factory(api_key=api_key)
+            client = factory(api_key=api_key, max_retries=0)
         except Exception:
             failed = True
             client = None
@@ -992,6 +1022,816 @@ def build_openai_client(
     if failed:
         raise InfrastructureError(OPENAI_CLIENT_INIT_FAILURE)
     raise InfrastructureError(OPENAI_CLIENT_INIT_FAILURE)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _OpenAITransportSuccess:
+    response: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenAITransportFailure:
+    kind: ProviderCallKind
+    category: ProviderErrorCategory
+    http_status: int | None
+    request_id: str | None
+    error_type: str | None
+    error_code: str | None
+    param: str | None
+
+    def __repr__(self) -> str:
+        return (
+            "_OpenAITransportFailure("
+            f"kind={self.kind!r}, "
+            f"category={self.category!r}, "
+            f"http_status={self.http_status!r}, "
+            f"request_id={self.request_id!r}, "
+            f"error_type={self.error_type!r}, "
+            f"error_code={self.error_code!r}, "
+            f"param={self.param!r})"
+        )
+
+
+_OpenAITransportResult = _OpenAITransportSuccess | _OpenAITransportFailure
+
+
+def _reject_openai_transport_request() -> None:
+    raise ProtocolError(OPENAI_TRANSPORT_REQUEST_INVALID)
+
+
+def _own_openai_transport_json(value: Any) -> Any:
+    owned = None
+    failed = False
+    try:
+        owned = json.loads(canonical_json(value))
+    except Exception:
+        failed = True
+        owned = None
+    value = None
+    if failed:
+        return None
+    return owned
+
+
+def _require_openai_transport_mapping(value: Any) -> dict[str, Any]:
+    if type(value) is not dict:
+        _reject_openai_transport_request()
+    extra = set(value) - _OPENAI_TRANSPORT_ALLOWED_KEYS
+    if extra:
+        _reject_openai_transport_request()
+    missing = _OPENAI_TRANSPORT_REQUIRED_KEYS - set(value)
+    if missing:
+        _reject_openai_transport_request()
+    return value
+
+
+def _require_openai_transport_text(value: Any) -> None:
+    if type(value) is not dict:
+        _reject_openai_transport_request()
+    extra = set(value) - _OPENAI_TRANSPORT_TEXT_KEYS
+    if extra or "format" not in value:
+        _reject_openai_transport_request()
+    if "verbosity" in value:
+        verbosity = value["verbosity"]
+        if type(verbosity) is not str or verbosity not in _OPENAI_TEXT_VERBOSITY:
+            _reject_openai_transport_request()
+    fmt = value["format"]
+    if type(fmt) is not dict:
+        _reject_openai_transport_request()
+    extra_format = set(fmt) - _OPENAI_TRANSPORT_FORMAT_KEYS
+    if extra_format or set(_OPENAI_TRANSPORT_FORMAT_KEYS) - set(fmt):
+        _reject_openai_transport_request()
+    if fmt["type"] != "json_schema" or fmt["name"] != "stage_output":
+        _reject_openai_transport_request()
+    if type(fmt["strict"]) is not bool or fmt["strict"] is not True:
+        _reject_openai_transport_request()
+    if type(fmt["schema"]) is not dict:
+        _reject_openai_transport_request()
+
+
+def _require_openai_transport_reasoning(value: Any) -> None:
+    if type(value) is not dict:
+        _reject_openai_transport_request()
+    extra = set(value) - _OPENAI_TRANSPORT_REASONING_KEYS
+    if extra:
+        _reject_openai_transport_request()
+    if "effort" in value:
+        effort = value["effort"]
+        if type(effort) is not str or effort not in _OPENAI_REASONING_EFFORT:
+            _reject_openai_transport_request()
+    if "summary" in value:
+        summary = value["summary"]
+        if type(summary) is not str or summary not in _OPENAI_REASONING_SUMMARY:
+            _reject_openai_transport_request()
+
+
+def _validate_openai_transport_request(translated_request: Any) -> dict[str, Any]:
+    if type(translated_request) is not dict:
+        translated_request = None
+        _reject_openai_transport_request()
+    owned = _own_openai_transport_json(translated_request)
+    translated_request = None
+    if type(owned) is not dict:
+        owned = None
+        _reject_openai_transport_request()
+    closed = _require_openai_transport_mapping(owned)
+    if type(closed["model"]) is not str:
+        _reject_openai_transport_request()
+    if type(closed["instructions"]) is not str:
+        _reject_openai_transport_request()
+    if type(closed["input"]) is not str:
+        _reject_openai_transport_request()
+    if closed["store"] is not False:
+        _reject_openai_transport_request()
+    if closed["stream"] is not False:
+        _reject_openai_transport_request()
+    if closed["background"] is not False:
+        _reject_openai_transport_request()
+    if closed["tools"] != []:
+        _reject_openai_transport_request()
+    if closed["tool_choice"] != "none":
+        _reject_openai_transport_request()
+    if closed["parallel_tool_calls"] is not False:
+        _reject_openai_transport_request()
+    if closed["truncation"] != "disabled":
+        _reject_openai_transport_request()
+    _require_openai_transport_text(closed["text"])
+    if "reasoning" in closed:
+        _require_openai_transport_reasoning(closed["reasoning"])
+    return closed
+
+
+def _validate_openai_residual_timeout(residual_timeout_seconds: Any) -> int | float:
+    if type(residual_timeout_seconds) is bool:
+        raise ProtocolError(OPENAI_TRANSPORT_TIMEOUT_INVALID)
+    if type(residual_timeout_seconds) is not int and type(residual_timeout_seconds) is not float:
+        raise ProtocolError(OPENAI_TRANSPORT_TIMEOUT_INVALID)
+    if residual_timeout_seconds != residual_timeout_seconds:
+        raise ProtocolError(OPENAI_TRANSPORT_TIMEOUT_INVALID)
+    if residual_timeout_seconds in (float("inf"), float("-inf")):
+        raise ProtocolError(OPENAI_TRANSPORT_TIMEOUT_INVALID)
+    if residual_timeout_seconds <= 0:
+        raise ProtocolError(OPENAI_TRANSPORT_TIMEOUT_INVALID)
+    return residual_timeout_seconds
+
+
+def _sdk_field(obj: Any, name: str) -> Any:
+    if type(obj) is dict:
+        if name not in obj:
+            return _OPENAI_TRANSPORT_MISSING
+        return obj[name]
+    try:
+        return object.__getattribute__(obj, name)
+    except AttributeError:
+        return _OPENAI_TRANSPORT_MISSING
+    except BaseException:
+        raise _malformed_protocol() from None
+
+
+def _optional_observation(value: Any, *, max_chars: int = MAX_OPENAI_OBSERVATION_CHARS) -> str | None:
+    if value is _OPENAI_TRANSPORT_MISSING:
+        return None
+    if not _openai_observation_is_safe(value, max_chars=max_chars):
+        return None
+    return value
+
+
+def _safe_http_status(value: Any) -> int | None:
+    if type(value) is not int:
+        return None
+    if value < 100 or value > 599:
+        return None
+    return value
+
+
+def _copy_usage_int(value: Any) -> int:
+    if type(value) is not int or value < 0 or value > MAX_OPENAI_USAGE_TOKENS:
+        raise _malformed_protocol()
+    return value
+
+
+def _copy_usage_details(
+    raw: Any, field: str, budget: _OpenAIExtractionBudget
+) -> dict[str, int] | None:
+    if raw is _OPENAI_TRANSPORT_MISSING or raw is None:
+        return None
+    token = _sdk_field(raw, field)
+    if token is _OPENAI_TRANSPORT_MISSING or token is None:
+        return None
+    value = _copy_usage_int(token)
+    budget.charge_container()
+    budget.charge_key(field)
+    budget.charge_int(value)
+    return {field: value}
+
+
+def _copy_openai_usage(raw: Any, budget: _OpenAIExtractionBudget) -> dict[str, Any] | None:
+    if raw is _OPENAI_TRANSPORT_MISSING or raw is None:
+        return None
+    budget.charge_container()
+    owned: dict[str, Any] = {}
+    for name in ("input_tokens", "output_tokens", "total_tokens"):
+        value = _sdk_field(raw, name)
+        if value is _OPENAI_TRANSPORT_MISSING or value is None:
+            continue
+        token = _copy_usage_int(value)
+        budget.charge_key(name)
+        budget.charge_int(token)
+        owned[name] = token
+    input_details = _copy_usage_details(
+        _sdk_field(raw, "input_tokens_details"), "cached_tokens", budget
+    )
+    if input_details is not None:
+        budget.charge_key("input_tokens_details")
+        owned["input_tokens_details"] = input_details
+    output_details = _copy_usage_details(
+        _sdk_field(raw, "output_tokens_details"), "reasoning_tokens", budget
+    )
+    if output_details is not None:
+        budget.charge_key("output_tokens_details")
+        owned["output_tokens_details"] = output_details
+    return owned
+
+
+# json.dumps default ensure_ascii encoding, as used by canonical_json().
+_JSON_TWO_CHAR_ESCAPES = frozenset({0x08, 0x09, 0x0A, 0x0C, 0x0D, 0x22, 0x5C})
+
+
+def _canonical_json_string_body_bytes(value: str) -> int:
+    """Payload bytes of a JSON string under canonical ASCII escaping.
+
+    Surrounding quotes are not included. Ordinary printable ASCII is 1 byte;
+    `"` / `\\` and the two-character control escapes are 2 bytes; remaining
+    C0 controls and BMP non-ASCII are 6-byte `\\uXXXX`; non-BMP code points
+    are a 12-byte UTF-16 surrogate pair `\\uXXXX\\uXXXX`.
+    """
+    size = 0
+    for ch in value:
+        code = ord(ch)
+        if code in _JSON_TWO_CHAR_ESCAPES:
+            size += 2
+        elif code < 0x20:
+            size += 6
+        elif code <= 0x7E:
+            size += 1
+        elif code < 0x10000:
+            size += 6
+        else:
+            size += 12
+    return size
+
+
+class _OpenAIExtractionBudget:
+    __slots__ = ("items", "nbytes")
+
+    def __init__(self) -> None:
+        self.items = 0
+        self.nbytes = 0
+
+    def consume_node(self) -> None:
+        if self.items >= MAX_OPENAI_PROVIDER_JSON_ITEMS:
+            raise _malformed_protocol()
+        self.items += 1
+
+    def consume_bytes(self, size: int) -> None:
+        if type(size) is not int or size < 0:
+            raise _malformed_protocol()
+        remaining = MAX_OPENAI_RAW_EVIDENCE_BYTES - self.nbytes
+        if size > remaining:
+            raise _malformed_protocol()
+        self.nbytes += size
+
+    def charge_container(self) -> None:
+        self.consume_node()
+        self.consume_bytes(2)
+
+    def charge_json_string_payload(self, value: str) -> None:
+        try:
+            utf8 = len(value.encode("utf-8"))
+        except Exception:
+            raise _malformed_protocol() from None
+        body = _canonical_json_string_body_bytes(value)
+        # Surrounding quotes plus a payload that dominates canonical ASCII
+        # escaping. Printable ASCII still uses the 2×UTF-8 floor so a
+        # 1MB-fitting raw payload cannot be fully traversed; BMP/astral
+        # `\uXXXX` / surrogate-pair expansion uses the larger canonical size.
+        self.consume_bytes(2 + max(body, 2 * utf8))
+
+    def charge_key(self, key: str) -> None:
+        if type(key) is not str:
+            raise _malformed_protocol()
+        self.consume_bytes(1)
+        self.charge_json_string_payload(key)
+        self.consume_bytes(1)
+
+    def charge_string(self, value: str) -> None:
+        if type(value) is not str:
+            raise _malformed_protocol()
+        self.consume_node()
+        self.charge_json_string_payload(value)
+
+    def charge_null(self) -> None:
+        self.consume_node()
+        self.consume_bytes(4)
+
+    def charge_bool(self) -> None:
+        self.consume_node()
+        self.consume_bytes(5)
+
+    def charge_int(self, value: int) -> None:
+        if type(value) is not int:
+            raise _malformed_protocol()
+        self.consume_node()
+        self.consume_bytes(max(1, len(str(value))))
+
+
+def _require_extractable_list(value: Any, budget: _OpenAIExtractionBudget) -> list:
+    if type(value) is not list:
+        raise _malformed_protocol()
+    remaining = MAX_OPENAI_PROVIDER_JSON_ITEMS - budget.items
+    if remaining <= 0 or len(value) > remaining:
+        raise _malformed_protocol()
+    return value
+
+
+def _copy_bounded_text(value: Any, budget: _OpenAIExtractionBudget) -> str:
+    if type(value) is not str:
+        raise _malformed_protocol()
+    try:
+        size = len(value.encode("utf-8"))
+    except Exception:
+        raise _malformed_protocol() from None
+    if size > MAX_OPENAI_RAW_EVIDENCE_BYTES:
+        raise _malformed_protocol()
+    budget.charge_string(value)
+    return value
+
+
+def _copy_typed_object(budget: _OpenAIExtractionBudget, item_type: str) -> dict[str, str]:
+    budget.charge_container()
+    budget.charge_key("type")
+    budget.charge_string(item_type)
+    return {"type": item_type}
+
+
+def _copy_content_part(part: Any, budget: _OpenAIExtractionBudget) -> dict[str, Any]:
+    part_type = _sdk_field(part, "type")
+    if type(part_type) is not str:
+        raise _malformed_protocol()
+    if part_type == "output_text":
+        owned = _copy_typed_object(budget, "output_text")
+        budget.charge_key("text")
+        owned["text"] = _copy_bounded_text(_sdk_field(part, "text"), budget)
+        return owned
+    if part_type == "refusal":
+        owned = _copy_typed_object(budget, "refusal")
+        budget.charge_key("refusal")
+        owned["refusal"] = _copy_bounded_text(_sdk_field(part, "refusal"), budget)
+        return owned
+    if not _openai_observation_is_safe(part_type, max_chars=MAX_OPENAI_OBSERVATION_CHARS):
+        raise _malformed_protocol()
+    return _copy_typed_object(budget, part_type)
+
+
+def _copy_message_item(item: Any, budget: _OpenAIExtractionBudget) -> dict[str, Any]:
+    owned = _copy_typed_object(budget, "message")
+    status = _sdk_field(item, "status")
+    if status is not _OPENAI_TRANSPORT_MISSING:
+        if not _openai_observation_is_safe(status, max_chars=MAX_OPENAI_OBSERVATION_CHARS):
+            raise _malformed_protocol()
+        budget.charge_key("status")
+        budget.charge_string(status)
+        owned["status"] = status
+    role = _sdk_field(item, "role")
+    if role is not _OPENAI_TRANSPORT_MISSING:
+        if not _openai_observation_is_safe(role, max_chars=MAX_OPENAI_OBSERVATION_CHARS):
+            raise _malformed_protocol()
+        budget.charge_key("role")
+        budget.charge_string(role)
+        owned["role"] = role
+    content = _sdk_field(item, "content")
+    if content is _OPENAI_TRANSPORT_MISSING:
+        return owned
+    content = _require_extractable_list(content, budget)
+    budget.charge_key("content")
+    budget.charge_container()
+    owned_content = []
+    for part in content:
+        owned_content.append(_copy_content_part(part, budget))
+    owned["content"] = owned_content
+    return owned
+
+
+def _copy_output_item(item: Any, budget: _OpenAIExtractionBudget) -> dict[str, Any]:
+    item_type = _sdk_field(item, "type")
+    if type(item_type) is not str:
+        raise _malformed_protocol()
+    if not _openai_observation_is_safe(item_type, max_chars=MAX_OPENAI_OBSERVATION_CHARS):
+        raise _malformed_protocol()
+    if item_type == "message":
+        return _copy_message_item(item, budget)
+    return _copy_typed_object(budget, item_type)
+
+
+def _copy_incomplete_details(
+    raw: Any, budget: _OpenAIExtractionBudget
+) -> dict[str, Any] | None:
+    if raw is _OPENAI_TRANSPORT_MISSING or raw is None:
+        budget.charge_null()
+        return None
+    budget.charge_container()
+    reason = _sdk_field(raw, "reason")
+    if reason is _OPENAI_TRANSPORT_MISSING:
+        return {}
+    budget.charge_key("reason")
+    if reason is None:
+        budget.charge_null()
+        return {"reason": None}
+    if not _openai_observation_is_safe(reason, max_chars=MAX_OPENAI_OBSERVATION_CHARS):
+        return {}
+    budget.charge_string(reason)
+    return {"reason": reason}
+
+
+def _copy_error_presence(raw: Any, budget: _OpenAIExtractionBudget) -> bool | None:
+    if raw is _OPENAI_TRANSPORT_MISSING or raw is None:
+        budget.charge_null()
+        return None
+    budget.charge_bool()
+    return True
+
+
+def _copy_response_request_id(raw: Any) -> str | None:
+    value = _sdk_field(raw, "request_id")
+    if value is _OPENAI_TRANSPORT_MISSING and type(raw) is not dict:
+        value = _sdk_field(raw, "_request_id")
+    return _optional_observation(value)
+
+
+def _extract_openai_sdk_response(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        raise _malformed_protocol()
+    budget = _OpenAIExtractionBudget()
+    budget.charge_container()
+    owned: dict[str, Any] = {}
+    discriminator = _sdk_field(raw, "object")
+    if discriminator is not _OPENAI_TRANSPORT_MISSING:
+        if not _openai_observation_is_safe(
+            discriminator, max_chars=MAX_OPENAI_OBSERVATION_CHARS
+        ):
+            raise _malformed_protocol()
+        budget.charge_key("object")
+        budget.charge_string(discriminator)
+        owned["object"] = discriminator
+    response_id = _optional_observation(
+        _sdk_field(raw, "id"), max_chars=MAX_OPENAI_OBSERVATION_CHARS
+    )
+    if response_id is not None:
+        budget.charge_key("id")
+        budget.charge_string(response_id)
+        owned["id"] = response_id
+    request_id = _copy_response_request_id(raw)
+    if request_id is not None:
+        budget.charge_key("request_id")
+        budget.charge_string(request_id)
+        owned["request_id"] = request_id
+    model = _optional_observation(
+        _sdk_field(raw, "model"), max_chars=MAX_OPENAI_MODEL_ID_CHARS
+    )
+    if model is not None:
+        budget.charge_key("model")
+        budget.charge_string(model)
+        owned["model"] = model
+    status = _sdk_field(raw, "status")
+    if status is not _OPENAI_TRANSPORT_MISSING:
+        if not _openai_observation_is_safe(status, max_chars=MAX_OPENAI_OBSERVATION_CHARS):
+            raise _malformed_protocol()
+        budget.charge_key("status")
+        budget.charge_string(status)
+        owned["status"] = status
+    output = _sdk_field(raw, "output")
+    if output is not _OPENAI_TRANSPORT_MISSING:
+        output = _require_extractable_list(output, budget)
+        budget.charge_key("output")
+        budget.charge_container()
+        owned_output = []
+        for item in output:
+            owned_output.append(_copy_output_item(item, budget))
+        owned["output"] = owned_output
+    budget.charge_key("incomplete_details")
+    owned["incomplete_details"] = _copy_incomplete_details(
+        _sdk_field(raw, "incomplete_details"), budget
+    )
+    budget.charge_key("error")
+    owned["error"] = _copy_error_presence(_sdk_field(raw, "error"), budget)
+    usage = _copy_openai_usage(_sdk_field(raw, "usage"), budget)
+    if usage is not None:
+        budget.charge_key("usage")
+        owned["usage"] = usage
+    bounded = _own_plain_provider_json(owned, depth=0, items=[0])
+    if type(bounded) is not dict:
+        raise _malformed_protocol()
+    try:
+        encoded = canonical_json(bounded).encode("utf-8")
+    except Exception:
+        raise _malformed_protocol() from None
+    if len(encoded) > MAX_OPENAI_RAW_EVIDENCE_BYTES:
+        raise _malformed_protocol()
+    return bounded
+
+
+def _malformed_transport_failure() -> _OpenAITransportFailure:
+    return _OpenAITransportFailure(
+        kind=ProviderCallKind.PROVIDER_ERROR,
+        category=ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL,
+        http_status=None,
+        request_id=None,
+        error_type=None,
+        error_code=None,
+        param=None,
+    )
+
+
+def _closed_unknown_transport_failure() -> _OpenAITransportFailure:
+    return _OpenAITransportFailure(
+        kind=ProviderCallKind.TRANSPORT_ERROR,
+        category=ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE,
+        http_status=None,
+        request_id=None,
+        error_type=None,
+        error_code=None,
+        param=None,
+    )
+
+
+def _import_openai_sdk() -> Any:
+    try:
+        import openai
+    except BaseException:
+        return None
+    return openai
+
+
+def _transport_failure(
+    kind: ProviderCallKind,
+    category: ProviderErrorCategory,
+    *,
+    http_status: int | None,
+    request_id: str | None,
+    error_type: str | None,
+    error_code: str | None,
+    param: str | None,
+) -> _OpenAITransportFailure:
+    return _OpenAITransportFailure(
+        kind=kind,
+        category=category,
+        http_status=http_status,
+        request_id=request_id,
+        error_type=error_type,
+        error_code=error_code,
+        param=param,
+    )
+
+
+def _classify_openai_429(
+    *,
+    http_status: int | None,
+    request_id: str | None,
+    error_type: str | None,
+    error_code: str | None,
+    param: str | None,
+) -> _OpenAITransportFailure:
+    if error_code == _OPENAI_429_QUOTA_CODE:
+        category = ProviderErrorCategory.QUOTA_EXHAUSTED
+    elif error_code == _OPENAI_429_RATE_LIMIT_CODE:
+        if error_type == _OPENAI_429_QUOTA_CODE:
+            category = ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE
+        else:
+            category = ProviderErrorCategory.RATE_LIMIT
+    else:
+        category = ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE
+    return _transport_failure(
+        ProviderCallKind.PROVIDER_ERROR,
+        category,
+        http_status=http_status,
+        request_id=request_id,
+        error_type=error_type,
+        error_code=error_code,
+        param=param,
+    )
+
+
+def _normalize_openai_sdk_exception(exc: BaseException) -> _OpenAITransportFailure:
+    failure = None
+    try:
+        http_status = _safe_http_status(_sdk_field(exc, "status_code"))
+        request_id = _optional_observation(_sdk_field(exc, "request_id"))
+        error_type = _optional_observation(_sdk_field(exc, "type"))
+        error_code = _optional_observation(_sdk_field(exc, "code"))
+        param = _optional_observation(_sdk_field(exc, "param"))
+        openai = _import_openai_sdk()
+        if openai is None:
+            failure = None
+        elif isinstance(exc, getattr(openai, "AuthenticationError", ())):
+            failure = _transport_failure(
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.AUTHENTICATION_CONFIGURATION,
+                http_status=http_status,
+                request_id=request_id,
+                error_type=error_type,
+                error_code=error_code,
+                param=param,
+            )
+        elif isinstance(exc, getattr(openai, "PermissionDeniedError", ())):
+            failure = _transport_failure(
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.PERMISSION,
+                http_status=http_status,
+                request_id=request_id,
+                error_type=error_type,
+                error_code=error_code,
+                param=param,
+            )
+        elif isinstance(exc, getattr(openai, "BadRequestError", ())):
+            failure = _transport_failure(
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.INVALID_REQUEST,
+                http_status=http_status,
+                request_id=request_id,
+                error_type=error_type,
+                error_code=error_code,
+                param=param,
+            )
+        elif isinstance(exc, getattr(openai, "UnprocessableEntityError", ())):
+            failure = _transport_failure(
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.INVALID_REQUEST,
+                http_status=http_status,
+                request_id=request_id,
+                error_type=error_type,
+                error_code=error_code,
+                param=param,
+            )
+        elif isinstance(exc, getattr(openai, "NotFoundError", ())):
+            failure = _transport_failure(
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.MODEL_UNAVAILABLE,
+                http_status=http_status,
+                request_id=request_id,
+                error_type=error_type,
+                error_code=error_code,
+                param=param,
+            )
+        elif isinstance(exc, getattr(openai, "ConflictError", ())):
+            failure = _transport_failure(
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE,
+                http_status=http_status,
+                request_id=request_id,
+                error_type=error_type,
+                error_code=error_code,
+                param=param,
+            )
+        elif isinstance(exc, getattr(openai, "RateLimitError", ())):
+            failure = _classify_openai_429(
+                http_status=http_status,
+                request_id=request_id,
+                error_type=error_type,
+                error_code=error_code,
+                param=param,
+            )
+        elif isinstance(exc, getattr(openai, "InternalServerError", ())):
+            failure = _transport_failure(
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.PROVIDER_OVERLOAD_INTERNAL,
+                http_status=http_status,
+                request_id=request_id,
+                error_type=error_type,
+                error_code=error_code,
+                param=param,
+            )
+        elif isinstance(exc, getattr(openai, "APIResponseValidationError", ())):
+            failure = _transport_failure(
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL,
+                http_status=http_status,
+                request_id=request_id,
+                error_type=error_type,
+                error_code=error_code,
+                param=param,
+            )
+        elif isinstance(exc, getattr(openai, "APITimeoutError", ())):
+            failure = _transport_failure(
+                ProviderCallKind.TRANSPORT_ERROR,
+                ProviderErrorCategory.TRANSPORT_PROVIDER_TIMEOUT,
+                http_status=http_status,
+                request_id=request_id,
+                error_type=error_type,
+                error_code=error_code,
+                param=param,
+            )
+        elif isinstance(exc, getattr(openai, "APIConnectionError", ())):
+            failure = _transport_failure(
+                ProviderCallKind.TRANSPORT_ERROR,
+                ProviderErrorCategory.TRANSPORT_CONNECTIVITY,
+                http_status=http_status,
+                request_id=request_id,
+                error_type=error_type,
+                error_code=error_code,
+                param=param,
+            )
+        elif isinstance(exc, getattr(openai, "APIStatusError", ())):
+            if http_status is not None and 500 <= http_status <= 599:
+                failure = _transport_failure(
+                    ProviderCallKind.PROVIDER_ERROR,
+                    ProviderErrorCategory.PROVIDER_OVERLOAD_INTERNAL,
+                    http_status=http_status,
+                    request_id=request_id,
+                    error_type=error_type,
+                    error_code=error_code,
+                    param=param,
+                )
+            elif http_status == 429:
+                failure = _classify_openai_429(
+                    http_status=http_status,
+                    request_id=request_id,
+                    error_type=error_type,
+                    error_code=error_code,
+                    param=param,
+                )
+            else:
+                failure = _transport_failure(
+                    ProviderCallKind.PROVIDER_ERROR,
+                    ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE,
+                    http_status=http_status,
+                    request_id=request_id,
+                    error_type=error_type,
+                    error_code=error_code,
+                    param=param,
+                )
+        else:
+            failure = _transport_failure(
+                ProviderCallKind.TRANSPORT_ERROR,
+                ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE,
+                http_status=http_status,
+                request_id=request_id,
+                error_type=error_type,
+                error_code=error_code,
+                param=param,
+            )
+    except BaseException:
+        failure = None
+    finally:
+        exc = None
+    if failure is None:
+        return _closed_unknown_transport_failure()
+    return failure
+
+
+def _perform_openai_responses_transport(
+    translated_request: dict[str, Any],
+    runtime_credential: RuntimeSecret,
+    residual_timeout_seconds: int | float,
+    *,
+    client_factory: Callable[..., Any] | None = None,
+) -> _OpenAITransportResult:
+    owned_translated_request = None
+    residual_timeout = None
+    client = None
+    raw_response = None
+    try:
+        owned_translated_request = _validate_openai_transport_request(translated_request)
+        residual_timeout = _validate_openai_residual_timeout(residual_timeout_seconds)
+        client = build_openai_client(
+            runtime_credential, client_factory=client_factory
+        )
+        try:
+            raw_response = client.responses.create(
+                **owned_translated_request,
+                timeout=residual_timeout,
+            )
+        except Exception as caught:
+            try:
+                failure = _normalize_openai_sdk_exception(caught)
+            except BaseException:
+                failure = _closed_unknown_transport_failure()
+            caught = None
+            return failure
+        try:
+            extracted = _extract_openai_sdk_response(raw_response)
+        except _OpenAITranslationReject:
+            return _malformed_transport_failure()
+        except Exception:
+            return _malformed_transport_failure()
+        return _OpenAITransportSuccess(response=extracted)
+    finally:
+        raw_response = None
+        client = None
+        runtime_credential = None
+        client_factory = None
+        owned_translated_request = None
+        residual_timeout = None
+        translated_request = None
 
 
 def openai_responses_skeleton(
