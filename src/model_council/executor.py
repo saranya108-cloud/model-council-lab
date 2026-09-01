@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -56,10 +57,41 @@ from .types import (
 _SRC_ROOT = Path(__file__).resolve().parents[1]
 _OPENAI_CHILD_ENV_KEY = "MCL_OPENAI_API_KEY"
 _OPENAI_HOST_ENV_KEY = "OPENAI_API_KEY"
+_WORKER_PROTOCOL_FD_ENV = "MCL_WORKER_PROTOCOL_FD"
+_MAX_WORKER_PROTOCOL_BYTES = 8_000_000
 _OPENAI_ENV_ASSIGNMENT_PREFIXES = (
     b"MCL_OPENAI_API_KEY=",
     b"OPENAI_API_KEY=",
 )
+
+
+def _close_fd(fd: int | None) -> None:
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def _read_protocol_fd(fd: int | None, *, limit: int) -> bytes | None:
+    if fd is None:
+        return None
+    chunks = []
+    total = 0
+    try:
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > limit:
+                chunks = None
+                return None
+            chunks.append(chunk)
+    except OSError:
+        return None
+    return b"".join(chunks)
 
 
 def _openai_env_assignment(item: object) -> bool:
@@ -270,6 +302,11 @@ class SubprocessAdapter:
         openai_timeout = False
         openai_spawn_failure = None
         completed = None
+        protocol_r = None
+        protocol_w = None
+        protocol_holder = []
+        protocol_reader = None
+        protocol_reader_started = False
         try:
             if self.kind == "openai_responses":
                 from .openai_adapter import (
@@ -285,6 +322,22 @@ class SubprocessAdapter:
                     )
                 finally:
                     raw_credential = None
+                protocol_r, protocol_w = os.pipe()
+                os.set_inheritable(protocol_r, False)
+                os.set_inheritable(protocol_w, True)
+                env[_WORKER_PROTOCOL_FD_ENV] = str(protocol_w)
+                spawn_kwargs["pass_fds"] = (protocol_w,)
+
+                def _drain_protocol():
+                    protocol_holder.append(
+                        _read_protocol_fd(protocol_r, limit=_MAX_WORKER_PROTOCOL_BYTES)
+                    )
+
+                protocol_reader = threading.Thread(
+                    target=_drain_protocol, daemon=True
+                )
+                protocol_reader.start()
+                protocol_reader_started = True
             with tempfile.TemporaryDirectory(prefix="mcl-scratch-") as scratch:
                 self.last_scratch_dir = scratch
                 started = time.monotonic()
@@ -322,18 +375,36 @@ class SubprocessAdapter:
                 ) from exc
         finally:
             env.pop(_OPENAI_CHILD_ENV_KEY, None)
+            env.pop(_WORKER_PROTOCOL_FD_ENV, None)
+            _close_fd(protocol_w)
+            protocol_w = None
+            if protocol_reader_started:
+                protocol_reader.join(timeout=1.0)
+                if protocol_reader.is_alive():
+                    _close_fd(protocol_r)
+                    protocol_r = None
+                    protocol_reader.join(timeout=1.0)
+            else:
+                _close_fd(protocol_r)
+                protocol_r = None
             if openai_spawn_failure is not None:
                 env.clear()
                 env = None
 
         if openai_timeout:
+            _close_fd(protocol_r)
+            protocol_r = None
             raise StageTimeout(
                 f"adapter process exceeded {attempt_timeout}s and was terminated"
             )
         if openai_spawn_failure is not None:
+            _close_fd(protocol_r)
+            protocol_r = None
             raise InfrastructureError(openai_spawn_failure)
 
         if completed.returncode != 0:
+            _close_fd(protocol_r)
+            protocol_r = None
             if self.kind == "openai_responses":
                 error = _openai_nonzero_worker_failure(completed)
                 completed = None
@@ -343,10 +414,49 @@ class SubprocessAdapter:
                 f"{WORKER_CRASH_SUMMARY} (exit {completed.returncode}; "
                 f"stderr_bytes={meta['bytes']}; stderr_sha256={meta['sha256']})"
             )
+        openai_invalid_json = False
+        stdout_text = None
+        if self.kind == "openai_responses":
+            protocol_bytes = protocol_holder[0] if protocol_holder else None
+            protocol_holder = None
+            _close_fd(protocol_r)
+            protocol_r = None
+            completed.stdout = None
+            completed.stderr = None
+            completed = None
+            if protocol_bytes is None:
+                openai_invalid_json = True
+            else:
+                try:
+                    stdout_text = protocol_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    stdout_text = None
+                    openai_invalid_json = True
+            protocol_bytes = None
+        else:
+            stdout_text = completed.stdout
+        if openai_invalid_json:
+            raise ProtocolError("worker stdout was not valid JSON")
         try:
-            payload = json.loads(completed.stdout)
+            payload = json.loads(stdout_text)
         except json.JSONDecodeError as exc:
-            raise ProtocolError(f"worker stdout was not valid JSON: {exc}") from exc
+            if self.kind == "openai_responses":
+                stdout_text = None
+                completed = None
+                try:
+                    exc.doc = None
+                except Exception:
+                    pass
+                _scrub_openai_subprocess_exception(exc)
+                exc = None
+                openai_invalid_json = True
+            else:
+                raise ProtocolError(f"worker stdout was not valid JSON: {exc}") from exc
+        if openai_invalid_json:
+            raise ProtocolError("worker stdout was not valid JSON")
+        if self.kind == "openai_responses":
+            stdout_text = None
+            completed = None
         if not isinstance(payload, dict) or "ok" not in payload:
             raise ProtocolError("worker response missing required 'ok' field")
         if not payload["ok"]:

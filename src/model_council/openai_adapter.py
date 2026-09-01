@@ -2,9 +2,8 @@
 
 The official OpenAI SDK is imported only inside the default client factory.
 No SDK object, credential, or provider-local handle may cross the worker JSON
-boundary. Tranche 4 adds pure request/response translation from synthetic
-provider-shaped fixtures. The registered production entrypoint remains
-fail-closed before SDK client construction or provider invocation.
+boundary. The registered production entrypoint composes request translation,
+one-call transport, and response/error normalization into ProviderCallOutcome.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .errors import InfrastructureError, ProtocolError
+from .errors import GovernanceViolation, InfrastructureError, ProtocolError
 from .live_contract import (
     CallTiming,
     FinishReason,
@@ -64,6 +63,17 @@ OPENAI_TOOL_CALL_MESSAGE = "openai provider returned a tool call"
 OPENAI_MALFORMED_MESSAGE = "openai provider response was malformed"
 OPENAI_TRANSPORT_REQUEST_INVALID = "openai transport request is invalid"
 OPENAI_TRANSPORT_TIMEOUT_INVALID = "openai residual timeout is invalid"
+OPENAI_TRANSPORT_RESULT_INVALID = "openai transport result is invalid"
+OPENAI_AUTH_MESSAGE = "openai authentication failed"
+OPENAI_PERMISSION_MESSAGE = "openai permission denied"
+OPENAI_MODEL_UNAVAILABLE_MESSAGE = "openai model is unavailable"
+OPENAI_INVALID_REQUEST_MESSAGE = "openai request was invalid"
+OPENAI_CONNECTIVITY_MESSAGE = "openai transport connectivity failed"
+OPENAI_TIMEOUT_MESSAGE = "openai provider timed out"
+OPENAI_RATE_LIMIT_MESSAGE = "openai rate limit exceeded"
+OPENAI_OVERLOAD_MESSAGE = "openai provider is overloaded"
+OPENAI_UNKNOWN_FAILURE_MESSAGE = "openai request failed"
+OPENAI_QUOTA_MESSAGE = "openai quota is exhausted"
 
 _OPENAI_REASONING_EFFORT = frozenset({"none", "low", "medium", "high", "xhigh", "max"})
 _OPENAI_REASONING_SUMMARY = frozenset({"auto", "concise", "detailed"})
@@ -1834,17 +1844,189 @@ def _perform_openai_responses_transport(
         translated_request = None
 
 
+_OPENAI_TRANSPORT_FAILURE_PAIRS = frozenset(
+    {
+        (
+            ProviderCallKind.PROVIDER_ERROR,
+            ProviderErrorCategory.AUTHENTICATION_CONFIGURATION,
+        ),
+        (ProviderCallKind.PROVIDER_ERROR, ProviderErrorCategory.PERMISSION),
+        (ProviderCallKind.PROVIDER_ERROR, ProviderErrorCategory.MODEL_UNAVAILABLE),
+        (ProviderCallKind.PROVIDER_ERROR, ProviderErrorCategory.INVALID_REQUEST),
+        (ProviderCallKind.PROVIDER_ERROR, ProviderErrorCategory.RATE_LIMIT),
+        (
+            ProviderCallKind.PROVIDER_ERROR,
+            ProviderErrorCategory.PROVIDER_OVERLOAD_INTERNAL,
+        ),
+        (
+            ProviderCallKind.PROVIDER_ERROR,
+            ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL,
+        ),
+        (ProviderCallKind.PROVIDER_ERROR, ProviderErrorCategory.QUOTA_EXHAUSTED),
+        (
+            ProviderCallKind.PROVIDER_ERROR,
+            ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE,
+        ),
+        (
+            ProviderCallKind.TRANSPORT_ERROR,
+            ProviderErrorCategory.TRANSPORT_CONNECTIVITY,
+        ),
+        (
+            ProviderCallKind.TRANSPORT_ERROR,
+            ProviderErrorCategory.TRANSPORT_PROVIDER_TIMEOUT,
+        ),
+        (
+            ProviderCallKind.TRANSPORT_ERROR,
+            ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE,
+        ),
+    }
+)
+
+
+def _openai_transport_error_message(category: ProviderErrorCategory) -> str:
+    if category is ProviderErrorCategory.AUTHENTICATION_CONFIGURATION:
+        return OPENAI_AUTH_MESSAGE
+    if category is ProviderErrorCategory.PERMISSION:
+        return OPENAI_PERMISSION_MESSAGE
+    if category is ProviderErrorCategory.MODEL_UNAVAILABLE:
+        return OPENAI_MODEL_UNAVAILABLE_MESSAGE
+    if category is ProviderErrorCategory.INVALID_REQUEST:
+        return OPENAI_INVALID_REQUEST_MESSAGE
+    if category is ProviderErrorCategory.TRANSPORT_CONNECTIVITY:
+        return OPENAI_CONNECTIVITY_MESSAGE
+    if category is ProviderErrorCategory.TRANSPORT_PROVIDER_TIMEOUT:
+        return OPENAI_TIMEOUT_MESSAGE
+    if category is ProviderErrorCategory.RATE_LIMIT:
+        return OPENAI_RATE_LIMIT_MESSAGE
+    if category is ProviderErrorCategory.PROVIDER_OVERLOAD_INTERNAL:
+        return OPENAI_OVERLOAD_MESSAGE
+    if category is ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL:
+        return OPENAI_MALFORMED_MESSAGE
+    if category is ProviderErrorCategory.QUOTA_EXHAUSTED:
+        return OPENAI_QUOTA_MESSAGE
+    if category is ProviderErrorCategory.POLICY_REFUSAL:
+        return OPENAI_REFUSAL_MESSAGE
+    if category is ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT:
+        return OPENAI_INCOMPLETE_MESSAGE
+    return OPENAI_UNKNOWN_FAILURE_MESSAGE
+
+
+def _emit_openai_transport_failure_outcome(
+    request: LiveInvocationRequest,
+    kind: ProviderCallKind,
+    category: ProviderErrorCategory,
+    http_status: int | None,
+    request_id: str | None,
+):
+    observations = _base_identity_observations(request, None)
+    observations["provider_response_id"] = unavailable(
+        UnavailableReason.NO_RESPONSE_RECEIVED
+    )
+    observations["provider_response_status"] = unavailable_int(
+        UnavailableReason.NO_RESPONSE_RECEIVED
+    )
+    if request_id is None:
+        observations["provider_request_id"] = unavailable(UnavailableReason.NOT_EXPOSED)
+    else:
+        observations["provider_request_id"] = observed_str(request_id)
+    if http_status is None:
+        http_obs = unavailable_int(UnavailableReason.NOT_EXPOSED)
+    else:
+        http_obs = observed_int(http_status)
+    return build_provider_call_outcome(
+        kind=kind,
+        finish_reason=unavailable(UnavailableReason.NO_RESPONSE_RECEIVED),
+        raw_output=unavailable(UnavailableReason.NO_RESPONSE_RECEIVED),
+        structured_output=unavailable_structured(UnavailableReason.NO_RESPONSE_RECEIVED),
+        error=NeutralError(
+            category=category,
+            sanitized_message=_openai_transport_error_message(category),
+            http_status=http_obs,
+        ),
+        stage_output=None,
+        **observations,
+    )
+
+
+def _openai_transport_failure_outcome(request: Any, failure: Any):
+    """Translate a classified transport failure into a validated non-success outcome.
+
+    Provider-local classification fields that must not cross the worker boundary
+    (`error_type`, `error_code`, `param`) are discarded here. Kind/category pairs
+    and bounded observations are independently re-validated even when the caller
+    hands this converter a hostile or manually constructed failure object.
+    """
+    kind = None
+    category = None
+    raw_http_status = None
+    raw_request_id = None
+    try:
+        if type(failure) is not _OpenAITransportFailure:
+            raise ProtocolError(OPENAI_TRANSPORT_RESULT_INVALID)
+        kind = failure.kind
+        category = failure.category
+        raw_http_status = failure.http_status
+        raw_request_id = failure.request_id
+    finally:
+        failure = None
+    if type(kind) is not ProviderCallKind or type(category) is not ProviderErrorCategory:
+        raise ProtocolError(OPENAI_TRANSPORT_RESULT_INVALID)
+    if (kind, category) not in _OPENAI_TRANSPORT_FAILURE_PAIRS:
+        raise ProtocolError(OPENAI_TRANSPORT_RESULT_INVALID)
+    http_status = _safe_http_status(raw_http_status)
+    raw_http_status = None
+    request_id = _optional_observation(raw_request_id)
+    raw_request_id = None
+    try:
+        return _emit_openai_transport_failure_outcome(
+            request, kind, category, http_status, request_id
+        )
+    except (LiveContractError, ProtocolError, Exception):
+        raise ProtocolError(OPENAI_TRANSPORT_RESULT_INVALID) from None
+
+
 def openai_responses_skeleton(
     options: Mapping[str, Any],
     provider_treatment_config: Mapping[str, Any],
     request: Any,
 ) -> Any:
-    """Fail-closed OpenAI live adapter. Transport remains deferred."""
-    del request
+    """Registered OpenAI live adapter. One runner-authorized attempt, no retry."""
     secret = acquire_child_openai_runtime_secret()
+    translated = None
+    transport_result = None
+    owned_response = None
+    outcome = None
+    closed_failure = None
     try:
         _require_empty_openai_options(options)
-        validate_openai_provider_treatment(provider_treatment_config)
-        raise ProtocolError(OPENAI_TRANSLATION_NOT_IMPLEMENTED)
+        translated = build_openai_responses_request(request, provider_treatment_config)
+        transport_result = _perform_openai_responses_transport(
+            translated,
+            secret,
+            request.attempt_timeout_seconds,
+        )
+        result_type = type(transport_result)
+        if result_type is _OpenAITransportSuccess:
+            owned_response = transport_result.response
+            outcome = translate_openai_responses_result(request, owned_response)
+        elif result_type is _OpenAITransportFailure:
+            outcome = _openai_transport_failure_outcome(request, transport_result)
+        else:
+            closed_failure = OPENAI_TRANSPORT_RESULT_INVALID
+    except (ProtocolError, InfrastructureError, GovernanceViolation):
+        raise
+    except Exception:
+        closed_failure = OPENAI_TRANSPORT_RESULT_INVALID
     finally:
         secret = None
+        translated = None
+        transport_result = None
+        owned_response = None
+        options = None
+        provider_treatment_config = None
+        request = None
+    if closed_failure is not None:
+        raise ProtocolError(closed_failure)
+    if outcome is None:
+        raise ProtocolError(OPENAI_TRANSPORT_RESULT_INVALID)
+    return outcome

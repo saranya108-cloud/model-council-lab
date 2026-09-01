@@ -1,7 +1,8 @@
-"""Tranche 4: pure OpenAI Responses request/response translation.
+"""Tranche 4: OpenAI Responses request/response translation.
 
 Synthetic provider-shaped fixtures only. No SDK import, network, credential,
-or production transport activation.
+or real provider call. Production entrypoint composition is exercised with a
+patched transport seam returning owned fixtures.
 """
 
 from __future__ import annotations
@@ -788,22 +789,29 @@ class TestOpenAIResponseTranslation(unittest.TestCase):
             outcome.error.category, ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL
         )
 
-    def test_production_entrypoint_remains_fail_closed(self):
+    def test_production_entrypoint_composes_transport_success_into_translation(self):
         from model_council.openai_adapter import (
-            OPENAI_TRANSLATION_NOT_IMPLEMENTED,
+            _OpenAITransportSuccess,
             openai_responses_skeleton,
         )
 
         request = _solver_request()
+        fixture = _completed_fixture(_solver_envelope(), usage=_usage_fixture())
         isolated = {key: os.environ[key] for key in os.environ if key != "OPENAI_API_KEY"}
         isolated[_CHILD_KEY] = _FAKE_CREDENTIAL
         with patch.dict(os.environ, isolated, clear=True):
-            with patch("model_council.openai_adapter.build_openai_client") as factory:
-                with self.assertRaises(ProtocolError) as ctx:
-                    openai_responses_skeleton({}, deep_freeze({}), request)
+            with patch(
+                "model_council.openai_adapter._perform_openai_responses_transport",
+                return_value=_OpenAITransportSuccess(response=fixture),
+            ) as transport:
+                with patch("model_council.openai_adapter.build_openai_client") as factory:
+                    outcome = openai_responses_skeleton({}, deep_freeze({}), request)
             factory.assert_not_called()
+            transport.assert_called_once()
             self.assertNotIn(_CHILD_KEY, os.environ)
-        self.assertEqual(str(ctx.exception), OPENAI_TRANSLATION_NOT_IMPLEMENTED)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+        self.assertEqual(dict(outcome.stage_output), _solver_envelope())
+        _assert_outcome_serializable(self, outcome)
 
 
 class TestOpenAIAdapterTranslationRemediation(unittest.TestCase):

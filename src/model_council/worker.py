@@ -2,13 +2,14 @@
 
 Reads a JSON request from stdin, validates the harness protocol handshake,
 invokes a registered adapter for the runner-selected execution profile, and
-writes a JSON response to stdout. It holds no references to the Runner,
-Evaluator, ArtifactStore, hidden checks, or preserved artifacts.
+writes a JSON response to the trusted protocol channel. It holds no references
+to the Runner, Evaluator, ArtifactStore, hidden checks, or preserved artifacts.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 from .adapters import LIVE_REGISTRY, REGISTRY, _identity_used, _role_from_instruction
@@ -29,10 +30,68 @@ from .sanitize import WORKER_SANITIZED_FAILURE
 from .security import deep_freeze, normalize_provider_treatment_config
 from .types import GovernanceViolation, InfrastructureError, ModelFailure, ProtocolError
 
+WORKER_PROTOCOL_FD_ENV = "MCL_WORKER_PROTOCOL_FD"
+
+_protocol_out = None
+_discarded_stdio = None
+
+
+def _emit_protocol(payload: dict) -> None:
+    stream = _protocol_out if _protocol_out is not None else sys.stdout
+    json.dump(payload, stream)
+    try:
+        stream.flush()
+    except Exception:
+        pass
+
 
 def _fail(error_class: str, message: str) -> int:
-    json.dump({"ok": False, "error_class": error_class, "message": message}, sys.stdout)
+    _emit_protocol({"ok": False, "error_class": error_class, "message": message})
     return 0
+
+
+def _install_trusted_protocol_channel() -> bool:
+    """Claim the inherited protocol FD and detach OS stdout/stderr from it.
+
+    Used only after the worker has identified openai_responses. Missing,
+    malformed, or unusable descriptors fail closed without substituting stdout.
+    """
+    global _protocol_out
+    global _discarded_stdio
+    raw = os.environ.pop(WORKER_PROTOCOL_FD_ENV, None)
+    if raw is None:
+        return False
+    if type(raw) is not str or not raw.isascii() or not raw.isdigit():
+        return False
+    try:
+        fd = int(raw)
+    except (TypeError, ValueError):
+        return False
+    if type(fd) is not int or str(fd) != raw or fd < 3:
+        return False
+    try:
+        os.fstat(fd)
+    except (OSError, OverflowError):
+        return False
+    try:
+        sink = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(sink, 1)
+            os.dup2(sink, 2)
+        finally:
+            os.close(sink)
+        discarded_out = os.fdopen(1, "w", encoding="utf-8", closefd=False)
+        discarded_err = os.fdopen(2, "w", encoding="utf-8", closefd=False)
+        sys.stdout = discarded_out
+        sys.stderr = discarded_err
+        sys.__stdout__ = discarded_out
+        sys.__stderr__ = discarded_err
+        _discarded_stdio = (discarded_out, discarded_err)
+        _protocol_out = os.fdopen(fd, "w", encoding="utf-8", closefd=True)
+    except Exception:
+        _protocol_out = None
+        return False
+    return True
 
 
 def _validate_harness_protocol(request: object) -> str | None:
@@ -49,6 +108,8 @@ def _validate_harness_protocol(request: object) -> str | None:
 
 
 def main() -> int:
+    global _protocol_out
+    _protocol_out = None
     try:
         return _main()
     except Exception:
@@ -67,8 +128,13 @@ def _main() -> int:
     kind = adapter_spec["kind"]
 
     if kind == "raw_garbage":
-        # Adversarial protocol probe: exit 0 with non-JSON stdout.
-        sys.stdout.write("###this is not json###")
+        # Adversarial protocol probe: exit 0 with non-JSON protocol bytes.
+        stream = _protocol_out if _protocol_out is not None else sys.stdout
+        stream.write("###this is not json###")
+        try:
+            stream.flush()
+        except Exception:
+            pass
         return 0
 
     sent_profile = request.get("execution_profile")
@@ -76,6 +142,9 @@ def _main() -> int:
         expected_profile = execution_profile_for_kind(kind)
     except ProtocolError as exc:
         return _fail("ProtocolError", str(exc))
+    if kind == "openai_responses":
+        if not _install_trusted_protocol_channel():
+            return 1
     if type(sent_profile) is not str or sent_profile != expected_profile:
         return _fail(
             "ProtocolError",
@@ -146,22 +215,20 @@ def _run_live(kind: str, options: dict, request: dict) -> int:
         parsed = parse_provider_call_outcome(result.to_dict())
     except LiveContractError as exc:
         return _fail("ProtocolError", f"live adapter returned an invalid ProviderCallOutcome: {exc}")
-    json.dump(
+    _emit_protocol(
         {
             "ok": True,
             "execution_profile": EXECUTION_PROFILE_LIVE_CONTRACT_V1,
             "outcome": parsed.to_dict(),
-        },
-        sys.stdout,
+        }
     )
     return 0
 
 
 def _run_legacy(kind: str, options: dict, request: dict) -> int:
     if kind not in REGISTRY:
-        json.dump(
-            {"ok": False, "error_class": "UnknownAdapter", "message": f"unknown adapter kind {kind!r}"},
-            sys.stdout,
+        _emit_protocol(
+            {"ok": False, "error_class": "UnknownAdapter", "message": f"unknown adapter kind {kind!r}"}
         )
         return 0
     try:
@@ -173,19 +240,16 @@ def _run_legacy(kind: str, options: dict, request: dict) -> int:
             int(request["seed"]),
         )
     except ModelFailure as exc:
-        json.dump(
-            {"ok": False, "error_class": "ModelFailure", "message": str(exc)}, sys.stdout
-        )
+        _emit_protocol({"ok": False, "error_class": "ModelFailure", "message": str(exc)})
         return 0
     except NeutralProviderFailure as exc:
-        json.dump(
+        _emit_protocol(
             {
                 "ok": False,
                 "error_class": "NeutralProviderFailure",
                 "message": str(exc),
                 "error": exc.error.to_dict(),
-            },
-            sys.stdout,
+            }
         )
         return 0
     except Exception:
@@ -204,13 +268,12 @@ def _run_legacy(kind: str, options: dict, request: dict) -> int:
             identity_used = merged
 
     response["identity_used"] = identity_used
-    json.dump(
+    _emit_protocol(
         {
             "ok": True,
             "execution_profile": EXECUTION_PROFILE_PRE_LIVE_LEGACY,
             "response": response,
-        },
-        sys.stdout,
+        }
     )
     return 0
 

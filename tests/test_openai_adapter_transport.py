@@ -1,8 +1,9 @@
-"""Tranche 5A: dormant provider-local one-call OpenAI Responses transport seam.
+"""Tranche 5A/5B: provider-local one-call OpenAI Responses transport and activation.
 
 Deterministic offline/fake behavior only. No real provider calls, credentials,
 or dependency installation. Optional SDK HTTP proofs run in a subprocess and
-accept the established absence path.
+accept the established absence path. Production activation is exercised through
+the real worker via a disposable python_executable wrapper.
 """
 
 from __future__ import annotations
@@ -26,37 +27,71 @@ import helpers  # noqa: F401 - installs src on sys.path
 
 from model_council.adapters import LIVE_REGISTRY, REGISTRY
 from model_council.errors import InfrastructureError, ProtocolError
-from model_council.live_contract import ProviderCallKind, ProviderErrorCategory
+from model_council.evaluator import EvaluationConfig, ExternalEvaluator
+from model_council.executor import SubprocessAdapter
+from model_council.live_contract import (
+    NeutralProviderFailure,
+    ProviderCallKind,
+    ProviderErrorCategory,
+    UnavailableReason,
+    dumps_provider_call_outcome,
+)
 from model_council.openai_adapter import (
     MAX_OPENAI_OBSERVATION_CHARS,
     MAX_OPENAI_PROVIDER_JSON_ITEMS,
     MAX_OPENAI_RAW_EVIDENCE_BYTES,
     MAX_OPENAI_USAGE_TOKENS,
+    OPENAI_AUTH_MESSAGE,
     OPENAI_CLIENT_INIT_FAILURE,
-    OPENAI_TRANSLATION_NOT_IMPLEMENTED,
+    OPENAI_CONNECTIVITY_MESSAGE,
+    OPENAI_INVALID_REQUEST_MESSAGE,
+    OPENAI_MALFORMED_MESSAGE,
+    OPENAI_OVERLOAD_MESSAGE,
+    OPENAI_PERMISSION_MESSAGE,
+    OPENAI_QUOTA_MESSAGE,
+    OPENAI_RATE_LIMIT_MESSAGE,
+    OPENAI_TIMEOUT_MESSAGE,
     OPENAI_TRANSPORT_REQUEST_INVALID,
+    OPENAI_TRANSPORT_RESULT_INVALID,
     OPENAI_TRANSPORT_TIMEOUT_INVALID,
+    OPENAI_UNKNOWN_FAILURE_MESSAGE,
     RuntimeSecret,
     _OpenAIExtractionBudget,
     _OpenAITransportFailure,
     _OpenAITransportSuccess,
     _canonical_json_string_body_bytes,
     _default_openai_client_factory,
+    _openai_transport_failure_outcome,
     _perform_openai_responses_transport,
     build_openai_responses_request,
     openai_responses_skeleton,
 )
+from model_council.retry_policy import is_retry_candidate
+from model_council.runner import ExperimentRunner
 from model_council.security import canonical_json, deep_freeze
+from helpers import FAKE_IDENTITY, TempRoot, make_spec, make_task
 from test_live_contract import make_request
 from test_openai_adapter_skeleton import (
     _CHILD_KEY,
     _HOST_KEY,
+    _assert_openai_parent_graph_closed,
     _failure_graph_blobs,
+    _install_offline_openai_python,
     _isolated_environ,
     _live_envelope,
+    _openai_adapter,
+    _read_offline_calls,
     _run_worker,
 )
-from test_openai_adapter_translation import _CLOSED_TREATMENT, _solver_request
+from test_openai_adapter_translation import (
+    CONFIGURED,
+    REQUESTED_ALIAS,
+    _CLOSED_TREATMENT,
+    _completed_fixture,
+    _solver_envelope,
+    _solver_request,
+    _usage_fixture,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _FAKE_CREDENTIAL = "mcl-test-openai-runtime-credential-not-real"
@@ -223,6 +258,92 @@ def _assert_secret_absent(test: unittest.TestCase, *blobs) -> None:
             test.fail("synthetic runtime credential leaked into inspected output")
         if digest in text:
             test.fail("digest of synthetic runtime credential leaked into inspected output")
+
+
+def _offline_success_config(**response_overrides):
+    return {
+        "mode": "success",
+        "response": _completed_fixture(
+            _solver_envelope(), usage=_usage_fixture(), **response_overrides
+        ),
+    }
+
+
+def _offline_error_config(cls, **fields):
+    payload = {"class": cls, "message": fields.pop("message", "synthetic")}
+    payload.update(fields)
+    return {"mode": "error", "error": payload}
+
+
+def _assert_contained_failure(
+    test,
+    outcome,
+    *,
+    kind,
+    category,
+    message,
+    http_status=None,
+    request_id=None,
+):
+    test.assertEqual(outcome.kind, kind)
+    test.assertIsNotNone(outcome.error)
+    test.assertEqual(outcome.error.category, category)
+    test.assertEqual(outcome.error.sanitized_message, message)
+    test.assertIsNone(outcome.stage_output)
+    test.assertEqual(outcome.adapter_internal_retry_count, 0)
+    test.assertEqual(dict(outcome.provider_metadata.value), {})
+    test.assertIsNone(outcome.error.provider_retry_hint.value)
+    test.assertIsNone(outcome.error.retry_after_seconds.value)
+    if http_status is None:
+        test.assertIsNone(outcome.error.http_status.value)
+    else:
+        test.assertEqual(outcome.error.http_status.value, http_status)
+    if request_id is None:
+        test.assertIsNone(outcome.provider_request_id.value)
+    else:
+        test.assertEqual(outcome.provider_request_id.value, request_id)
+    encoded = dumps_provider_call_outcome(outcome)
+    lowered = encoded.lower()
+    for marker in (
+        "error_type",
+        "error_code",
+        '"param"',
+        "retry-after",
+        "traceback",
+        "authorization:",
+        "bearer ",
+        "insufficient_quota",
+        "rate_limit_exceeded",
+    ):
+        test.assertNotIn(marker, lowered)
+    _assert_secret_absent(test, encoded, outcome.to_dict())
+
+
+def _invoke_offline_live(test, config, *, request=None, treatment=None, timeout=None):
+    live_request = request or _solver_request()
+    if timeout is not None:
+        live_request = _solver_request(attempt_timeout_seconds=timeout)
+    with TempRoot() as root:
+        python, calls = _install_offline_openai_python(root, config)
+        adapter = _openai_adapter(
+            python_executable=python,
+            provider_treatment_config=treatment or {},
+        )
+        with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
+            try:
+                outcome = adapter.invoke_live(live_request)
+                failure = None
+            except NeutralProviderFailure as exc:
+                outcome = exc.outcome
+                failure = exc
+        records = _read_offline_calls(calls)
+        last = adapter.last_request
+        _assert_secret_absent(
+            test,
+            json.dumps(last) if last is not None else None,
+            [record for record in records],
+        )
+        return outcome, failure, records, last
 
 
 def _closed_request(treatment=None):
@@ -1646,41 +1767,921 @@ class TestOpenAITransportSerialization(unittest.TestCase):
             self.assertIs(type(item), dict)
 
 
-class TestOpenAITransportDormancy(unittest.TestCase):
-    def test_registry_identity_and_direct_entrypoint_remain_dormant(self):
+class TestOpenAIProductionActivation(unittest.TestCase):
+    def test_registry_identity_is_the_production_entrypoint(self):
         self.assertNotIn(_OPENAI_KIND, REGISTRY)
         self.assertIs(LIVE_REGISTRY[_OPENAI_KIND], openai_responses_skeleton)
-        with _isolated_environ(**{_CHILD_KEY: _FAKE_CREDENTIAL}):
-            with patch(
-                "model_council.openai_adapter._perform_openai_responses_transport"
-            ) as transport:
-                with patch("model_council.openai_adapter.build_openai_client") as factory:
-                    with patch(
-                        "socket.socket",
-                        side_effect=AssertionError("network path opened"),
-                    ):
-                        with self.assertRaises(ProtocolError) as ctx:
-                            openai_responses_skeleton(
-                                {}, deep_freeze({}), make_request()
-                            )
-            factory.assert_not_called()
-            transport.assert_not_called()
-        self.assertEqual(str(ctx.exception), OPENAI_TRANSLATION_NOT_IMPLEMENTED)
 
-    def test_worker_registered_invocation_fails_before_transport(self):
-        payload = _live_envelope(kind=_OPENAI_KIND, options={}, treatment={})
+    def test_real_worker_success_path_uses_configured_model_and_one_sdk_call(self):
+        request = _solver_request()
+        outcome, failure, records, last = _invoke_offline_live(
+            self, _offline_success_config()
+        )
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+        self.assertEqual(dict(outcome.stage_output), _solver_envelope())
+        self.assertEqual(outcome.configured_identity, CONFIGURED)
+        self.assertEqual(outcome.requested_identity, REQUESTED_ALIAS)
+        self.assertEqual(outcome.adapter_internal_retry_count, 0)
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["max_retries"], 0)
+        self.assertEqual(record["model"], CONFIGURED.model_id)
+        self.assertNotEqual(record["model"], REQUESTED_ALIAS.model_id)
+        self.assertEqual(record["instructions"], request.role_instruction)
+        self.assertEqual(
+            record["input"],
+            canonical_json({"stage_inputs": dict(request.stage_inputs)}),
+        )
+        self.assertIs(record["store"], False)
+        self.assertIs(record["stream"], False)
+        self.assertIs(record["background"], False)
+        self.assertEqual(record["tools"], [])
+        self.assertEqual(record["tool_choice"], "none")
+        self.assertIs(record["parallel_tool_calls"], False)
+        self.assertEqual(record["truncation"], "disabled")
+        self.assertEqual(record["timeout"], request.attempt_timeout_seconds)
+        self.assertNotIn("reasoning", record)
+        self.assertEqual(last["adapter"]["options"], {})
+        encoded = dumps_provider_call_outcome(outcome)
+        _assert_secret_absent(self, encoded, last)
+
+    def test_treatment_is_isolated_from_model_visible_payload(self):
+        request = _solver_request()
+        outcome, failure, records, _last = _invoke_offline_live(
+            self, _offline_success_config(), treatment=_CLOSED_TREATMENT
+        )
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["reasoning"], {"effort": "high", "summary": "concise"})
+        self.assertEqual(record["text"]["verbosity"], "low")
+        visible = record["instructions"] + record["input"]
+        for leaked in (
+            "reasoning",
+            "verbosity",
+            "effort",
+            REQUESTED_ALIAS.model_id,
+            "OPENAI_API_KEY",
+            "MCL_OPENAI_API_KEY",
+        ):
+            self.assertNotIn(leaked, visible)
+        self.assertEqual(record["instructions"], request.role_instruction)
+        self.assertEqual(
+            record["input"],
+            canonical_json({"stage_inputs": dict(request.stage_inputs)}),
+        )
+
+    def test_timeout_is_propagated_exactly_and_not_defaulted(self):
+        outcome, failure, records, _last = _invoke_offline_live(
+            self, _offline_success_config(), timeout=3.25
+        )
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+        self.assertEqual(records[0]["timeout"], 3.25)
+        self.assertEqual(records[0]["max_retries"], 0)
+
+    def test_malformed_refusal_incomplete_and_tool_responses_are_translated(self):
+        cases = (
+            (
+                "malformed",
+                _completed_fixture("{not json", output_text="{not json"),
+                ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL,
+            ),
+            (
+                "refusal",
+                {
+                    "id": "resp_ref",
+                    "object": "response",
+                    "status": "completed",
+                    "model": "gpt-5.6-sol-observed",
+                    "output": [
+                        {
+                            "id": "msg_1",
+                            "type": "message",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "refusal",
+                                    "refusal": "I cannot help with that.",
+                                }
+                            ],
+                        }
+                    ],
+                    "error": None,
+                    "incomplete_details": None,
+                },
+                ProviderErrorCategory.POLICY_REFUSAL,
+            ),
+            (
+                "incomplete",
+                _completed_fixture(
+                    _solver_envelope(),
+                    status="incomplete",
+                    incomplete_details={"reason": "max_output_tokens"},
+                ),
+                ProviderErrorCategory.INCOMPLETE_PROVIDER_RESULT,
+            ),
+            (
+                "tool",
+                {
+                    "id": "resp_tool",
+                    "object": "response",
+                    "status": "completed",
+                    "model": "gpt-5.6-sol-observed",
+                    "output": [
+                        {
+                            "id": "fc_1",
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "run_shell",
+                            "arguments": "{}",
+                        }
+                    ],
+                    "error": None,
+                    "incomplete_details": None,
+                },
+                ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL,
+            ),
+        )
+        for name, response, category in cases:
+            with self.subTest(name=name):
+                outcome, failure, records, _last = _invoke_offline_live(
+                    self, {"mode": "success", "response": response}
+                )
+                self.assertIsNotNone(failure)
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]["max_retries"], 0)
+                self.assertEqual(outcome.error.category, category)
+                self.assertIsNone(outcome.stage_output)
+                self.assertEqual(outcome.adapter_internal_retry_count, 0)
+                encoded = dumps_provider_call_outcome(outcome)
+                self.assertNotIn("run_shell", encoded)
+                _assert_secret_absent(self, encoded)
+
+    def test_classified_transport_failures_preserve_kind_category_and_bounded_evidence(self):
+        cases = (
+            (
+                "authentication",
+                _offline_error_config(
+                    "AuthenticationError",
+                    status=401,
+                    request_id="req_auth",
+                    message="Authorization: Bearer " + _FAKE_CREDENTIAL,
+                    attach_raw=True,
+                ),
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.AUTHENTICATION_CONFIGURATION,
+                OPENAI_AUTH_MESSAGE,
+                401,
+                "req_auth",
+                False,
+            ),
+            (
+                "permission",
+                _offline_error_config(
+                    "PermissionDeniedError", status=403, request_id="req_perm"
+                ),
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.PERMISSION,
+                OPENAI_PERMISSION_MESSAGE,
+                403,
+                "req_perm",
+                False,
+            ),
+            (
+                "quota",
+                _offline_error_config(
+                    "RateLimitError",
+                    status=429,
+                    code="insufficient_quota",
+                    type="insufficient_quota",
+                    request_id="req_quota",
+                    param="model",
+                ),
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.QUOTA_EXHAUSTED,
+                OPENAI_QUOTA_MESSAGE,
+                429,
+                "req_quota",
+                False,
+            ),
+            (
+                "rate_limit",
+                _offline_error_config(
+                    "RateLimitError",
+                    status=429,
+                    code="rate_limit_exceeded",
+                    type="rate_limit_error",
+                    request_id="req_rl",
+                    param="model",
+                    message="retry-after: 7",
+                    attach_raw=True,
+                ),
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.RATE_LIMIT,
+                OPENAI_RATE_LIMIT_MESSAGE,
+                429,
+                "req_rl",
+                True,
+            ),
+            (
+                "ambiguous_429",
+                _offline_error_config(
+                    "RateLimitError",
+                    status=429,
+                    type="rate_limit_error",
+                    request_id="req_amb",
+                    message="retry-after: 9",
+                ),
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE,
+                OPENAI_UNKNOWN_FAILURE_MESSAGE,
+                429,
+                "req_amb",
+                False,
+            ),
+            (
+                "connectivity",
+                _offline_error_config("APIConnectionError"),
+                ProviderCallKind.TRANSPORT_ERROR,
+                ProviderErrorCategory.TRANSPORT_CONNECTIVITY,
+                OPENAI_CONNECTIVITY_MESSAGE,
+                None,
+                None,
+                True,
+            ),
+            (
+                "timeout",
+                _offline_error_config("APITimeoutError"),
+                ProviderCallKind.TRANSPORT_ERROR,
+                ProviderErrorCategory.TRANSPORT_PROVIDER_TIMEOUT,
+                OPENAI_TIMEOUT_MESSAGE,
+                None,
+                None,
+                True,
+            ),
+            (
+                "overload",
+                _offline_error_config(
+                    "InternalServerError", status=500, request_id="req_5xx"
+                ),
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.PROVIDER_OVERLOAD_INTERNAL,
+                OPENAI_OVERLOAD_MESSAGE,
+                500,
+                "req_5xx",
+                True,
+            ),
+            (
+                "validation",
+                _offline_error_config("APIResponseValidationError", status=200),
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.MALFORMED_PROVIDER_PROTOCOL,
+                OPENAI_MALFORMED_MESSAGE,
+                200,
+                None,
+                False,
+            ),
+            (
+                "generic",
+                _offline_error_config("APIError", message="traceback at leak.py"),
+                ProviderCallKind.TRANSPORT_ERROR,
+                ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE,
+                OPENAI_UNKNOWN_FAILURE_MESSAGE,
+                None,
+                None,
+                False,
+            ),
+            (
+                "invalid_request",
+                _offline_error_config(
+                    "BadRequestError", status=400, request_id="req_bad"
+                ),
+                ProviderCallKind.PROVIDER_ERROR,
+                ProviderErrorCategory.INVALID_REQUEST,
+                OPENAI_INVALID_REQUEST_MESSAGE,
+                400,
+                "req_bad",
+                False,
+            ),
+        )
+        for (
+            name,
+            config,
+            kind,
+            category,
+            message,
+            status,
+            request_id,
+            retryable,
+        ) in cases:
+            with self.subTest(name=name):
+                outcome, failure, records, _last = _invoke_offline_live(self, config)
+                self.assertIsNotNone(failure)
+                self.assertEqual(failure.error.category, category)
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]["max_retries"], 0)
+                _assert_contained_failure(
+                    self,
+                    outcome,
+                    kind=kind,
+                    category=category,
+                    message=message,
+                    http_status=status,
+                    request_id=request_id,
+                )
+                self.assertEqual(is_retry_candidate(outcome.error.category), retryable)
+
+    def test_unsafe_observation_strings_are_dropped_from_failure_outcome(self):
+        outcome, failure, records, _last = _invoke_offline_live(
+            self,
+            _offline_error_config(
+                "AuthenticationError",
+                status=401,
+                request_id="Authorization: Bearer " + _FAKE_CREDENTIAL,
+                type="invalid_api_key",
+                code="sk-not-real",
+                param="api_key",
+                message="secret credential traceback",
+                attach_raw=True,
+            ),
+        )
+        self.assertIsNotNone(failure)
+        self.assertEqual(len(records), 1)
+        self.assertIsNone(outcome.provider_request_id.value)
+        encoded = dumps_provider_call_outcome(outcome)
+        _assert_secret_absent(self, encoded, *_failure_graph_blobs(failure))
+        self.assertNotIn("sk-not-real", encoded)
+        self.assertNotIn("invalid_api_key", encoded)
+        self.assertEqual(outcome.error.sanitized_message, OPENAI_AUTH_MESSAGE)
+
+    def test_unexpected_transport_result_and_exception_fail_closed(self):
+        request = _solver_request()
         with _isolated_environ(**{_CHILD_KEY: _FAKE_CREDENTIAL}):
             with patch(
-                "model_council.openai_adapter._perform_openai_responses_transport"
-            ) as transport:
-                with patch("model_council.openai_adapter.build_openai_client") as factory:
+                "model_council.openai_adapter._perform_openai_responses_transport",
+                return_value=object(),
+            ):
+                with self.assertRaises(ProtocolError) as ctx:
+                    openai_responses_skeleton({}, deep_freeze({}), request)
+        self.assertEqual(str(ctx.exception), OPENAI_TRANSPORT_RESULT_INVALID)
+        self.assertIsNone(ctx.exception.__cause__)
+        self.assertIsNone(ctx.exception.__context__)
+        with _isolated_environ(**{_CHILD_KEY: _FAKE_CREDENTIAL}):
+            with patch(
+                "model_council.openai_adapter._perform_openai_responses_transport",
+                side_effect=RuntimeError(
+                    "Authorization: Bearer " + _FAKE_CREDENTIAL
+                ),
+            ):
+                with self.assertRaises(ProtocolError) as ctx:
+                    openai_responses_skeleton({}, deep_freeze({}), request)
+        self.assertEqual(str(ctx.exception), OPENAI_TRANSPORT_RESULT_INVALID)
+        self.assertIsNone(ctx.exception.__cause__)
+        _assert_secret_absent(self, str(ctx.exception), *_failure_graph_blobs(ctx.exception))
+
+    def test_pretransport_failure_makes_zero_sdk_calls(self):
+        with TempRoot() as root:
+            python, calls = _install_offline_openai_python(root, _offline_success_config())
+            adapter = _openai_adapter(
+                python_executable=python, options={"timeout": 1}
+            )
+            with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
+                with self.assertRaises(InfrastructureError):
+                    adapter.invoke_live(_solver_request())
+            self.assertEqual(_read_offline_calls(calls), [])
+
+    def test_runner_owns_retry_decisions_for_retryable_and_nonretryable_failures(self):
+        cases = (
+            (
+                "nonretryable_quota",
+                _offline_error_config(
+                    "RateLimitError",
+                    status=429,
+                    code="insufficient_quota",
+                    type="insufficient_quota",
+                ),
+                1,
+                "infrastructure_failure",
+            ),
+            (
+                "nonretryable_ambiguous_429",
+                _offline_error_config(
+                    "RateLimitError", status=429, type="rate_limit_error"
+                ),
+                1,
+                "infrastructure_failure",
+            ),
+            (
+                "retryable_rate_limit",
+                _offline_error_config(
+                    "RateLimitError",
+                    status=429,
+                    code="rate_limit_exceeded",
+                    type="rate_limit_error",
+                ),
+                3,
+                "retry_exhausted",
+            ),
+        )
+        for name, config, expected_calls, status in cases:
+            with self.subTest(name=name):
+                with TempRoot() as root:
+                    python, calls = _install_offline_openai_python(root, config)
+                    adapter = SubprocessAdapter(
+                        FAKE_IDENTITY,
+                        kind=_OPENAI_KIND,
+                        python_executable=python,
+                    )
+                    counted = []
+                    original = adapter.invoke_live
+
+                    def wrapped(live_request):
+                        counted.append(live_request.attempt_timeout_seconds)
+                        return original(live_request)
+
+                    adapter.invoke_live = wrapped
+                    runner = ExperimentRunner(
+                        adapter,
+                        ExternalEvaluator(EvaluationConfig()),
+                        runs_root=Path(root) / "runs",
+                    )
+                    with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
+                        result = runner.execute(
+                            make_spec(f"oa-{name}", "A", max_stage_retries=2),
+                            make_task(),
+                        )
+                    self.assertEqual(result.status, status)
+                    self.assertEqual(len(counted), expected_calls)
+                    self.assertEqual(len(_read_offline_calls(calls)), expected_calls)
+                    blob = json.dumps(adapter.last_request)
+                    _assert_secret_absent(self, blob, str(result))
+
+    def test_adapter_source_does_not_own_retry_policy_or_sleep(self):
+        from model_council import openai_adapter as openai_mod
+
+        source = inspect.getsource(openai_mod)
+        self.assertNotIn("is_retry_candidate", source)
+        self.assertNotIn("retry_policy", source)
+        self.assertNotIn("time.sleep", source)
+        skeleton = inspect.getsource(openai_mod.openai_responses_skeleton)
+        self.assertIn("acquire_child_openai_runtime_secret", skeleton)
+        self.assertIn("build_openai_responses_request", skeleton)
+        self.assertIn("_perform_openai_responses_transport", skeleton)
+        self.assertIn("translate_openai_responses_result", skeleton)
+        self.assertIn("_openai_transport_failure_outcome", skeleton)
+        self.assertIn("request.attempt_timeout_seconds", skeleton)
+        self.assertNotIn("client_factory=", skeleton)
+
+    def test_registered_worker_path_returns_outcome_envelope(self):
+        payload = _live_envelope(
+            kind=_OPENAI_KIND,
+            options={},
+            treatment={},
+            request=_solver_request(),
+        )
+        fixture = _completed_fixture(_solver_envelope(), usage=_usage_fixture())
+
+        class _Client:
+            def __init__(self):
+                self.responses = types.SimpleNamespace(create=self.create)
+                self.calls = []
+
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                return fixture
+
+        client = _Client()
+
+        def factory(*, api_key, max_retries):
+            self.assertEqual(max_retries, 0)
+            self.assertEqual(api_key, _FAKE_CREDENTIAL)
+            return client
+
+        with _isolated_environ(**{_CHILD_KEY: _FAKE_CREDENTIAL}):
+            with patch(
+                "model_council.openai_adapter._default_openai_client_factory",
+                side_effect=factory,
+            ):
+                with patch("socket.socket", side_effect=AssertionError("network")):
                     code, parsed = _run_worker(payload)
+        self.assertEqual(code, 0)
+        self.assertTrue(parsed["ok"])
+        self.assertEqual(parsed["outcome"]["kind"], ProviderCallKind.SUCCESS.value)
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(client.calls[0]["timeout"], _solver_request().attempt_timeout_seconds)
+        self.assertNotIn(_CHILD_KEY, os.environ)
+        _assert_secret_absent(self, parsed)
+
+
+def _manual_transport_failure(
+    *,
+    kind=ProviderCallKind.PROVIDER_ERROR,
+    category=ProviderErrorCategory.AUTHENTICATION_CONFIGURATION,
+    http_status=401,
+    request_id="req_manual",
+    error_type=None,
+    error_code=None,
+    param=None,
+):
+    return _OpenAITransportFailure(
+        kind=kind,
+        category=category,
+        http_status=http_status,
+        request_id=request_id,
+        error_type=error_type,
+        error_code=error_code,
+        param=param,
+    )
+
+
+class TestOpenAITransportFailureConversionBoundary(unittest.TestCase):
+    def _convert(self, failure):
+        return _openai_transport_failure_outcome(_solver_request(), failure)
+
+    def test_unsafe_credential_like_request_id_becomes_unavailable(self):
+        unsafe = "Authorization: Bearer " + _FAKE_CREDENTIAL
+        outcome = self._convert(
+            _manual_transport_failure(http_status=401, request_id=unsafe)
+        )
+        _assert_contained_failure(
+            self,
+            outcome,
+            kind=ProviderCallKind.PROVIDER_ERROR,
+            category=ProviderErrorCategory.AUTHENTICATION_CONFIGURATION,
+            message=OPENAI_AUTH_MESSAGE,
+            http_status=401,
+            request_id=None,
+        )
+        encoded = dumps_provider_call_outcome(outcome)
+        self.assertNotIn(unsafe, encoded)
+        self.assertNotIn("authorization", encoded.lower())
+        _assert_secret_absent(self, encoded, outcome.to_dict())
+
+    def test_overlong_request_id_becomes_unavailable(self):
+        overlong = "n" * (MAX_OPENAI_OBSERVATION_CHARS + 1)
+        outcome = self._convert(
+            _manual_transport_failure(http_status=401, request_id=overlong)
+        )
+        _assert_contained_failure(
+            self,
+            outcome,
+            kind=ProviderCallKind.PROVIDER_ERROR,
+            category=ProviderErrorCategory.AUTHENTICATION_CONFIGURATION,
+            message=OPENAI_AUTH_MESSAGE,
+            http_status=401,
+            request_id=None,
+        )
+        encoded = dumps_provider_call_outcome(outcome)
+        self.assertNotIn(overlong, encoded)
+
+    def test_invalid_kind_category_pair_fails_closed(self):
+        failure = _manual_transport_failure(
+            kind=ProviderCallKind.PROVIDER_ERROR,
+            category=ProviderErrorCategory.TRANSPORT_CONNECTIVITY,
+            http_status=503,
+            request_id="req_incoherent",
+        )
+        with self.assertRaises(ProtocolError) as ctx:
+            self._convert(failure)
+        self.assertEqual(str(ctx.exception), OPENAI_TRANSPORT_RESULT_INVALID)
+        self.assertIsNone(ctx.exception.__cause__)
+        self.assertIsNone(ctx.exception.__context__)
+
+    def test_valid_http_status_survives_invalid_request_id(self):
+        unsafe = "Authorization: Bearer " + _FAKE_CREDENTIAL
+        outcome = self._convert(
+            _manual_transport_failure(http_status=429, request_id=unsafe)
+        )
+        _assert_contained_failure(
+            self,
+            outcome,
+            kind=ProviderCallKind.PROVIDER_ERROR,
+            category=ProviderErrorCategory.AUTHENTICATION_CONFIGURATION,
+            message=OPENAI_AUTH_MESSAGE,
+            http_status=429,
+            request_id=None,
+        )
+        self.assertNotIn(unsafe, dumps_provider_call_outcome(outcome))
+
+    def test_valid_request_id_survives_invalid_http_status(self):
+        outcome = self._convert(
+            _manual_transport_failure(http_status=99, request_id="req_independent")
+        )
+        _assert_contained_failure(
+            self,
+            outcome,
+            kind=ProviderCallKind.PROVIDER_ERROR,
+            category=ProviderErrorCategory.AUTHENTICATION_CONFIGURATION,
+            message=OPENAI_AUTH_MESSAGE,
+            http_status=None,
+            request_id="req_independent",
+        )
+
+    def test_hostile_failure_cannot_cross_worker_protocol(self):
+        unsafe = "Authorization: Bearer " + _FAKE_CREDENTIAL
+        failure = _manual_transport_failure(
+            http_status=401,
+            request_id=unsafe,
+            error_type="invalid_api_key",
+            error_code="sk-not-real",
+            param="api_key",
+        )
+        payload = _live_envelope(
+            kind=_OPENAI_KIND,
+            options={},
+            treatment={},
+            request=_solver_request(),
+        )
+        with _isolated_environ(**{_CHILD_KEY: _FAKE_CREDENTIAL}):
+            with patch(
+                "model_council.openai_adapter._perform_openai_responses_transport",
+                return_value=failure,
+            ):
+                with patch("socket.socket", side_effect=AssertionError("network")):
+                    code, parsed = _run_worker(payload)
+        self.assertEqual(code, 0)
+        self.assertTrue(parsed["ok"])
+        encoded = json.dumps(parsed)
+        self.assertNotIn(unsafe, encoded)
+        self.assertNotIn(_FAKE_CREDENTIAL, encoded)
+        self.assertIsNone(parsed["outcome"]["provider_request_id"]["value"])
+        self.assertEqual(parsed["outcome"]["error"]["http_status"]["value"], 401)
+        self.assertEqual(
+            parsed["outcome"]["kind"], ProviderCallKind.PROVIDER_ERROR.value
+        )
+        self.assertNotIn("sk-not-real", encoded)
+        self.assertNotIn("invalid_api_key", encoded)
+
+    def test_malformed_failure_fails_closed(self):
+        cases = (
+            object(),
+            _manual_transport_failure(kind="provider_error"),
+            _manual_transport_failure(
+                kind=ProviderCallKind.SUCCESS,
+                category=ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE,
+            ),
+            _manual_transport_failure(category="authentication_configuration"),
+        )
+        for failure in cases:
+            with self.subTest(failure=repr(failure)[:80]):
+                with self.assertRaises(ProtocolError) as ctx:
+                    self._convert(failure)
+                self.assertEqual(str(ctx.exception), OPENAI_TRANSPORT_RESULT_INVALID)
+                self.assertIsNone(ctx.exception.__cause__)
+                self.assertIsNone(ctx.exception.__context__)
+
+    def test_incoherent_pair_cannot_cross_worker_as_valid_outcome(self):
+        failure = _manual_transport_failure(
+            kind=ProviderCallKind.PROVIDER_ERROR,
+            category=ProviderErrorCategory.TRANSPORT_CONNECTIVITY,
+            http_status=503,
+            request_id="req_incoherent",
+        )
+        payload = _live_envelope(
+            kind=_OPENAI_KIND,
+            options={},
+            treatment={},
+            request=_solver_request(),
+        )
+        with _isolated_environ(**{_CHILD_KEY: _FAKE_CREDENTIAL}):
+            with patch(
+                "model_council.openai_adapter._perform_openai_responses_transport",
+                return_value=failure,
+            ):
+                code, parsed = _run_worker(payload)
         self.assertEqual(code, 0)
         self.assertFalse(parsed["ok"])
         self.assertEqual(parsed["error_class"], "ProtocolError")
-        self.assertIn("translation is not implemented", parsed["message"])
-        factory.assert_not_called()
-        transport.assert_not_called()
+        self.assertEqual(parsed["message"], OPENAI_TRANSPORT_RESULT_INVALID)
+        encoded = json.dumps(parsed)
+        self.assertNotIn("transport_connectivity", encoded)
+        self.assertNotIn("req_incoherent", encoded)
+
+
+class TestOpenAIProviderStdioIsolation(unittest.TestCase):
+    _F08_CANARY = "MCL-F08-CANARY"
+
+    def _invoke_leaky(self, *, leaky_getter=False, print_text=None, print_stream="stdout"):
+        config = _offline_success_config()
+        if leaky_getter:
+            config["leaky_getter"] = True
+        if print_text is not None:
+            config["print_text"] = print_text
+        config["print_stream"] = print_stream
+        return _invoke_offline_live(self, config)
+
+    def _invoke_hostile_stdio(
+        self,
+        *,
+        print_target,
+        print_text=None,
+        leaky_getter=True,
+        error=None,
+    ):
+        if error is None:
+            config = _offline_success_config()
+        else:
+            config = _offline_error_config(error)
+        config["print_target"] = print_target
+        if print_text is not None:
+            config["print_text"] = print_text
+        if leaky_getter:
+            config["leaky_getter"] = True
+        try:
+            outcome, failure, records, last = _invoke_offline_live(self, config)
+            return outcome, failure, records, last, None
+        except Exception as caught:
+            return None, None, None, None, caught
+
+    def _assert_hostile_stdio_contained(self, exc, outcome, failure, last, records, canary):
+        if exc is not None:
+            _assert_openai_parent_graph_closed(self, exc)
+            _assert_secret_absent(self, str(exc), repr(exc), *_failure_graph_blobs(exc))
+            self.assertNotIn(canary, str(exc))
+            self.assertNotIn(canary, repr(exc))
+            self.fail("hostile provider stdio corrupted the trusted protocol channel")
+        encoded = dumps_provider_call_outcome(outcome)
+        self.assertNotIn(canary, encoded)
+        _assert_secret_absent(self, encoded, last, records)
+        if failure is not None:
+            _assert_secret_absent(self, *_failure_graph_blobs(failure))
+            self.assertNotIn(canary, str(failure))
+
+    def test_leaky_stdout_getter_cannot_contaminate_protocol_or_parent_graph(self):
+        try:
+            outcome, failure, records, last = self._invoke_leaky(leaky_getter=True)
+            exc = None
+        except Exception as caught:
+            outcome, failure, records, last = None, None, None, None
+            exc = caught
+        if exc is not None:
+            _assert_openai_parent_graph_closed(self, exc)
+            _assert_secret_absent(self, str(exc), repr(exc), *_failure_graph_blobs(exc))
+            self.fail("leaky provider stdout should not break the trusted protocol")
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+        self.assertEqual(len(records), 1)
+        encoded = dumps_provider_call_outcome(outcome)
+        _assert_secret_absent(self, encoded, last, records)
+        self.assertNotIn(_FAKE_CREDENTIAL, encoded)
+
+    def test_leaky_stderr_getter_cannot_contaminate_protocol_or_parent_graph(self):
+        try:
+            outcome, failure, records, last = self._invoke_leaky(
+                leaky_getter=True, print_stream="stderr"
+            )
+            exc = None
+        except Exception as caught:
+            outcome, failure, records, last = None, None, None, None
+            exc = caught
+        if exc is not None:
+            _assert_openai_parent_graph_closed(self, exc)
+            _assert_secret_absent(self, str(exc), repr(exc), *_failure_graph_blobs(exc))
+            self.fail("leaky provider stderr should not break the trusted protocol")
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+        encoded = dumps_provider_call_outcome(outcome)
+        _assert_secret_absent(self, encoded, last, records)
+
+    def test_provider_stdout_noise_does_not_prefix_protocol(self):
+        outcome, failure, records, last = self._invoke_leaky(
+            print_text="provider-local stdout noise"
+        )
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+        self.assertEqual(len(records), 1)
+        encoded = dumps_provider_call_outcome(outcome)
+        self.assertNotIn("provider-local stdout noise", encoded)
+        _assert_secret_absent(self, encoded, last)
+
+    def test_provider_stderr_noise_does_not_prefix_protocol(self):
+        outcome, failure, records, last = self._invoke_leaky(
+            print_text="provider-local stderr noise", print_stream="stderr"
+        )
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+        encoded = dumps_provider_call_outcome(outcome)
+        self.assertNotIn("provider-local stderr noise", encoded)
+        _assert_secret_absent(self, encoded, last)
+
+    def test_successful_worker_path_still_emits_one_json_protocol_payload(self):
+        outcome, failure, records, last = _invoke_offline_live(
+            self, _offline_success_config()
+        )
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+        self.assertEqual(len(records), 1)
+        encoded = dumps_provider_call_outcome(outcome)
+        json.loads(encoded)
+        _assert_secret_absent(self, encoded, last)
+
+    def test_sys_dunder_stdout_cannot_corrupt_trusted_protocol(self):
+        canary = self._F08_CANARY
+        outcome, failure, records, last, exc = self._invoke_hostile_stdio(
+            print_target="__stdout__", print_text=canary
+        )
+        self._assert_hostile_stdio_contained(exc, outcome, failure, last, records, canary)
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+
+    def test_fd1_write_cannot_corrupt_trusted_protocol(self):
+        canary = self._F08_CANARY
+        outcome, failure, records, last, exc = self._invoke_hostile_stdio(
+            print_target="fd1", print_text=canary
+        )
+        self._assert_hostile_stdio_contained(exc, outcome, failure, last, records, canary)
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+
+    def test_sys_dunder_stderr_cannot_corrupt_trusted_protocol(self):
+        canary = self._F08_CANARY
+        outcome, failure, records, last, exc = self._invoke_hostile_stdio(
+            print_target="__stderr__", print_text=canary
+        )
+        self._assert_hostile_stdio_contained(exc, outcome, failure, last, records, canary)
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+
+    def test_fd2_write_cannot_corrupt_trusted_protocol(self):
+        canary = self._F08_CANARY
+        outcome, failure, records, last, exc = self._invoke_hostile_stdio(
+            print_target="fd2", print_text=canary
+        )
+        self._assert_hostile_stdio_contained(exc, outcome, failure, last, records, canary)
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+
+    def test_credential_on_fd1_cannot_enter_parent_protocol_or_exception_graph(self):
+        outcome, failure, records, last, exc = self._invoke_hostile_stdio(
+            print_target="fd1"
+        )
+        self._assert_hostile_stdio_contained(
+            exc, outcome, failure, last, records, _FAKE_CREDENTIAL
+        )
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+
+    def test_credential_on_dunder_stdout_cannot_enter_parent_graph(self):
+        outcome, failure, records, last, exc = self._invoke_hostile_stdio(
+            print_target="__stdout__"
+        )
+        self._assert_hostile_stdio_contained(
+            exc, outcome, failure, last, records, _FAKE_CREDENTIAL
+        )
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+
+    def test_credential_on_dunder_stderr_cannot_enter_parent_graph(self):
+        outcome, failure, records, last, exc = self._invoke_hostile_stdio(
+            print_target="__stderr__"
+        )
+        self._assert_hostile_stdio_contained(
+            exc, outcome, failure, last, records, _FAKE_CREDENTIAL
+        )
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+
+    def test_credential_on_fd2_cannot_enter_parent_protocol_or_exception_graph(self):
+        outcome, failure, records, last, exc = self._invoke_hostile_stdio(
+            print_target="fd2"
+        )
+        self._assert_hostile_stdio_contained(
+            exc, outcome, failure, last, records, _FAKE_CREDENTIAL
+        )
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+
+    def test_descriptor_noise_before_during_after_success_remains_one_envelope(self):
+        canary = self._F08_CANARY + "-noise"
+        outcome, failure, records, last, exc = self._invoke_hostile_stdio(
+            print_target="fd1", print_text=canary, leaky_getter=True
+        )
+        self._assert_hostile_stdio_contained(exc, outcome, failure, last, records, canary)
+        self.assertIsNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
+        self.assertEqual(len(records), 1)
+        encoded = dumps_provider_call_outcome(outcome)
+        json.loads(encoded)
+
+    def test_descriptor_noise_then_provider_error_still_crosses(self):
+        canary = self._F08_CANARY + "-fail"
+        outcome, failure, records, last, exc = self._invoke_hostile_stdio(
+            print_target="fd1",
+            print_text=canary,
+            leaky_getter=False,
+            error="APIConnectionError",
+        )
+        self._assert_hostile_stdio_contained(exc, outcome, failure, last, records, canary)
+        self.assertIsNotNone(failure)
+        self.assertEqual(outcome.kind, ProviderCallKind.TRANSPORT_ERROR)
+        self.assertEqual(
+            outcome.error.category, ProviderErrorCategory.TRANSPORT_CONNECTIVITY
+        )
+        self.assertEqual(len(records), 1)
 
 
 class TestOpenAITransportOptionalSDK(unittest.TestCase):
