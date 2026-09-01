@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -107,6 +108,7 @@ SOURCE_PROVENANCE = "source_provenance.json"
 RUN_AUTHORITY = "run_authority.json"
 RUN_AUTHORITY_SCHEMA = "m1-run-authority-v1"
 STAGING_ROOT = ".uncommitted"
+CONSTRUCTOR_STAGING_PREFIX = ".init-"
 ALLOWED_EVENTS = frozenset({EVENT_EVALUATION, EVENT_RUN_RESULT, EVENT_GOVERNANCE_VIOLATION, EVENT_INTEGRITY})
 
 
@@ -132,20 +134,47 @@ class ArtifactStore:
         self._authoritative: dict[tuple[str, str], str] = {}
         self._authoritative_invocations: dict[tuple[str, int, str], str] = {}
         self.max_raw_evidence_bytes = int(max_raw_evidence_bytes)
-        self.run_dir.mkdir(parents=True)
-        for role in self._allowed_roles:
-            (self.run_dir / role).mkdir()
-        spec_path = self.run_dir / "run_spec.json"
-        spec_path.write_text(
-            json.dumps(
-                {"canonical": run_spec.canonical_json(), "spec_hash": run_spec.spec_hash},
-                indent=2,
-                sort_keys=True,
-            ),
-            encoding="utf-8",
-        )
-        spec_path.chmod(0o444)
-        self._spec_path = spec_path
+        staging = None
+        # Identity of the private staging directory, captured before rename.
+        # This is what distinguishes "we just published this tree" from a
+        # pre-existing canonical run after an asynchronous exception lands
+        # between a successful rename syscall and the next Python opcode.
+        staging_identity = None
+        try:
+            self.runs_root.mkdir(parents=True, exist_ok=True)
+            staging = _constructor_staging_dir(self.runs_root, run_spec.run_id)
+            staging.mkdir()
+            for role in self._allowed_roles:
+                (staging / role).mkdir()
+            spec_path = staging / "run_spec.json"
+            spec_path.write_text(
+                json.dumps(
+                    {"canonical": run_spec.canonical_json(), "spec_hash": run_spec.spec_hash},
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            spec_path.chmod(0o444)
+            if self.run_dir.exists():
+                raise GovernanceViolation(f"run directory already exists: {self.run_dir}")
+            staging_identity = _directory_identity(staging)
+            try:
+                staging.rename(self.run_dir)
+            except OSError as exc:
+                if self.run_dir.exists():
+                    raise GovernanceViolation(
+                        f"run directory already exists: {self.run_dir}"
+                    ) from exc
+                raise
+            self._spec_path = self.run_dir / "run_spec.json"
+        except BaseException:
+            _cleanup_failed_constructor(
+                staging,
+                canonical=self.run_dir,
+                identity=staging_identity,
+            )
+            raise
 
     @property
     def spec_path(self) -> Path:
@@ -446,7 +475,7 @@ class ArtifactStore:
             before_persist()
         seal_path = self.run_dir / "seals" / f"{role}.json"
         seal_path.parent.mkdir(exist_ok=True)
-        seal_path.write_text(json.dumps(seal, indent=2, sort_keys=True), encoding="utf-8")
+        _atomic_replace_text(seal_path, json.dumps(seal, indent=2, sort_keys=True))
         self._sealed.add(role)
         return seal
 
@@ -469,13 +498,11 @@ class ArtifactStore:
             raise IntegrityViolation(f"no seal record for stage {role!r}")
         try:
             seal = json.loads(seal_path.read_text())
-            entries = seal["artifacts"]
-            seal_role = seal["role"]
-            stage_digest = seal["stage_digest"]
-        except (OSError, TypeError, ValueError, KeyError) as exc:
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise IntegrityViolation(f"malformed seal record for stage {role!r}") from exc
-        if type(seal) is not dict or type(entries) is not list or seal_role != role:
-            raise IntegrityViolation(f"malformed seal record for stage {role!r}")
+        _assert_persisted_seal_shape(role, seal)
+        entries = seal["artifacts"]
+        stage_digest = seal["stage_digest"]
 
         expected_keys = {(role, name) for name in EXPECTED_ARTIFACTS[role]}
         seal_index = _index_entries(entries, f"seal for stage {role!r}")
@@ -519,7 +546,7 @@ class ArtifactStore:
                 raise IntegrityViolation(f"authoritative hash mismatch: {key[0]}/{key[1]}")
         self._verify_role_invocations(
             role,
-            seal.get("invocations") or [],
+            _seal_invocations(seal),
             require_seal_match=True,
         )
         _verify_seal_invocation_bind(role, seal, self._manifest_entries())
@@ -609,6 +636,11 @@ class ArtifactStore:
             and e.get("role") == role
         ]
         if require_seal_match:
+            if type(seal_invocations) is not list:
+                raise IntegrityViolation(f"seal invocations for stage {role!r} must be an array")
+            for entry in seal_invocations:
+                if type(entry) is not dict:
+                    raise IntegrityViolation(f"seal invocation entry for stage {role!r} is not an object")
             seal_index = {(e.get("kind"), e.get("attempt"), e.get("ref")): e for e in seal_invocations}
             man_index = {(e.get("kind"), e.get("attempt"), e.get("ref")): e for e in manifest_inv}
             if set(seal_index) != set(man_index):
@@ -716,9 +748,8 @@ class ArtifactStore:
         for role in expected_roles:
             try:
                 seal = json.loads((seals_dir / f"{role}.json").read_text())
+                _assert_persisted_seal_shape(role, seal)
                 entries = seal["artifacts"]
-                if type(seal) is not dict or type(entries) is not list or seal["role"] != role:
-                    raise IntegrityViolation(f"malformed seal record for stage {role!r}")
                 role_keys = {(role, name) for name in EXPECTED_ARTIFACTS[role]}
                 seal_index = _index_entries(entries, f"seal for stage {role!r}")
                 if set(seal_index) != role_keys:
@@ -873,7 +904,6 @@ class ArtifactStore:
             raise IntegrityViolation(f"run evidence is incomplete for {run_id!r}")
         if not result_path.exists():
             raise IntegrityViolation(f"terminal record is missing for {run_id!r}")
-        _assert_run_authority(run_dir, run_id)
         try:
             spec_payload = json.loads(spec_path.read_text())
             canonical = json.loads(spec_payload["canonical"])
@@ -889,6 +919,8 @@ class ArtifactStore:
             payload = json.loads(result_path.read_text())
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise IntegrityViolation(f"malformed terminal record for {run_id!r}") from exc
+        if type(payload) is not dict:
+            raise IntegrityViolation(f"malformed terminal record for {run_id!r}")
         status = payload.get("status")
         if status not in _TERMINAL_STATUSES:
             raise IntegrityViolation(f"terminal record has unrecognized status {status!r}")
@@ -896,6 +928,26 @@ class ArtifactStore:
             raise IntegrityViolation("terminal record harness protocol version mismatch")
         if payload.get("spec_hash") != spec_payload["spec_hash"]:
             raise IntegrityViolation("terminal record spec_hash does not match run_spec.json")
+        authority_committed = _require_terminal_authority_committed(payload)
+        _assert_terminal_identity_bindings(run_id=run_id, canonical=canonical, payload=payload)
+        if not authority_committed:
+            if not _legitimate_pre_authority_setup_failure(run_dir, payload):
+                raise IntegrityViolation(
+                    "authority_committed is false but the run is not a legitimate "
+                    "pre-authority setup failure"
+                )
+            return {
+                "run_id": run_id,
+                "verification_scope": "terminal_run",
+                "terminal_verified": True,
+                "terminal_status": status,
+                "authority_committed": False,
+                "invocation_evidence_verified": True,
+                "completed_topology_verified": False,
+                "sealed_stages": [],
+                "verified_at": _utcnow(),
+            }
+        _assert_run_authority(run_dir, run_id)
         _assert_terminal_record_coherence(
             run_id=run_id,
             run_dir=run_dir,
@@ -957,19 +1009,102 @@ class ArtifactStore:
             "verified_at": _utcnow(),
         }
 
-    def record_event(self, filename: str, payload: dict) -> str:
+    def record_event(self, filename: str, payload: dict, *, overwrite: bool = False) -> str:
         if filename not in ALLOWED_EVENTS:
             raise GovernanceViolation(
                 f"event filename {filename!r} is not an internal constant; allowed={sorted(ALLOWED_EVENTS)}"
             )
         path = self.run_dir / filename
         contained_path(self.run_dir, path)
-        if path.exists():
+        if path.exists() and not overwrite:
             raise GovernanceViolation(f"event file already exists: {filename}")
         payload = dict(payload)
         payload["recorded_at"] = _utcnow()
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        _atomic_replace_text(path, json.dumps(payload, indent=2, sort_keys=True))
         return str(path.relative_to(self.run_dir))
+
+
+def _constructor_staging_dir(runs_root: Path, run_id: str) -> Path:
+    """Private sibling of the canonical run directory, never a valid run_id."""
+    name = f"{CONSTRUCTOR_STAGING_PREFIX}{run_id}-{uuid.uuid4().hex}"
+    return contained_path(runs_root, runs_root / name)
+
+
+def _directory_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_dev, stat.st_ino)
+
+
+def _discard_constructor_staging(staging: Path | None, *, canonical: Path) -> None:
+    """Remove only the private staging directory. Never touch canonical."""
+    if staging is None:
+        return
+    try:
+        if staging.is_symlink() or staging.is_file():
+            staging.unlink()
+            return
+        if not staging.exists():
+            return
+        if not staging.name.startswith(CONSTRUCTOR_STAGING_PREFIX):
+            return
+        staging_resolved = staging.resolve()
+        canonical_resolved = canonical.resolve()
+        if staging_resolved == canonical_resolved:
+            return
+        runs_root = canonical_resolved.parent
+        if not staging_resolved.is_relative_to(runs_root):
+            return
+        shutil.rmtree(staging)
+    except OSError:
+        return
+
+
+def _rollback_just_published_canonical(canonical: Path, identity: tuple[int, int] | None) -> None:
+    """Remove a canonical tree only when it is this constructor's publication.
+
+    Identity is the (dev, ino) of the private staging directory, captured
+    before rename. A pre-existing canonical run has a different identity and
+    is never deleted. Same-user empty-destination TOCTOU during rename remains
+    outside the threat model (Decision 0004).
+    """
+    if identity is None:
+        return
+    try:
+        if canonical.is_symlink() or not canonical.is_dir():
+            return
+        if _directory_identity(canonical) != identity:
+            return
+        shutil.rmtree(canonical)
+    except OSError:
+        return
+
+
+def _cleanup_failed_constructor(
+    staging: Path | None,
+    *,
+    canonical: Path,
+    identity: tuple[int, int] | None,
+) -> None:
+    """Constructor failure must not pin the run_id with a newly published tree."""
+    _discard_constructor_staging(staging, canonical=canonical)
+    _rollback_just_published_canonical(canonical, identity)
+
+
+def _atomic_replace_text(path: Path, text: str) -> None:
+    """Replace ``path`` with ``text`` so readers never observe a partial file."""
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
+    except BaseException:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def _sha256_file(path: Path) -> str:
@@ -986,6 +1121,75 @@ _RUN_AUTHORITY_BINDINGS = (
     ("source_provenance_sha256", SOURCE_PROVENANCE),
     ("treatment_declaration_sha256", TREATMENT_DECLARATION),
 )
+
+
+def _require_terminal_authority_committed(payload: object) -> bool:
+    if type(payload) is not dict:
+        raise IntegrityViolation("terminal record must be an object")
+    if "authority_committed" not in payload:
+        raise IntegrityViolation("terminal record is missing authority_committed")
+    flag = payload["authority_committed"]
+    if type(flag) is not bool:
+        raise IntegrityViolation("terminal record authority_committed must be a boolean")
+    return flag
+
+
+def _legitimate_pre_authority_setup_failure(run_dir: Path, payload: dict) -> bool:
+    """True only for a declared setup failure that never committed run authority.
+
+    Missing authority on a run that claims or proves post-authority progress
+    remains an integrity error. This exemption is not a global waiver.
+    """
+    if type(payload) is not dict:
+        return False
+    if type(payload.get("authority_committed")) is not bool or payload["authority_committed"] is not False:
+        return False
+    if payload.get("status") != STATUS_INFRASTRUCTURE_FAILURE:
+        return False
+    if payload.get("evaluation") is not None:
+        return False
+    if payload.get("evaluation_error") not in {None, ""}:
+        return False
+    stages = payload.get("stages") or []
+    if type(stages) is not list:
+        return False
+    if any(type(stage) is dict and stage.get("status") == "succeeded" for stage in stages):
+        return False
+    if (run_dir / RUN_AUTHORITY).exists():
+        return False
+    if (run_dir / EVENT_EVALUATION).exists():
+        return False
+    seals_dir = run_dir / "seals"
+    if seals_dir.exists() and any(path.suffix == ".json" for path in seals_dir.iterdir()):
+        return False
+    invocation_root = run_dir / INVOCATION_ROOT
+    if invocation_root.exists() and any(path.is_file() for path in invocation_root.rglob("*")):
+        return False
+    for role in EXPECTED_ARTIFACTS:
+        role_dir = run_dir / role
+        if role_dir.is_dir() and any(path.is_file() for path in role_dir.rglob("*")):
+            return False
+    manifest_path = run_dir / MANIFEST
+    if manifest_path.is_file():
+        try:
+            manifest_text = manifest_path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        if any(line.strip() for line in manifest_text.splitlines()):
+            return False
+    if payload.get("final_candidate_ref") not in {None, ""}:
+        return False
+    if _terminal_field_has_progress(payload.get("integrity")):
+        return False
+    if _terminal_field_has_progress(payload.get("verified_identity")):
+        return False
+    return True
+
+
+def _terminal_field_has_progress(value) -> bool:
+    if value is None or value == "" or value == {} or value == []:
+        return False
+    return True
 
 
 def _assert_run_authority(run_dir: Path, run_id: str) -> dict:
@@ -1013,13 +1217,7 @@ def _assert_run_authority(run_dir: Path, run_id: str) -> dict:
     return authority
 
 
-def _assert_terminal_record_coherence(
-    *,
-    run_id: str,
-    run_dir: Path,
-    canonical: dict,
-    payload: dict,
-) -> None:
+def _assert_terminal_identity_bindings(*, run_id: str, canonical: dict, payload: dict) -> None:
     if payload.get("run_id") != run_id:
         raise IntegrityViolation("terminal record run_id does not match the run directory")
     if canonical.get("run_id") != run_id:
@@ -1028,6 +1226,16 @@ def _assert_terminal_record_coherence(
         raise IntegrityViolation("terminal record condition does not match run_spec.json")
     if payload.get("model_identifier") != canonical.get("model_identifier"):
         raise IntegrityViolation("terminal record model identity does not match run_spec.json")
+
+
+def _assert_terminal_record_coherence(
+    *,
+    run_id: str,
+    run_dir: Path,
+    canonical: dict,
+    payload: dict,
+) -> None:
+    _assert_terminal_identity_bindings(run_id=run_id, canonical=canonical, payload=payload)
     task_record = _read_frozen_object(run_dir, TASK_RECORD, "task record")
     execution_binding = _read_frozen_object(run_dir, EXECUTION_BINDING, "execution binding")
     evaluator_binding = _read_frozen_object(run_dir, EVALUATOR_BINDING, "evaluator binding")
@@ -1568,10 +1776,64 @@ def _entry_kind(entry: dict) -> str:
     return kind
 
 
+def _seal_invocations(seal: dict) -> list:
+    if "invocations" not in seal:
+        return []
+    invocations = seal["invocations"]
+    if type(invocations) is not list:
+        raise IntegrityViolation("seal invocations must be an array")
+    return invocations
+
+
+def _assert_persisted_seal_shape(role: str, seal: object) -> None:
+    if type(seal) is not dict:
+        raise IntegrityViolation(f"malformed seal record for stage {role!r}")
+    if type(seal.get("role")) is not str or seal.get("role") != role:
+        raise IntegrityViolation(f"malformed seal record for stage {role!r}")
+    artifacts = seal.get("artifacts")
+    if type(artifacts) is not list:
+        raise IntegrityViolation(f"malformed seal record for stage {role!r}")
+    for entry in artifacts:
+        if type(entry) is not dict:
+            raise IntegrityViolation(f"seal for stage {role!r} contains a non-object artifact entry")
+        if type(entry.get("role")) is not str or type(entry.get("name")) is not str:
+            raise IntegrityViolation(f"seal for stage {role!r} contains an invalid artifact reference")
+        if type(entry.get("sha256")) is not str:
+            raise IntegrityViolation(f"seal for stage {role!r} contains an invalid artifact digest")
+        size = entry.get("bytes")
+        if type(size) is not int or size < 0:
+            raise IntegrityViolation(f"seal for stage {role!r} contains an invalid artifact byte count")
+    invocations = _seal_invocations(seal)
+    for entry in invocations:
+        _assert_seal_invocation_entry(role, entry)
+    expected_attempts = seal.get("expected_attempts", 0)
+    if type(expected_attempts) is not int or expected_attempts < 0:
+        raise IntegrityViolation(f"malformed seal record for stage {role!r}")
+    if type(seal.get("stage_digest")) is not str:
+        raise IntegrityViolation(f"malformed seal record for stage {role!r}")
+
+
+def _assert_seal_invocation_entry(role: str, entry: object) -> None:
+    if type(entry) is not dict:
+        raise IntegrityViolation(f"seal invocation entry for stage {role!r} is not an object")
+    if type(entry.get("kind")) is not str:
+        raise IntegrityViolation(f"seal invocation entry for stage {role!r} has an invalid kind")
+    attempt = entry.get("attempt")
+    if type(attempt) is not int or attempt < 1:
+        raise IntegrityViolation(f"seal invocation entry for stage {role!r} has an invalid attempt")
+    if type(entry.get("ref")) is not str or not entry.get("ref"):
+        raise IntegrityViolation(f"seal invocation entry for stage {role!r} has an invalid ref")
+    if type(entry.get("sha256")) is not str:
+        raise IntegrityViolation(f"seal invocation entry for stage {role!r} has an invalid digest")
+    size = entry.get("bytes")
+    if type(size) is not int or size < 0:
+        raise IntegrityViolation(f"seal invocation entry for stage {role!r} has an invalid byte count")
+
+
 def _seal_digest_body(seal: dict, artifacts: list) -> dict:
     return {
         "artifacts": artifacts,
-        "invocations": seal.get("invocations") or [],
+        "invocations": _seal_invocations(seal),
         "expected_attempts": seal.get("expected_attempts", 0),
     }
 
@@ -1595,9 +1857,9 @@ def _invocation_seal_entry(entry: dict) -> dict:
 
 
 def _verify_seal_invocation_bind(role: str, seal: dict, manifest_entries: list[dict]) -> None:
-    seal_inv = seal.get("invocations") or []
-    if type(seal_inv) is not list:
-        raise IntegrityViolation(f"seal invocations for stage {role!r} must be an array")
+    seal_inv = _seal_invocations(seal)
+    for entry in seal_inv:
+        _assert_seal_invocation_entry(role, entry)
     man_inv = [
         e
         for e in manifest_entries
@@ -1609,8 +1871,6 @@ def _verify_seal_invocation_bind(role: str, seal: dict, manifest_entries: list[d
     if set(seal_index) != set(man_index):
         raise IntegrityViolation(f"seal invocations for stage {role!r} do not match the manifest")
     for key, seal_entry in seal_index.items():
-        if type(seal_entry) is not dict:
-            raise IntegrityViolation(f"seal invocation entry for {key} is not an object")
         record = man_index[key]
         expected = _invocation_seal_entry(record)
         extra = set(seal_entry) - set(expected)
@@ -1628,7 +1888,9 @@ def _verify_seal_invocation_bind(role: str, seal: dict, manifest_entries: list[d
         e.get("attempt") for e in man_inv if e.get("kind") == KIND_INVOCATION_METADATA
     )
     expected_attempts = seal.get("expected_attempts", 0)
-    if meta_attempts != list(range(1, int(expected_attempts) + 1)):
+    if type(expected_attempts) is not int or expected_attempts < 0:
+        raise IntegrityViolation(f"malformed seal record for stage {role!r}")
+    if meta_attempts != list(range(1, expected_attempts + 1)):
         raise IntegrityViolation(
             f"sealed invocation attempts for stage {role!r} are not the consecutive "
             f"1..{expected_attempts} topology"
@@ -1810,11 +2072,10 @@ def _verify_persisted_seal(run_dir: Path, role: str, manifest_entries: list[dict
     seal_path = contained_path(run_dir, run_dir / "seals" / f"{role}.json")
     try:
         seal = json.loads(seal_path.read_text())
-        entries = seal["artifacts"]
-    except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise IntegrityViolation(f"malformed seal record for stage {role!r}") from exc
-    if type(seal) is not dict or type(entries) is not list or seal.get("role") != role:
-        raise IntegrityViolation(f"malformed seal record for stage {role!r}")
+    _assert_persisted_seal_shape(role, seal)
+    entries = seal["artifacts"]
     expected_keys = {(role, name) for name in EXPECTED_ARTIFACTS[role]}
     seal_index = _index_entries(entries, f"seal for stage {role!r}")
     if set(seal_index) != expected_keys:

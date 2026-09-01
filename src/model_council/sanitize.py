@@ -11,6 +11,8 @@ from .security import sha256_bytes
 MAX_SANITIZED_ERROR_CHARS = 256
 WORKER_SANITIZED_FAILURE = "worker aborted with a sanitized infrastructure failure"
 WORKER_CRASH_SUMMARY = "worker process crashed"
+INTERRUPTED_INFRASTRUCTURE_MESSAGE = "run aborted by a sanitized infrastructure interrupt"
+INTERRUPTED_EVALUATION_MESSAGE = "evaluation aborted by a sanitized infrastructure interrupt"
 
 _SECRET_MARKERS = (
     "authorization",

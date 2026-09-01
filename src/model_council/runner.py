@@ -27,6 +27,7 @@ Second-audit remediation:
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,8 @@ from .artifacts import (
     EVENT_GOVERNANCE_VIOLATION,
     EVENT_INTEGRITY,
     EVENT_RUN_RESULT,
+    MANIFEST,
+    RUN_AUTHORITY,
     ArtifactStore,
 )
 from .executor import SubprocessAdapter
@@ -61,7 +64,12 @@ from .protocol import (
     execution_profile_for_kind,
 )
 from .retry_policy import is_retry_candidate
-from .sanitize import WORKER_SANITIZED_FAILURE, sanitize_exception
+from .sanitize import (
+    INTERRUPTED_EVALUATION_MESSAGE,
+    INTERRUPTED_INFRASTRUCTURE_MESSAGE,
+    WORKER_SANITIZED_FAILURE,
+    sanitize_exception,
+)
 from .roles import (
     ALLOWED_INPUT_KEYS,
     CONDITION_STAGES,
@@ -178,6 +186,9 @@ class _RunState:
         self.evaluation_error: str | None = None
         self.evaluation_outcome = None
         self.source_provenance: dict | None = None
+        self.evaluation_started: bool = False
+        self.evaluation_committed: bool = False
+        self.authority_committed: bool = False
 
 
 class ExperimentRunner:
@@ -216,6 +227,7 @@ class ExperimentRunner:
         state.source_provenance = source_revision()
         store = ArtifactStore(self.runs_root, run_spec)  # unsafe run IDs raise here
 
+        pending_interrupt = None
         try:
             # All initialization after a safe namespace exists is inside the
             # terminalization boundary.  Setup failures therefore cannot leave
@@ -256,6 +268,7 @@ class ExperimentRunner:
             state.treatment_hash = self._treatment_hash(run_spec, task_spec)
             store.write_treatment_declaration(declaration, state.treatment_hash)
             store.freeze_run_authority()
+            state.authority_committed = True
             # Preflight identity check uses the configured adapter identity;
             # per-invocation actual identity is re-verified from child output.
             if self.adapter.identity.key() != run_spec.model_identifier:
@@ -280,8 +293,28 @@ class ExperimentRunner:
         except Exception as exc:  # noqa: BLE001 - terminal finalization boundary (F6)
             state.status = STATUS_INFRASTRUCTURE_FAILURE
             state.error = sanitize_exception(exc, fallback=WORKER_SANITIZED_FAILURE)
+        except BaseException as exc:
+            pending_interrupt = exc
+            try:
+                self._finalize_interrupted_run(store, run_spec, state)
+            except BaseException:
+                if not state.evaluation_committed and state.status == STATUS_SUCCEEDED:
+                    if state.evaluation_started or _completed_stage_topology(run_spec, state):
+                        state.status = STATUS_FAILED_EVALUATION
+                        state.evaluation_error = INTERRUPTED_EVALUATION_MESSAGE
+                    else:
+                        state.status = STATUS_INFRASTRUCTURE_FAILURE
+                        state.error = INTERRUPTED_INFRASTRUCTURE_MESSAGE
+            raise pending_interrupt from None
         finally:
-            self._write_terminal_record(store, run_spec, task_spec, state, run_started, wall_start)
+            try:
+                self._write_terminal_record(
+                    store, run_spec, task_spec, state, run_started, wall_start
+                )
+            except BaseException:
+                if pending_interrupt is not None:
+                    raise pending_interrupt from None
+                raise
 
         return self._build_result(run_spec, state, run_started)
 
@@ -1079,6 +1112,7 @@ class ExperimentRunner:
     # ------------------------------------------------------------- evaluation
 
     def _finalize_evaluation(self, store: ArtifactStore, state: _RunState) -> None:
+        state.evaluation_started = True
         integrity = store.verify_completed_run()
         state.integrity = integrity
         store.record_event(EVENT_INTEGRITY, integrity)
@@ -1092,9 +1126,71 @@ class ExperimentRunner:
                 EVENT_EVALUATION,
                 {"status": state.status, "error": state.evaluation_error},
             )
+            state.evaluation_committed = True
             return
         state.evaluation_outcome = outcome
         store.record_event(EVENT_EVALUATION, {"outcome": outcome.to_dict()})
+        state.evaluation_committed = True
+
+    def _finalize_interrupted_run(
+        self, store: ArtifactStore, run_spec: RunSpec, state: _RunState
+    ) -> None:
+        self._reconcile_persisted_stage_seals(store, run_spec, state)
+        if state.evaluation_committed:
+            return
+        if state.evaluation_started or _completed_stage_topology(run_spec, state):
+            state.status = STATUS_FAILED_EVALUATION
+            state.evaluation_error = INTERRUPTED_EVALUATION_MESSAGE
+            state.evaluation_outcome = None
+            store.record_event(
+                EVENT_EVALUATION,
+                {"status": STATUS_FAILED_EVALUATION, "error": state.evaluation_error},
+                overwrite=True,
+            )
+            state.evaluation_committed = True
+            return
+        state.status = STATUS_INFRASTRUCTURE_FAILURE
+        state.error = INTERRUPTED_INFRASTRUCTURE_MESSAGE
+        manifest_path = store.run_dir / MANIFEST
+        if not manifest_path.exists():
+            manifest_path.write_text("", encoding="utf-8")
+
+    def _reconcile_persisted_stage_seals(
+        self, store: ArtifactStore, run_spec: RunSpec, state: _RunState
+    ) -> None:
+        """Make in-memory topology match durable success seals before terminalizing.
+
+        A seal that has already been replaced onto disk is authoritative. The
+        corresponding stage is recorded as succeeded so the terminal record
+        cannot disagree with persisted evidence. A missing or malformed seal
+        is not success: uncommitted residue for that role is aborted, and
+        later stages are left unstarted.
+        """
+        expected = CONDITION_STAGES[run_spec.condition]
+        recorded = {stage.role for stage in state.stage_results}
+        for role in expected:
+            reconstructed = _succeeded_stage_from_persisted_seal(store, role)
+            if reconstructed is None:
+                store.abort_uncommitted_stage(role)
+                break
+            store._sealed.add(role)
+            if role not in recorded:
+                state.stage_results.append(reconstructed)
+                recorded.add(role)
+            if role not in state.executed_roles:
+                state.executed_roles.append(role)
+        last = expected[-1] if expected else None
+        if (
+            last is not None
+            and state.final_candidate_ref is None
+            and any(
+                stage.role == last and stage.status is StageStatus.SUCCEEDED
+                for stage in state.stage_results
+            )
+        ):
+            primary = PRIMARY_ARTIFACT.get(last)
+            if primary:
+                state.final_candidate_ref = f"{last}/{primary}.md"
 
     # --------------------------------------------------------------- terminal
 
@@ -1132,6 +1228,8 @@ class ExperimentRunner:
             "wall_clock_seconds": round(time.monotonic() - wall_start, 6),
             "timeout_enforcement": "direct_child_process_terminated",
             "usage_accounting": "harness_estimated_word_count_approximation",
+            "authority_committed": bool(state.authority_committed)
+            or (store.run_dir / RUN_AUTHORITY).is_file(),
             "integrity": state.integrity,
             "error": state.error,
             "evaluation_error": state.evaluation_error,
@@ -1235,6 +1333,34 @@ def _verified_identity_dict(identity_used: Mapping[str, str]) -> dict:
         for k in ("provider", "model_id", "model_version", "adapter_name", "adapter_version")
     )
     return d
+
+
+def _completed_stage_topology(run_spec: RunSpec, state: _RunState) -> bool:
+    expected = CONDITION_STAGES[run_spec.condition]
+    if tuple(state.executed_roles) != expected:
+        return False
+    if len(state.stage_results) != len(expected):
+        return False
+    return all(stage.status is StageStatus.SUCCEEDED for stage in state.stage_results)
+
+
+def _succeeded_stage_from_persisted_seal(store: ArtifactStore, role: str) -> StageResult | None:
+    """Return a succeeded StageResult iff the active-run seal validator accepts it."""
+    try:
+        store.verify_sealed_stage(role)
+        seal = json.loads((store.run_dir / "seals" / f"{role}.json").read_text(encoding="utf-8"))
+        attempt = seal.get("expected_attempts")
+        if type(attempt) is not int or isinstance(attempt, bool) or attempt < 1:
+            return None
+        refs = tuple(f"{role}/{name}.md" for name in EXPECTED_ARTIFACTS[role])
+    except (IntegrityViolation, OSError, TypeError, ValueError, KeyError, json.JSONDecodeError):
+        return None
+    return StageResult(
+        role=role,
+        attempt=attempt,
+        status=StageStatus.SUCCEEDED,
+        output_refs=refs,
+    )
 
 
 def _terminal_for_failure(outcome: "_StageOutcome") -> str:
