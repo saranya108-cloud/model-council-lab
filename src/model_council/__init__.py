@@ -1,4 +1,12 @@
-"""Model Council Lab — M1 development harness (pre-experiment, subprocess-isolated stub adapters only)."""
+"""Model Council Lab — M1 development harness.
+
+The development harness now contains an activated OpenAI Responses live adapter.
+SDK/request translation and offline transport evidence exist; no real provider
+response has yet been exercised end-to-end. The Checkpoint 7 canary entrypoint
+is development-only and guarded. Implementing the entrypoint does not authorize
+executing it. Any real invocation requires later explicit Human Chair
+authorization. A canary provides plumbing/integration evidence only.
+"""
 
 from .artifacts import ArtifactStore
 from .executor import SubprocessAdapter

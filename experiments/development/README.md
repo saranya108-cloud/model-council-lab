@@ -65,7 +65,13 @@ All model-produced content is validated before it can affect a run.
 - No containment of descendant processes spawned intentionally by trusted
   adapters (adapter implementation rule: do not spawn unmanaged descendants);
   only the direct child is guaranteed terminated on timeout.
-- No arbitrary third-party adapters, no live providers, no Condition D.
+- No arbitrary third-party adapters, no Condition D. The development harness
+  now contains an activated OpenAI Responses live adapter; SDK/request
+  translation and offline transport evidence exist. No real provider response
+  has yet been exercised end-to-end. The Checkpoint 7 canary entrypoint is
+  development-only and guarded. Implementing the entrypoint does not authorize
+  executing it. Any real invocation requires later explicit Human Chair
+  authorization. A canary provides plumbing/integration evidence only.
 
 ## Terminal-status policy
 
@@ -149,6 +155,10 @@ adapter-reported.
 ## What this is not
 
 Pre-experiment development infrastructure only. It does not measure model
-intelligence, contact real providers, or contain held-out tasks. Condition D
-and live adapters are deferred by Decisions 0002/0003 until evidence and Human
-Chair approval authorize them.
+intelligence or contain held-out tasks. The development harness now contains
+an activated OpenAI Responses live adapter; SDK/request translation and
+offline transport evidence exist, but no real provider response has yet been
+exercised end-to-end. The Checkpoint 7 canary entrypoint is development-only
+and guarded. Implementing the entrypoint does not authorize executing it. Any
+real invocation requires later explicit Human Chair authorization. A canary
+provides plumbing/integration evidence only. Condition D remains deferred.

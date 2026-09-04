@@ -31,7 +31,10 @@ ADAPTER_KIND_PROFILES: dict[str, str] = {
     "raw_garbage": EXECUTION_PROFILE_PRE_LIVE_LEGACY,
     # Deterministic live-protocol stub. Not a provider implementation.
     "live_stub": EXECUTION_PROFILE_LIVE_CONTRACT_V1,
-    # OpenAI Responses live adapter. Skeleton only in this tranche.
+    # OpenAI Responses live adapter. SDK/request translation and offline
+    # transport evidence exist; no real provider response has yet been
+    # exercised end-to-end. The Checkpoint 7 canary is development-only and
+    # guarded. Implementing that entrypoint does not authorize executing it.
     "openai_responses": EXECUTION_PROFILE_LIVE_CONTRACT_V1,
 }
 
