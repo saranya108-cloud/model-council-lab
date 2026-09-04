@@ -36,7 +36,7 @@ class StageStatus(str, Enum):
 #   failed_budget          - harness-estimated usage exceeded a stage ceiling
 #   failed_contract        - structured output schema/disposition violation
 #   failed_governance      - authority/boundary/integrity violation mid-run
-#   failed_evaluation      - the External Evaluator itself raised
+#   failed_evaluation      - the External Evaluator raised or returned passed=false
 #   infrastructure_failure - worker crash, spawn failure, malformed protocol/metrics
 STATUS_SUCCEEDED = "succeeded"
 STATUS_FAILED_BUDGET = "failed_budget"

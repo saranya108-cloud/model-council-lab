@@ -388,6 +388,10 @@ def accept_terminal_verification(
         raise CanaryError("terminal verification status mismatch")
     if verification.get("terminal_verified") is not True:
         raise CanaryError("terminal verification did not confirm the run")
+    if result.status == STATUS_SUCCEEDED:
+        evaluation = result.evaluation
+        if getattr(evaluation, "passed", None) is not True:
+            raise CanaryError("configured evaluation did not pass")
 
 
 def operator_summary(plan: CanaryPlan, result: RunResult, verification: object) -> str:

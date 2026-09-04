@@ -1129,6 +1129,8 @@ class ExperimentRunner:
             state.evaluation_committed = True
             return
         state.evaluation_outcome = outcome
+        if outcome.passed is not True:
+            state.status = STATUS_FAILED_EVALUATION
         store.record_event(EVENT_EVALUATION, {"outcome": outcome.to_dict()})
         state.evaluation_committed = True
 

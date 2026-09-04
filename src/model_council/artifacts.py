@@ -1394,6 +1394,8 @@ def _assert_evaluation_coherence(run_dir: Path, payload: dict, evaluator_binding
         outcome = body.get("outcome")
         if type(outcome) is not dict:
             raise IntegrityViolation("succeeded run evaluation is not a success outcome")
+        if outcome.get("passed") is not True:
+            raise IntegrityViolation("succeeded run evaluation did not pass")
         if terminal_eval != outcome:
             raise IntegrityViolation("terminal evaluation does not match evaluation.json")
         if outcome.get("evaluator_version") != evaluator_binding.get("evaluator_version"):
@@ -1405,6 +1407,23 @@ def _assert_evaluation_coherence(run_dir: Path, payload: dict, evaluator_binding
         if not eval_path.is_file():
             raise IntegrityViolation("failed_evaluation is missing evaluation.json")
         body = _load_json_object(eval_path, "evaluation record")
+        outcome = body.get("outcome")
+        if type(outcome) is dict:
+            if outcome.get("passed") is not False:
+                raise IntegrityViolation(
+                    "failed_evaluation outcome must record passed=false"
+                )
+            if terminal_eval != outcome:
+                raise IntegrityViolation("terminal evaluation does not match evaluation.json")
+            if outcome.get("evaluator_version") != evaluator_binding.get("evaluator_version"):
+                raise IntegrityViolation("evaluation.json evaluator version does not match the binding")
+            if outcome.get("config_digest") != evaluator_binding.get("evaluator_config_digest"):
+                raise IntegrityViolation("evaluation.json config digest does not match the binding")
+            if terminal_error is not None:
+                raise IntegrityViolation(
+                    "failed_evaluation rejection must not carry evaluation_error"
+                )
+            return
         if body.get("status") != STATUS_FAILED_EVALUATION:
             raise IntegrityViolation("evaluation.json does not record failed_evaluation")
         if terminal_eval is not None:

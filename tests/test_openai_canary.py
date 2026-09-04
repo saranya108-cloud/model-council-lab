@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import io
+import json
 import math
 import os
 import sys
@@ -15,6 +16,9 @@ from unittest.mock import patch
 
 from helpers import TempRoot
 from model_council import (
+    ArtifactStore,
+    EvaluationOutcome,
+    STATUS_FAILED_EVALUATION,
     STATUS_INFRASTRUCTURE_FAILURE,
     STATUS_SUCCEEDED,
     Condition,
@@ -74,7 +78,17 @@ def _flatten_with_extra(base: list[str], extra: list[str]) -> list[str]:
     return list(base) + list(extra)
 
 
-def _fake_result(spec, status=STATUS_SUCCEEDED):
+def _fake_evaluation(passed):
+    return EvaluationOutcome(
+        passed=passed,
+        reasons=("synthetic canary evaluation",),
+        evaluated_at="2026-09-04T00:00:00+00:00",
+    )
+
+
+def _fake_result(spec, status=STATUS_SUCCEEDED, *, evaluation=None):
+    if evaluation is None and status == STATUS_SUCCEEDED:
+        evaluation = _fake_evaluation(True)
     return RunResult(
         run_id=spec.run_id,
         task_id=spec.task_id,
@@ -83,6 +97,7 @@ def _fake_result(spec, status=STATUS_SUCCEEDED):
         spec_hash=spec.spec_hash,
         status=status,
         stage_results=[],
+        evaluation=evaluation,
     )
 
 
@@ -752,6 +767,27 @@ class TestOpenAICanary(unittest.TestCase):
                 code, _out, _err = _capture_main(self.module, _valid_argv(runs))
             self.assertEqual(code, 0)
 
+    def test_success_gate_rejects_failed_evaluation(self):
+        with TempRoot() as root:
+            runs = Path(root) / "runs"
+
+            def execute(_runner, spec, _task):
+                return _fake_result(spec, evaluation=_fake_evaluation(False))
+
+            def verify(_runs_root, run_id):
+                return {
+                    "run_id": run_id,
+                    "terminal_verified": True,
+                    "terminal_status": STATUS_SUCCEEDED,
+                }
+
+            with _ExecutionProbe(self.module, execute=execute, verify=verify):
+                code, _out, err = _capture_main(
+                    self.module, _valid_argv(runs)
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("terminal verification failed", err)
+
     def test_31_normal_terminal_non_success_still_invokes_verification(self):
         with TempRoot() as root:
             runs = Path(root) / "runs"
@@ -773,6 +809,45 @@ class TestOpenAICanary(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(seen["verify"], 1)
             self.assertIn("infrastructure_failure", out)
+
+    def test_normal_negative_evaluation_is_a_verified_failed_canary(self):
+        with TempRoot() as root:
+            runs = Path(root) / "runs"
+            real_adapter = self.module.SubprocessAdapter
+
+            def offline_adapter(identity, *, kind, options, provider_treatment_config):
+                self.assertEqual(kind, self.module.ADAPTER_KIND)
+                return real_adapter(
+                    identity,
+                    kind="fake",
+                    options={
+                        "identity_override": identity.to_dict(),
+                        "inject_prohibited_content": True,
+                    },
+                    provider_treatment_config=provider_treatment_config,
+                )
+
+            with patch.object(self.module, "SubprocessAdapter", side_effect=offline_adapter):
+                code, out, err = _capture_main(
+                    self.module,
+                    _valid_argv(runs, run_id="negative-evaluation-canary"),
+                )
+
+            self.assertEqual(code, 1)
+            self.assertEqual(err, "")
+            self.assertIn("terminal_status=failed_evaluation", out)
+            self.assertIn("terminal_verified=True", out)
+
+            run_dir = runs / "negative-evaluation-canary"
+            payload = json.loads((run_dir / "run_result.json").read_text())
+            self.assertEqual(payload["status"], STATUS_FAILED_EVALUATION)
+            self.assertIsNotNone(payload["evaluation"])
+            self.assertFalse(payload["evaluation"]["passed"])
+            report = ArtifactStore.verify_terminal_run(
+                runs, "negative-evaluation-canary"
+            )
+            self.assertTrue(report["terminal_verified"])
+            self.assertEqual(report["terminal_status"], STATUS_FAILED_EVALUATION)
 
     def test_32_terminal_non_success_remains_non_success_with_nonzero_exit(self):
         with TempRoot() as root:

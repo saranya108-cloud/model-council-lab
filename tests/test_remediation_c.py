@@ -9,8 +9,11 @@ from unittest.mock import patch
 
 from model_council import (
     ArtifactStore,
+    EvaluationConfig,
+    ExternalEvaluator,
     IntegrityViolation,
     LiveContractError,
+    STATUS_FAILED_EVALUATION,
     parse_provider_call_outcome,
 )
 from model_council.invocation import (
@@ -267,6 +270,40 @@ class TestTerminalRecordCoherence(unittest.TestCase):
             report = ArtifactStore.verify_terminal_run(runs_root, "c-term-evalfail")
             self.assertTrue(report["terminal_verified"])
             self.assertEqual(report["terminal_status"], "failed_evaluation")
+
+    def test_normal_failed_evaluation_terminalizes_as_failed_evaluation(self):
+        with TempRoot() as root:
+            runner, runs_root = make_runner(root)
+            runner.evaluator = ExternalEvaluator(
+                EvaluationConfig(required_markers=("NEVER_PRESENT",))
+            )
+            result = runner.execute(make_spec("c-term-eval-reject", "A"), make_task())
+
+            self.assertEqual(result.status, STATUS_FAILED_EVALUATION)
+            self.assertIsNotNone(result.evaluation)
+            self.assertFalse(result.evaluation.passed)
+            payload = json.loads(
+                (runs_root / "c-term-eval-reject" / "run_result.json").read_text()
+            )
+            self.assertEqual(payload["status"], STATUS_FAILED_EVALUATION)
+            report = ArtifactStore.verify_terminal_run(runs_root, "c-term-eval-reject")
+            self.assertTrue(report["terminal_verified"])
+            self.assertEqual(report["terminal_status"], STATUS_FAILED_EVALUATION)
+
+    def test_succeeded_run_with_failed_evaluation_is_rejected(self):
+        with TempRoot() as root:
+            runs_root, run_dir = self._success(root, "c-term-forged-eval")
+            evaluation_path = run_dir / "evaluation.json"
+            evaluation_body = json.loads(evaluation_path.read_text())
+            evaluation_body["outcome"]["passed"] = False
+            evaluation_path.write_text(json.dumps(evaluation_body, indent=2, sort_keys=True))
+            _rewrite_json(
+                run_dir / "run_result.json",
+                evaluation=evaluation_body["outcome"],
+            )
+
+            with self.assertRaisesRegex(IntegrityViolation, "evaluation did not pass"):
+                ArtifactStore.verify_terminal_run(runs_root, "c-term-forged-eval")
 
 
 class TestStageOutputBounds(unittest.TestCase):
