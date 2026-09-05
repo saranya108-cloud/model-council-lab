@@ -43,11 +43,21 @@ from .invocation import (
     treatment_digest_for_attempt,
     verify_raw_evidence_truncation,
 )
-from .live_contract import LIVE_CONTRACT_VERSION
+from .live_contract import (
+    LIVE_CONTRACT_VERSION,
+    PROVIDER_IDENTITY_POLICY_SCHEMA,
+    LiveContractError,
+    ProviderCallKind,
+    evaluate_provider_identity_policy,
+    parse_provider_call_outcome,
+    validate_exact_provider_identity_policy,
+)
 from .protocol import (
     EXECUTION_PROFILE_LIVE_CONTRACT_V1,
     EXECUTION_PROFILE_PRE_LIVE_LEGACY,
     HARNESS_PROTOCOL_VERSION,
+    HISTORICAL_HARNESS_PROTOCOL_VERSION,
+    VERIFIABLE_HARNESS_PROTOCOL_VERSIONS,
     execution_profile_for_kind,
 )
 from .roles import (
@@ -674,10 +684,17 @@ class ArtifactStore:
             self.verify_sealed_stage(role)
             results[role] = "verified"
         invocation = self.verify_invocation_evidence()
+        execution_binding = _read_frozen_object(
+            self.run_dir, EXECUTION_BINDING, "execution binding"
+        )
+        identity_policy = _verify_provider_identity_policy_evidence(
+            self.run_dir, execution_binding, self._manifest_entries()
+        )
         return {
             "integrity_verified": True,
             "stages": results,
             "invocation_evidence_verified": invocation["invocation_evidence_verified"],
+            **identity_policy,
             "verified_at": _utcnow(),
         }
 
@@ -736,6 +753,12 @@ class ArtifactStore:
             expected_roles,
             run_id=run_id,
             stages=None,
+        )
+        execution_binding = _read_frozen_object(
+            run_dir, EXECUTION_BINDING, "execution binding"
+        )
+        identity_policy = _verify_provider_identity_policy_evidence(
+            run_dir, execution_binding, manifest_entries
         )
 
         seals_dir = run_dir / "seals"
@@ -801,6 +824,7 @@ class ArtifactStore:
             "sealed_stages": verified_stages,
             "artifact_count": len(records),
             "final_candidate_ref": final_ref,
+            **identity_policy,
             "verified_at": _utcnow(),
         }
 
@@ -924,7 +948,8 @@ class ArtifactStore:
         status = payload.get("status")
         if status not in _TERMINAL_STATUSES:
             raise IntegrityViolation(f"terminal record has unrecognized status {status!r}")
-        if payload.get("harness_protocol_version") != HARNESS_PROTOCOL_VERSION:
+        terminal_protocol_version = payload.get("harness_protocol_version")
+        if terminal_protocol_version not in VERIFIABLE_HARNESS_PROTOCOL_VERSIONS:
             raise IntegrityViolation("terminal record harness protocol version mismatch")
         if payload.get("spec_hash") != spec_payload["spec_hash"]:
             raise IntegrityViolation("terminal record spec_hash does not match run_spec.json")
@@ -947,7 +972,11 @@ class ArtifactStore:
                 "sealed_stages": [],
                 "verified_at": _utcnow(),
             }
-        _assert_run_authority(run_dir, run_id)
+        _assert_run_authority(
+            run_dir,
+            run_id,
+            expected_protocol_version=terminal_protocol_version,
+        )
         _assert_terminal_record_coherence(
             run_id=run_id,
             run_dir=run_dir,
@@ -976,6 +1005,9 @@ class ArtifactStore:
             canonical=canonical,
             execution_binding=execution_binding,
             manifest_entries=manifest_entries,
+        )
+        identity_policy = _verify_provider_identity_policy_evidence(
+            run_dir, execution_binding, manifest_entries
         )
         _assert_terminal_status_topology(
             run_dir=run_dir,
@@ -1006,6 +1038,7 @@ class ArtifactStore:
             "invocation_evidence_verified": True,
             "completed_topology_verified": False,
             "sealed_stages": list(sealed_roles),
+            **identity_policy,
             "verified_at": _utcnow(),
         }
 
@@ -1192,7 +1225,12 @@ def _terminal_field_has_progress(value) -> bool:
     return True
 
 
-def _assert_run_authority(run_dir: Path, run_id: str) -> dict:
+def _assert_run_authority(
+    run_dir: Path,
+    run_id: str,
+    *,
+    expected_protocol_version: str,
+) -> dict:
     """Load the local trust anchor and require bound files to match it.
 
     Detects partial mutation among frozen run-defining records. Does not
@@ -1202,7 +1240,7 @@ def _assert_run_authority(run_dir: Path, run_id: str) -> dict:
     authority = _read_frozen_object(run_dir, RUN_AUTHORITY, "run authority")
     if authority.get("schema") != RUN_AUTHORITY_SCHEMA:
         raise IntegrityViolation("run authority schema is not recognized")
-    if authority.get("harness_protocol_version") != HARNESS_PROTOCOL_VERSION:
+    if authority.get("harness_protocol_version") != expected_protocol_version:
         raise IntegrityViolation("run authority harness protocol version mismatch")
     if authority.get("context_policy_version") != CONTEXT_POLICY_VERSION:
         raise IntegrityViolation("run authority context-policy version mismatch")
@@ -1238,6 +1276,12 @@ def _assert_terminal_record_coherence(
     _assert_terminal_identity_bindings(run_id=run_id, canonical=canonical, payload=payload)
     task_record = _read_frozen_object(run_dir, TASK_RECORD, "task record")
     execution_binding = _read_frozen_object(run_dir, EXECUTION_BINDING, "execution binding")
+    if payload.get("harness_protocol_version") != execution_binding.get(
+        "harness_protocol_version"
+    ):
+        raise IntegrityViolation(
+            "terminal record harness protocol version does not match execution binding"
+        )
     evaluator_binding = _read_frozen_object(run_dir, EVALUATOR_BINDING, "evaluator binding")
     reconstructed = _reconstruct_treatment(
         canonical=canonical,
@@ -1324,11 +1368,27 @@ def _reconstruct_treatment(
         "harness_protocol_version",
         "context_policy_version",
     )
+    protocol_version = execution_binding.get("harness_protocol_version")
+    if protocol_version not in VERIFIABLE_HARNESS_PROTOCOL_VERSIONS:
+        raise IntegrityViolation("execution binding harness protocol version mismatch")
+    policy_fields_present = bool(
+        {"provider_identity_policy", "provider_identity_policy_version"}
+        & set(execution_binding)
+    )
+    if protocol_version == HISTORICAL_HARNESS_PROTOCOL_VERSION:
+        if policy_fields_present:
+            raise IntegrityViolation(
+                "historical execution binding cannot claim provider identity policy evidence"
+            )
+    elif execution_binding.get("adapter_kind") == "openai_responses":
+        required_exec = (*required_exec, "provider_identity_policy", "provider_identity_policy_version")
+    elif policy_fields_present:
+        raise IntegrityViolation(
+            "provider identity policy is only valid for the bounded OpenAI adapter"
+        )
     missing_exec = [key for key in required_exec if key not in execution_binding]
     if missing_exec:
         raise IntegrityViolation(f"execution binding missing fields: {missing_exec}")
-    if execution_binding["harness_protocol_version"] != HARNESS_PROTOCOL_VERSION:
-        raise IntegrityViolation("execution binding harness protocol version mismatch")
     if execution_binding["context_policy_version"] != CONTEXT_POLICY_VERSION:
         raise IntegrityViolation("execution binding context-policy version mismatch")
     if execution_binding["live_contract_version"] != LIVE_CONTRACT_VERSION:
@@ -1356,8 +1416,8 @@ def _reconstruct_treatment(
         raise IntegrityViolation("evaluator binding is missing evaluator_version")
     if evaluator_binding.get("evaluator_config_digest") in {None, ""}:
         raise IntegrityViolation("evaluator binding is missing evaluator_config_digest")
-    return {
-        "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
+    reconstructed = {
+        "harness_protocol_version": protocol_version,
         "condition": canonical.get("condition"),
         "prompt_version": canonical.get("prompt_version"),
         "context_policy_version": CONTEXT_POLICY_VERSION,
@@ -1374,6 +1434,28 @@ def _reconstruct_treatment(
         "execution_profile": execution_binding["execution_profile"],
         "live_contract_version": execution_binding["live_contract_version"],
     }
+    if (
+        protocol_version == HARNESS_PROTOCOL_VERSION
+        and execution_binding["adapter_kind"] == "openai_responses"
+    ):
+        policy = execution_binding["provider_identity_policy"]
+        if execution_binding["provider_identity_policy_version"] != PROVIDER_IDENTITY_POLICY_SCHEMA:
+            raise IntegrityViolation("provider identity policy version is not recognized")
+        try:
+            policy = validate_exact_provider_identity_policy(
+                policy,
+                requested_identity=adapter_identity,
+                configured_identity=adapter_identity,
+            )
+        except LiveContractError as exc:
+            raise IntegrityViolation(
+                "execution binding provider identity policy is invalid"
+            ) from exc
+        reconstructed["provider_identity_policy"] = policy
+        reconstructed["provider_identity_policy_version"] = execution_binding[
+            "provider_identity_policy_version"
+        ]
+    return reconstructed
 
 
 def _assert_source_provenance_coherence(run_dir: Path, payload: dict) -> None:
@@ -1489,6 +1571,215 @@ def _assert_invocation_profile_binding(
                 )
 
 
+def _verify_provider_identity_policy_evidence(
+    run_dir: Path,
+    execution_binding: dict,
+    manifest_entries: list[dict],
+) -> dict:
+    """Recompute v14 identity verdicts; preserve explicit v13 semantics."""
+    protocol_version = execution_binding.get("harness_protocol_version")
+    if protocol_version not in VERIFIABLE_HARNESS_PROTOCOL_VERSIONS:
+        raise IntegrityViolation("execution binding harness protocol version mismatch")
+    policy_fields_present = bool(
+        {"provider_identity_policy", "provider_identity_policy_version"}
+        & set(execution_binding)
+    )
+    if protocol_version == HISTORICAL_HARNESS_PROTOCOL_VERSION:
+        if policy_fields_present:
+            raise IntegrityViolation(
+                "historical execution binding cannot claim provider identity policy evidence"
+            )
+        return {
+            "provider_identity_policy_verified": False,
+            "provider_identity_policy_schema": None,
+        }
+    if execution_binding.get("adapter_kind") != "openai_responses":
+        if policy_fields_present:
+            raise IntegrityViolation(
+                "provider identity policy is only valid for the bounded OpenAI adapter"
+            )
+        return {
+            "provider_identity_policy_verified": False,
+            "provider_identity_policy_schema": None,
+        }
+    missing_policy_fields = [
+        key
+        for key in ("provider_identity_policy", "provider_identity_policy_version")
+        if key not in execution_binding
+    ]
+    if missing_policy_fields:
+        raise IntegrityViolation("execution binding is missing provider identity policy")
+    policy = execution_binding["provider_identity_policy"]
+    if execution_binding["provider_identity_policy_version"] != PROVIDER_IDENTITY_POLICY_SCHEMA:
+        raise IntegrityViolation("provider identity policy version is not recognized")
+    identity = _adapter_identity_from_execution_binding(execution_binding)
+    try:
+        validated = validate_exact_provider_identity_policy(
+            policy,
+            requested_identity=identity,
+            configured_identity=identity,
+        )
+    except LiveContractError as exc:
+        raise IntegrityViolation("provider identity policy is invalid") from exc
+    identity_records = []
+    for entry in manifest_entries:
+        if _entry_kind(entry) != KIND_INVOCATION_METADATA:
+            continue
+        ref = entry.get("ref")
+        record = _load_json_object(
+            contained_path(run_dir, run_dir / ref), f"invocation record {ref}"
+        )
+        adapter_evidence = record.get("adapter_evidence")
+        if type(adapter_evidence) is not dict:
+            raise IntegrityViolation(f"invocation {ref} adapter evidence is malformed")
+        raw_outcome = adapter_evidence.get("provider_call_outcome")
+        outcome = None
+        if raw_outcome is None:
+            if record.get("retry_decision") == "promote":
+                raise IntegrityViolation(
+                    f"invocation {ref} successful live evidence is missing provider outcome"
+                )
+            expected_verdict = "not_evaluated"
+        else:
+            try:
+                outcome = parse_provider_call_outcome(raw_outcome)
+                expected_verdict, _reason = evaluate_provider_identity_policy(
+                    validated,
+                    requested_identity=identity,
+                    configured_identity=identity,
+                    outcome=outcome,
+                    attempt_timeout_seconds=record.get("attempt_timeout_seconds"),
+                    harness_observed_latency_seconds=record.get("harness_observed_latency_seconds"),
+                )
+            except LiveContractError as exc:
+                raise IntegrityViolation(
+                    f"invocation {ref} provider identity evidence is malformed"
+                ) from exc
+        if record.get("identity_verdict") != expected_verdict:
+            raise IntegrityViolation(
+                f"invocation {ref} identity verdict does not match recomputed evidence"
+            )
+        if expected_verdict == "failed":
+            if record.get("retry_decision") != "stop":
+                raise IntegrityViolation(
+                    f"invocation {ref} identity rejection did not stop execution"
+                )
+            if record.get("retry_rationale") != "identity_policy_rejected":
+                raise IntegrityViolation(
+                    f"invocation {ref} identity rejection rationale is inconsistent"
+                )
+            if record.get("failure_class") != "governance":
+                raise IntegrityViolation(
+                    f"invocation {ref} identity rejection is not a governance failure"
+                )
+            if record.get("promoted_artifact_refs") not in ([], ()):
+                raise IntegrityViolation(
+                    f"invocation {ref} identity rejection promoted artifacts"
+                )
+        late = (
+            outcome is not None
+            and outcome.kind is ProviderCallKind.SUCCESS
+            and expected_verdict == "not_evaluated"
+        )
+        if late and (
+            record.get("failure_class") != "timeout"
+            or record.get("contract_verdict") != "not_evaluated"
+            or (record.get("retry_decision"), record.get("retry_rationale"))
+            not in {
+                ("stop", "retry_budget_exhausted"),
+                ("retry", "retry_candidate_remaining"),
+            }
+        ):
+            raise IntegrityViolation(f"invocation {ref} late response is not a timeout")
+        identity_records.append((record, expected_verdict, late))
+    _assert_provider_identity_topology(run_dir, manifest_entries, identity_records)
+    return {
+        "provider_identity_policy_verified": True,
+        "provider_identity_policy_schema": PROVIDER_IDENTITY_POLICY_SCHEMA,
+    }
+
+
+def _assert_provider_identity_topology(run_dir, manifest_entries, identity_records) -> None:
+    """Reconcile recomputed v14 identity evidence with the whole persisted run.
+
+    Invocation decisions alone never prove promotion or its absence. Check
+    actual artifacts, seals, later attempts/stages and evaluation as well.
+    This also runs before evaluation, when no terminal record exists yet.
+    """
+    spec = _read_frozen_object(run_dir, "run_spec.json", "run specification")
+    roles = CONDITION_STAGES[Condition(json.loads(spec["canonical"])["condition"])]
+    terminal_path = run_dir / EVENT_RUN_RESULT
+    terminal = _load_json_object(terminal_path, "terminal record") if terminal_path.exists() else None
+    seals = {
+        role: _load_json_object(run_dir / "seals" / f"{role}.json", "stage seal")
+        for role in roles if (run_dir / "seals" / f"{role}.json").exists()
+    }
+    by_role = {role: [] for role in roles}
+    for record, verdict, late in identity_records:
+        by_role[record["role"]].append((record, verdict, late))
+    for index, role in enumerate(roles):
+        attempts = sorted(by_role[role], key=lambda item: item[0]["attempt"])
+        if attempts and any(previous not in seals for previous in roles[:index]):
+            raise IntegrityViolation("provider identity evidence has downstream dispatch without prior success")
+        if role in seals:
+            if not attempts:
+                raise IntegrityViolation(f"sealed stage {role} lacks provider identity evidence")
+            record, verdict, _late = attempts[-1]
+            expected_refs = sorted(f"{role}/{name}.md" for name in EXPECTED_ARTIFACTS[role])
+            if (
+                verdict != "passed"
+                or record.get("retry_decision") != "promote"
+                or record.get("retry_rationale") != "stage_succeeded"
+                or record.get("failure_class") is not None
+                or record.get("contract_verdict") != "passed"
+                or record.get("promoted_artifact_refs") != expected_refs
+                or seals[role].get("expected_attempts") != record["attempt"]
+            ):
+                raise IntegrityViolation(f"sealed stage {role} contradicts provider identity acceptance/promotion")
+        for position, (record, verdict, late) in enumerate(attempts):
+            decision = record.get("retry_decision")
+            if decision not in {"promote", "retry", "stop"}:
+                raise IntegrityViolation(f"stage {role} has an invalid invocation decision")
+            if decision == "promote" and (verdict != "passed" or position != len(attempts) - 1):
+                raise IntegrityViolation(f"stage {role} promoted an ineligible/nonfinal attempt")
+            if decision == "retry" and record.get("promoted_artifact_refs") != []:
+                raise IntegrityViolation(f"stage {role} retry claims promoted artifacts")
+            if decision != "stop" and verdict != "failed" and not late:
+                continue
+            if record.get("promoted_artifact_refs") != [] or role in seals:
+                raise IntegrityViolation(f"stage {role} stop/ineligible response contradicts promotion or seal")
+            if any(
+                entry.get("role") == role and _entry_kind(entry) == KIND_MODEL_ARTIFACT
+                for entry in manifest_entries
+            ) or any((run_dir / role / f"{name}.md").exists() for name in EXPECTED_ARTIFACTS[role]):
+                raise IntegrityViolation(f"stage {role} stop/ineligible response has promoted artifacts")
+            later_attempts = attempts[position + 1:]
+            if later_attempts and (
+                decision == "stop"
+                or any(later[0].get("invocation_began") is not False for later in later_attempts)
+            ):
+                raise IntegrityViolation(f"stage {role} dispatched after stopping or exhausting its deadline")
+            if any(by_role[later] or later in seals for later in roles[index + 1:]):
+                raise IntegrityViolation(f"stage {role} stop/ineligible response has downstream execution")
+            if (run_dir / "evaluation.json").exists():
+                raise IntegrityViolation(f"stage {role} stop/ineligible response contradicts evaluation")
+            if terminal is not None:
+                if (
+                    terminal.get("status") in {STATUS_SUCCEEDED, STATUS_FAILED_EVALUATION}
+                    or terminal.get("evaluation") is not None
+                    or terminal.get("final_candidate_ref") is not None
+                    or any(
+                        stage.get("role") in roles[index:] and stage.get("status") == "succeeded"
+                        for stage in terminal.get("stages", [])
+                    )
+                ):
+                    raise IntegrityViolation(f"stage {role} stop/ineligible response contradicts terminal success")
+                if verdict == "failed" and terminal.get("status") != STATUS_FAILED_GOVERNANCE:
+                    raise IntegrityViolation("terminal classification contradicts provider identity rejection")
+                if late and terminal.get("status") != STATUS_RETRY_EXHAUSTED:
+                    raise IntegrityViolation("terminal classification contradicts late-response timeout")
+
+
 def _assert_invocation_treatment_digests(
     *,
     run_dir: Path,
@@ -1544,6 +1835,12 @@ def _assert_invocation_treatment_digests(
                 live_contract_version=execution_binding["live_contract_version"],
                 harness_protocol_version=execution_binding["harness_protocol_version"],
                 provider_treatment_config=provider_treatment_config,
+                provider_identity_policy=(
+                    execution_binding.get("provider_identity_policy")
+                    if "provider_identity_policy_version" in execution_binding
+                    and execution_binding.get("provider_identity_policy") is not None
+                    else None
+                ),
             )
         except (GovernanceViolation, IntegrityViolation, TypeError, ValueError, KeyError, OSError) as exc:
             raise IntegrityViolation(

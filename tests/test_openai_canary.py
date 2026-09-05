@@ -770,7 +770,9 @@ class TestOpenAICanary(unittest.TestCase):
                     kind=ProviderCallKind.SUCCESS,
                     requested_identity=request.requested_identity,
                     configured_identity=request.configured_identity,
-                    provider_resolved_identity=unavailable_identity(unavailable_reason),
+                    provider_resolved_identity=observed_identity(
+                        model_id=request.configured_identity.model_id
+                    ),
                     invocation_returned_identity=observed_identity(
                         model_id=request.configured_identity.model_id
                     ),

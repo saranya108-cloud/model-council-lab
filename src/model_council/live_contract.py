@@ -44,6 +44,7 @@ from .security import (
 from .types import AdapterIdentity, Condition
 
 LIVE_CONTRACT_VERSION = "m1-live-contract-v4"
+PROVIDER_IDENTITY_POLICY_SCHEMA = "m1-provider-identity-policy-v1"
 MAX_PROVIDER_METADATA_BYTES = MAX_PROVIDER_TREATMENT_CONFIG_BYTES
 MAX_PROVIDER_METADATA_DEPTH = MAX_PROVIDER_TREATMENT_CONFIG_DEPTH
 MAX_PROVIDER_METADATA_ITEMS = MAX_PROVIDER_TREATMENT_CONFIG_ITEMS
@@ -884,6 +885,132 @@ def observed_identity(**fields: str) -> IdentityObservation:
             raise LiveContractError(f"identity observation {key} must be a non-empty string")
         parsed[key] = value
     return IdentityObservation(value=MappingProxyType(parsed), unavailable_reason=None)
+
+
+def build_exact_provider_identity_policy(
+    requested_identity: AdapterIdentity,
+    configured_identity: AdapterIdentity,
+) -> dict[str, Any]:
+    """Freeze the bounded provider identity rule before dispatch.
+
+    This policy intentionally has no alias or snapshot expansion mechanism.
+    A successful response must report exactly the configured wire model.
+    ``model_version`` remains a local configuration/provenance label.
+    """
+    _require_adapter_identity(requested_identity, "requested_identity")
+    _require_adapter_identity(configured_identity, "configured_identity")
+    return {
+        "schema": PROVIDER_IDENTITY_POLICY_SCHEMA,
+        "match": "exact",
+        "provider_observed_identity_required": True,
+        "requested_model": requested_identity.model_id,
+        "configured_model": configured_identity.model_id,
+        "wire_model": configured_identity.model_id,
+    }
+
+
+def validate_exact_provider_identity_policy(
+    payload: Any,
+    *,
+    requested_identity: AdapterIdentity,
+    configured_identity: AdapterIdentity,
+) -> dict[str, Any]:
+    """Validate that a persisted policy is the closed exact-match policy."""
+    data = _closed_object(
+        payload,
+        frozenset(
+            {
+                "schema",
+                "match",
+                "provider_observed_identity_required",
+                "requested_model",
+                "configured_model",
+                "wire_model",
+            }
+        ),
+        "provider identity policy",
+    )
+    if data["schema"] != PROVIDER_IDENTITY_POLICY_SCHEMA:
+        raise LiveContractError("provider identity policy schema is not recognized")
+    if data["match"] != "exact":
+        raise LiveContractError("provider identity policy must use exact matching")
+    if data["provider_observed_identity_required"] is not True:
+        raise LiveContractError(
+            "provider identity policy must require an observation on success"
+        )
+    expected = build_exact_provider_identity_policy(
+        requested_identity, configured_identity
+    )
+    if data != expected:
+        raise LiveContractError(
+            "provider identity policy does not match requested/configured authority"
+        )
+    return dict(data)
+
+
+def provider_identity_evaluation_eligible(
+    outcome: ProviderCallOutcome,
+    *,
+    attempt_timeout_seconds: Any,
+    harness_observed_latency_seconds: Any,
+) -> bool:
+    """Use harness timing, never a stored verdict/failure class, for eligibility.
+
+    For v14 policy-governed outcomes, latency is the runner-observed interval from
+    granting the attempt its remaining deadline to receiving the mapped
+    response. Both numbers are persisted in the bound invocation record.
+    Provider timing and worker-only latency are not this clock boundary.
+    """
+    if not isinstance(outcome, ProviderCallOutcome):
+        raise LiveContractError("provider identity verdict requires a ProviderCallOutcome")
+    if outcome.kind is not ProviderCallKind.SUCCESS:
+        return False
+    timeout = _require_positive_number(attempt_timeout_seconds, "attempt_timeout_seconds")
+    elapsed = _require_non_negative_number(
+        harness_observed_latency_seconds, "harness_observed_latency_seconds"
+    )
+    return elapsed < timeout
+
+
+def evaluate_provider_identity_policy(
+    policy: Any,
+    *,
+    requested_identity: AdapterIdentity,
+    configured_identity: AdapterIdentity,
+    outcome: ProviderCallOutcome,
+    attempt_timeout_seconds: Any,
+    harness_observed_latency_seconds: Any,
+) -> tuple[str, str | None]:
+    """Recompute the identity verdict from frozen authority and provider evidence."""
+    validated = validate_exact_provider_identity_policy(
+        policy,
+        requested_identity=requested_identity,
+        configured_identity=configured_identity,
+    )
+    if not provider_identity_evaluation_eligible(
+        outcome,
+        attempt_timeout_seconds=attempt_timeout_seconds,
+        harness_observed_latency_seconds=harness_observed_latency_seconds,
+    ):
+        return "not_evaluated", None
+    if outcome.requested_identity != requested_identity:
+        return "failed", "provider outcome requested identity does not match frozen authority"
+    if outcome.configured_identity != configured_identity:
+        return "failed", "provider outcome configured identity does not match frozen authority"
+    observed = outcome.provider_resolved_identity.value
+    if observed is None:
+        return "failed", "provider-observed model identity is missing"
+    if type(observed) not in (dict, MappingProxyType) or set(observed) != {"model_id"}:
+        return "failed", "provider-observed model identity is malformed"
+    model_id = observed.get("model_id")
+    if type(model_id) is not str or not model_id:
+        return "failed", "provider-observed model identity is malformed"
+    if model_id != validated["wire_model"]:
+        return (
+            "failed",
+            "provider-observed model identity does not exactly match the frozen wire model",
+        )
+    return "passed", None
 
 
 def observed_metrics(namespace: str, metrics: Mapping[str, int | float]) -> ObservedMetrics:

@@ -54,7 +54,10 @@ from .live_contract import (
     LiveContractError,
     NeutralProviderFailure,
     ProviderCallKind,
+    build_exact_provider_identity_policy,
     build_live_invocation_request,
+    evaluate_provider_identity_policy,
+    provider_identity_evaluation_eligible,
     map_live_outcome_to_stage_response,
 )
 from .protocol import (
@@ -191,6 +194,7 @@ class _RunState:
         self.evaluation_started: bool = False
         self.evaluation_committed: bool = False
         self.authority_committed: bool = False
+        self.provider_identity_policy: dict | None = None
 
 
 class ExperimentRunner:
@@ -248,18 +252,29 @@ class ExperimentRunner:
                 }
             )
             profile = execution_profile_for_kind(self.adapter.kind)
-            store.write_execution_binding(
-                {
-                    "adapter_kind": self.adapter.kind,
-                    "adapter_config_digest": digest_json(self.adapter.options),
-                    "adapter_identity": self.adapter.identity.to_dict(),
-                    "provider_treatment_config": self.adapter.persisted_provider_treatment_config(),
-                    "execution_profile": profile,
-                    "live_contract_version": LIVE_CONTRACT_VERSION,
-                    "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
-                    "context_policy_version": CONTEXT_POLICY_VERSION,
-                }
+            state.provider_identity_policy = (
+                build_exact_provider_identity_policy(
+                    self.adapter.identity, self.adapter.identity
+                )
+                if self.adapter.kind == "openai_responses"
+                else None
             )
+            execution_binding = {
+                "adapter_kind": self.adapter.kind,
+                "adapter_config_digest": digest_json(self.adapter.options),
+                "adapter_identity": self.adapter.identity.to_dict(),
+                "provider_treatment_config": self.adapter.persisted_provider_treatment_config(),
+                "execution_profile": profile,
+                "live_contract_version": LIVE_CONTRACT_VERSION,
+                "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
+                "context_policy_version": CONTEXT_POLICY_VERSION,
+            }
+            if state.provider_identity_policy is not None:
+                execution_binding["provider_identity_policy"] = state.provider_identity_policy
+                execution_binding["provider_identity_policy_version"] = (
+                    state.provider_identity_policy["schema"]
+                )
+            store.write_execution_binding(execution_binding)
             store.write_evaluator_binding(
                 {
                     "evaluator_version": self.evaluator.version,
@@ -323,7 +338,7 @@ class ExperimentRunner:
     # ------------------------------------------------------------- provenance
 
     def _treatment_declaration(self, run_spec: RunSpec, task_spec: TaskSpec) -> dict:
-        return {
+        declaration = {
             "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
             "condition": run_spec.condition.value,
             "prompt_version": run_spec.prompt_version,
@@ -341,6 +356,14 @@ class ExperimentRunner:
             "execution_profile": execution_profile_for_kind(self.adapter.kind),
             "live_contract_version": LIVE_CONTRACT_VERSION,
         }
+        if self.adapter.kind == "openai_responses":
+            declaration["provider_identity_policy"] = build_exact_provider_identity_policy(
+                self.adapter.identity, self.adapter.identity
+            )
+            declaration["provider_identity_policy_version"] = (
+                declaration["provider_identity_policy"]["schema"]
+            )
+        return declaration
 
     def _treatment_hash(self, run_spec: RunSpec, task_spec: TaskSpec) -> str:
         """Hash of the DECLARED experimental treatment/configuration.
@@ -396,7 +419,11 @@ class ExperimentRunner:
                         run_spec=run_spec,
                         role=role,
                         attempt=outcome.attempt,
-                        attempt_timeout_seconds=outcome.deadline.remaining(),
+                        attempt_timeout_seconds=(
+                            outcome.attempt_timeout_seconds
+                            if self.adapter.kind == "openai_responses"
+                            else outcome.deadline.remaining()
+                        ),
                         stage_inputs=outcome.stage_inputs,
                         tokens_in=outcome.usage_estimated["tokens_in"],
                         tokens_out=outcome.usage_estimated["tokens_out"],
@@ -410,6 +437,7 @@ class ExperimentRunner:
                         failure_class="timeout",
                         response=outcome.response,
                         provider_outcome=getattr(outcome, "provider_outcome", None),
+                        response_latency_seconds=outcome.response_latency_seconds,
                         invocation_began=True,
                         projected_tokens_in=outcome.usage_estimated["tokens_in"],
                         consumed_tokens_in=outcome.usage_estimated["tokens_in"],
@@ -504,6 +532,7 @@ class ExperimentRunner:
             failure_class=None,
             response=outcome.response,
             provider_outcome=getattr(outcome, "provider_outcome", None),
+            response_latency_seconds=outcome.response_latency_seconds,
             promoted_artifact_refs=tuple(refs),
             invocation_began=True,
             projected_tokens_in=outcome.usage_estimated["tokens_in"],
@@ -548,6 +577,7 @@ class ExperimentRunner:
                 "projected_tokens_in": estimated_in,
                 "invocation_began": False,
                 "consumed_tokens_in": 0,
+                "response_latency_seconds": None,
             }
             try:
                 deadline.require("before starting an attempt")
@@ -631,7 +661,19 @@ class ExperimentRunner:
                     budget,
                     remaining,
                 )
-                deadline.require("immediately after invocation returns")
+                if state.provider_identity_policy is not None:
+                    # Sample the same runner clock used to grant the remaining
+                    # deadline. Preserve this interval through later validation
+                    # and promotion; executor latency excludes mapping overhead.
+                    persist["response_latency_seconds"] = remaining - deadline.remaining()
+                    if not provider_identity_evaluation_eligible(
+                        provider_outcome,
+                        attempt_timeout_seconds=remaining,
+                        harness_observed_latency_seconds=persist["response_latency_seconds"],
+                    ):
+                        raise StageTimeout("stage deadline expired immediately after invocation returns")
+                else:
+                    deadline.require("immediately after invocation returns")
             except StageTimeout as exc:
                 if persist["invocation_began"]:
                     cumulative_input += estimated_in
@@ -772,14 +814,22 @@ class ExperimentRunner:
             cumulative_input += estimated_in
             persist["provider_outcome"] = provider_outcome
 
-            identity_error = self._check_identity(run_spec, role, response)
+            identity_error = self._check_identity(
+                run_spec,
+                role,
+                response,
+                provider_outcome=provider_outcome,
+                provider_identity_policy=state.provider_identity_policy,
+                attempt_timeout_seconds=remaining,
+                response_latency_seconds=persist["response_latency_seconds"],
+            )
             if identity_error:
                 self._record_stage_invocation(
                     **persist,
                     tokens_out=_estimate_tokens_out(response),
                     cumulative_tokens_in=cumulative_input,
                     retry_decision="stop",
-                    retry_rationale="identity_mismatch",
+                    retry_rationale="identity_policy_rejected",
                     contract_verdict="not_evaluated",
                     identity_verdict="failed",
                     failure_class="governance",
@@ -893,6 +943,7 @@ class ExperimentRunner:
                 identity_used=response["identity_used"],
                 provider_outcome=provider_outcome,
                 deadline=deadline,
+                response_latency_seconds=persist["response_latency_seconds"],
             )
 
         raise InfrastructureError("unreachable retry loop exit")
@@ -921,6 +972,7 @@ class ExperimentRunner:
         invocation_began: bool = False,
         projected_tokens_in: int | None = None,
         consumed_tokens_in: int | None = None,
+        response_latency_seconds: float | None = None,
     ) -> None:
         budget = run_spec.resource_limits
         profile = execution_profile_for_kind(self.adapter.kind)
@@ -937,6 +989,13 @@ class ExperimentRunner:
             adapter_kind=self.adapter.kind,
             adapter_config_digest=digest_json(self.adapter.options),
             provider_treatment_config=self.adapter.provider_treatment_config,
+            provider_identity_policy=(
+                build_exact_provider_identity_policy(
+                    self.adapter.identity, self.adapter.identity
+                )
+                if self.adapter.kind == "openai_responses"
+                else None
+            ),
         )
         identity_used = None
         reported_usage = None
@@ -956,6 +1015,8 @@ class ExperimentRunner:
         latency = None
         if invocation_began:
             latency = self.adapter.last_harness_observed_latency_seconds
+        if self.adapter.kind == "openai_responses" and response_latency_seconds is not None:
+            latency = response_latency_seconds
         record = build_invocation_record(
             run_id=run_spec.run_id,
             condition=run_spec.condition.value,
@@ -1030,8 +1091,17 @@ class ExperimentRunner:
             return response, None
         raise ProtocolError(f"unsupported execution profile {profile!r}")
 
-    @staticmethod
-    def _check_identity(run_spec: RunSpec, role: str, response: dict) -> str | None:
+    def _check_identity(
+        self,
+        run_spec: RunSpec,
+        role: str,
+        response: dict,
+        *,
+        provider_outcome=None,
+        provider_identity_policy=None,
+        attempt_timeout_seconds=None,
+        response_latency_seconds=None,
+    ) -> str | None:
         used = response.get("identity_used") or {}
         used_key = ":".join(
             str(used.get(k, "")) for k in
@@ -1042,6 +1112,17 @@ class ExperimentRunner:
                 f"identity mismatch in stage {role!r}: frozen RunSpec expects "
                 f"{run_spec.model_identifier!r}, invocation resolved {used_key!r}"
             )
+        if provider_identity_policy is not None:
+            verdict, reason = evaluate_provider_identity_policy(
+                provider_identity_policy,
+                requested_identity=self.adapter.identity,
+                configured_identity=self.adapter.identity,
+                outcome=provider_outcome,
+                attempt_timeout_seconds=attempt_timeout_seconds,
+                harness_observed_latency_seconds=response_latency_seconds,
+            )
+            if verdict != "passed":
+                return f"provider identity governance failure in stage {role!r}: {reason}"
         return None
 
     @staticmethod

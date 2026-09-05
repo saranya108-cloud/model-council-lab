@@ -1594,7 +1594,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
             payload = json.loads((runs_root / "oa-crash-diag" / "run_result.json").read_text())
             self.assertIn("stderr_sha256", payload["error"])
             self.assertIn("stderr_bytes", payload["error"])
-        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v13")
+        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v14")
         self.assertNotIn("openai", sys.modules)
 
 
