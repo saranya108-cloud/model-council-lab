@@ -73,6 +73,106 @@ def _role_from_instruction(role_instruction: str) -> str:
     raise ValueError(f"role instruction missing 'role:<name>' marker: {role_instruction!r}")
 
 
+def _default_verifier_finding() -> dict[str, Any]:
+    return {
+        "finding_id": "V1",
+        "description": "confirm fix addresses reported behavior",
+        "material": True,
+    }
+
+
+def _verifier_findings_payload(
+    options: Mapping[str, Any], prior_candidate: str
+) -> tuple[list[Any], list[str]]:
+    """Structured findings plus independently generated prose for F4 tests."""
+    if options.get("empty_verifier_findings"):
+        findings: list[Any] = []
+        findings_lines: list[str] = []
+    else:
+        findings = [_default_verifier_finding()]
+        findings_lines = [
+            f"- FINDING [V1]: confirm fix addresses reported behavior "
+            f"(prior candidate present: {str(bool(prior_candidate)).lower()})"
+        ]
+        if options.get("verifier_extra_finding"):
+            findings.append(
+                {
+                    "finding_id": "V2",
+                    "description": "second material finding",
+                    "material": True,
+                }
+            )
+            findings_lines.append("- FINDING [V2]: second material finding")
+    if options.get("divergent_findings_prose"):
+        findings_lines.append(
+            "- FINDING [V9]: extra finding present only in free-text artifact"
+        )
+    findings_lines += [
+        "- FALSIFICATION ATTEMPT: checked against bug report conditions",
+        "- SUFFICIENCY: evidence sufficient",
+    ]
+    return findings, findings_lines
+
+
+def _dispositions_from_finding_lines(findings_text: str) -> list[dict[str, str]]:
+    dispositions: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for line in findings_text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("- FINDING"):
+            continue
+        if "[V1]" in stripped:
+            fid = "V1"
+        elif "[V2]" in stripped:
+            fid = "V2"
+        else:
+            fid = "S1"
+        if fid in seen_ids:
+            continue
+        seen_ids.add(fid)
+        dispositions.append(
+            {
+                "finding_id": fid,
+                "decision": "accept",
+                "rationale": "addressed in revision",
+            }
+        )
+    return dispositions
+
+
+def _dispositions_from_canonical_findings(findings_text: str) -> list[dict[str, str]] | None:
+    try:
+        payload = json.loads(findings_text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if type(payload) is not dict or type(payload.get("findings")) is not list:
+        return None
+    dispositions: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for item in payload["findings"]:
+        if type(item) is not dict:
+            continue
+        finding_id = item.get("finding_id")
+        if type(finding_id) is not str or not finding_id or finding_id in seen_ids:
+            continue
+        seen_ids.add(finding_id)
+        dispositions.append(
+            {
+                "finding_id": finding_id,
+                "decision": "accept",
+                "rationale": "addressed in revision",
+            }
+        )
+    return dispositions
+
+
+def _reviser_dispositions(stage_inputs: Mapping[str, Any]) -> list[dict[str, str]]:
+    if "verifier_findings" in stage_inputs:
+        canonical = _dispositions_from_canonical_findings(stage_inputs["verifier_findings"])
+        return canonical if canonical is not None else []
+    return _dispositions_from_finding_lines(stage_inputs.get("self_review") or "")
+
+
 def _identity_used(options: Mapping[str, Any]) -> dict[str, str]:
     """The identity actually resolved for this invocation.
 
@@ -218,40 +318,16 @@ def fake_generate(
         }
     elif role == "verifier":
         prior = stage_inputs.get("solver_candidate", "")
-        findings = [
-            {
-                "finding_id": "V1",
-                "description": "confirm fix addresses reported behavior",
-                "material": True,
-            }
-        ]
-        if options.get("verifier_extra_finding"):
-            findings.append(
-                {
-                    "finding_id": "V2",
-                    "description": "second material finding",
-                    "material": True,
-                }
-            )
+        findings, findings_lines = _verifier_findings_payload(options, prior)
         malformed = options.get("malformed_verifier")
-        if malformed == "no_description":
+        if malformed == "no_description" and findings:
             findings[0]["description"] = ""
-        elif malformed == "duplicate_id":
+        elif malformed == "duplicate_id" and findings:
             findings.append(dict(findings[0]))
         elif malformed == "findings_scalar":
             findings = 42
-        elif malformed == "material_string":
+        elif malformed == "material_string" and findings:
             findings[0]["material"] = "true"
-        findings_lines = [
-            f"- FINDING [V1]: confirm fix addresses reported behavior "
-            f"(prior candidate present: {str(bool(prior)).lower()})"
-        ]
-        if options.get("verifier_extra_finding"):
-            findings_lines.append("- FINDING [V2]: second material finding")
-        findings_lines += [
-            "- FALSIFICATION ATTEMPT: checked against bug report conditions",
-            "- SUFFICIENCY: evidence sufficient",
-        ]
         artifacts = {
             "findings": "# Independent verification\n" + "\n".join(findings_lines)
         }
@@ -260,26 +336,8 @@ def fake_generate(
         else:
             structured = {"findings": findings}
     elif role in ("revise", "reviser"):
-        findings_text = (
-            stage_inputs.get("verifier_findings") or stage_inputs.get("self_review") or ""
-        )
         base = stage_inputs.get("solver_candidate") or stage_inputs.get("draft") or fix_body
-        dispositions: list[dict[str, str]] = []
-        seen_ids: set[str] = set()
-        for line in findings_text.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("- FINDING"):
-                fid = "V1" if "[V1]" in stripped else ("V2" if "[V2]" in stripped else "S1")
-                if fid in seen_ids:
-                    continue
-                seen_ids.add(fid)
-                dispositions.append(
-                    {
-                        "finding_id": fid,
-                        "decision": "accept",
-                        "rationale": "addressed in revision",
-                    }
-                )
+        dispositions = _reviser_dispositions(stage_inputs)
         mode = options.get("disposition_mode", "ok")
         if mode == "missing":
             dispositions = []
@@ -308,8 +366,8 @@ def fake_generate(
             )
         }
         # Condition C reviser receives verifier_findings; Condition B does not
-        # advertise or require C dispositions.
-        if "verifier_findings" in stage_inputs:
+        # advertise or require C dispositions unless a test forces the leak.
+        if "verifier_findings" in stage_inputs or options.get("force_reviser_structured"):
             structured = {"dispositions": dispositions}
         else:
             structured = None
@@ -578,44 +636,15 @@ def _live_stub_stage_payload(request: LiveInvocationRequest, options: Mapping[st
             )
         }
     elif role == "verifier":
-        findings = [
-            {
-                "finding_id": "V1",
-                "description": "confirm fix addresses reported behavior",
-                "material": True,
-            }
-        ]
-        if options.get("extra_nested_key"):
+        prior = stage_inputs.get("solver_candidate", "")
+        findings, findings_lines = _verifier_findings_payload(options, prior)
+        if options.get("extra_nested_key") and findings:
             findings[0]["unexpected"] = "extra"
-        artifacts = {
-            "findings": (
-                "# Independent verification\n"
-                "- FINDING [V1]: confirm fix addresses reported behavior\n"
-                "- SUFFICIENCY: evidence sufficient"
-            )
-        }
+        artifacts = {"findings": "# Independent verification\n" + "\n".join(findings_lines)}
         structured = {"findings": findings}
     elif role == "reviser":
-        findings_text = (
-            stage_inputs.get("verifier_findings") or stage_inputs.get("self_review") or ""
-        )
         base = stage_inputs.get("solver_candidate") or stage_inputs.get("draft") or fix_body
-        dispositions: list[dict[str, str]] = []
-        seen_ids: set[str] = set()
-        for line in findings_text.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("- FINDING"):
-                fid = "V1" if "[V1]" in stripped else ("V2" if "[V2]" in stripped else "S1")
-                if fid in seen_ids:
-                    continue
-                seen_ids.add(fid)
-                dispositions.append(
-                    {
-                        "finding_id": fid,
-                        "decision": "accept",
-                        "rationale": "addressed in revision",
-                    }
-                )
+        dispositions = _reviser_dispositions(stage_inputs)
         artifacts = {
             "final_candidate": (
                 f"# Final candidate (reviser)\n{base}\nREVISION_APPLIED[{digest}]"

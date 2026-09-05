@@ -96,6 +96,22 @@ class Disposition:
         return self
 
 
+def canonical_findings_text(findings: tuple[Finding, ...]) -> str:
+    """Deterministic textual projection of validated structured findings."""
+    return canonical_json(
+        {
+            "findings": [
+                {
+                    "finding_id": finding.finding_id,
+                    "description": finding.description,
+                    "material": finding.material,
+                }
+                for finding in findings
+            ]
+        }
+    )
+
+
 def validate_findings(findings: tuple[Finding, ...]) -> None:
     seen: set[str] = set()
     for finding in findings:

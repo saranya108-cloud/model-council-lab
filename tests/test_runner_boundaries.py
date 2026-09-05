@@ -403,6 +403,15 @@ class TestContractEnforcement(unittest.TestCase):
             self.assertFalse((run_dir / "reviser" / "final_candidate.md").exists())
             self.assertFalse((run_dir / "seals" / "reviser.json").exists())
 
+    def test_zero_findings_empty_dispositions_succeeds(self):
+        with TempRoot() as root:
+            result = self.run_c_with_mode(root, extra={"empty_verifier_findings": True})
+            self.assertEqual(result.status, "succeeded")
+            self.assertEqual(
+                [stage.role for stage in result.stage_results],
+                ["solver", "verifier", "reviser"],
+            )
+
 
 class TestFailureTaxonomy(unittest.TestCase):
     def assert_terminal_record(self, root, run_id, expected_status):

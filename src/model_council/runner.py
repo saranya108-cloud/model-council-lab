@@ -90,6 +90,7 @@ from .types import (
     STATUS_INFRASTRUCTURE_FAILURE,
     STATUS_RETRY_EXHAUSTED,
     STATUS_SUCCEEDED,
+    Condition,
     ContractViolation,
     Disposition,
     Finding,
@@ -104,6 +105,7 @@ from .types import (
     StageStatus,
     StageTimeout,
     TaskSpec,
+    canonical_findings_text,
     validate_dispositions,
     validate_findings,
 )
@@ -812,7 +814,9 @@ class ExperimentRunner:
                     usage_source="harness_estimated_enforced",
                 )
 
-            contract_error = self._check_contract(role, response, state)
+            contract_error = self._check_contract(
+                role, response, state, run_spec.condition
+            )
             if contract_error:
                 self._record_stage_invocation(
                     **persist,
@@ -870,12 +874,15 @@ class ExperimentRunner:
                 )
                 continue
 
+            artifacts = dict(response["artifacts"])
+            if role == "verifier":
+                artifacts["findings"] = canonical_findings_text(state.verifier_findings)
             return _StageOutcome.success(
                 role=role,
                 attempt=attempt,
                 started_at=started,
                 response=response,
-                artifacts=dict(response["artifacts"]),
+                artifacts=artifacts,
                 stage_inputs=stage_inputs,
                 attempt_timeout_seconds=remaining,
                 usage_estimated={
@@ -1056,7 +1063,9 @@ class ExperimentRunner:
         return None
 
     @staticmethod
-    def _check_contract(role: str, response: dict, state: _RunState) -> str | None:
+    def _check_contract(
+        role: str, response: dict, state: _RunState, condition: Condition
+    ) -> str | None:
         try:
             text = response.get("text")
             if type(text) is not str:
@@ -1093,11 +1102,13 @@ class ExperimentRunner:
                 state.verifier_findings = findings
                 return None
             if role == "reviser":
-                if not state.verifier_findings:
+                if condition is Condition.B:
                     if structured is not None:
                         raise ContractViolation(
                             "Condition B reviser must not emit Condition C structured dispositions"
                         )
+                    return None
+                if condition is not Condition.C:
                     return None
                 dispositions_payload = _require_structured(structured, "dispositions")
                 dispositions = tuple(

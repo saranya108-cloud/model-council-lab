@@ -52,6 +52,29 @@ class TestConditionB(unittest.TestCase):
             by_role["reviser"].output_refs, ("reviser/final_candidate.md",)
         )
 
+    def test_reviser_still_accepts_unstructured_condition_b_output(self):
+        result = self.runner.execute(make_spec("run-b-unstructured", "B"), make_task())
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(
+            [stage.role for stage in result.stage_results],
+            ["draft", "self_review", "reviser"],
+        )
+        self.assertIsNone(self.runner.adapter.last_request["stage_inputs"].get("verifier_findings"))
+        self.assertIn("self_review", self.runner.adapter.last_request["stage_inputs"])
+
+    def test_reviser_rejects_condition_c_structured_dispositions(self):
+        runner, _ = make_runner(self.root, options={"force_reviser_structured": True})
+        result = runner.execute(make_spec("run-b-structured", "B"), make_task())
+        self.assertEqual(result.status, "failed_contract")
+        self.assertEqual(result.stage_results[-1].role, "reviser")
+        self.assertIn(
+            "Condition B reviser must not emit Condition C structured dispositions",
+            result.stage_results[-1].error,
+        )
+        run_dir = Path(self.root) / "runs" / "run-b-structured"
+        self.assertFalse((run_dir / "reviser" / "final_candidate.md").exists())
+        self.assertFalse((run_dir / "seals" / "reviser.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
