@@ -292,7 +292,7 @@ def require_destination_absent(runs_root: Path, run_id: str) -> Path:
 
 def build_evaluation_config() -> EvaluationConfig:
     return EvaluationConfig(
-        required_markers=("PROPOSED_FIX",),
+        required_markers=(),
         prohibited_markers=("MODIFIED_HIDDEN_TESTS",),
         metadata={
             "development_only": True,

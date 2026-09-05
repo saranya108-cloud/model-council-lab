@@ -18,11 +18,29 @@ from helpers import TempRoot
 from model_council import (
     ArtifactStore,
     EvaluationOutcome,
+    ProviderCallKind,
     STATUS_FAILED_EVALUATION,
     STATUS_INFRASTRUCTURE_FAILURE,
     STATUS_SUCCEEDED,
     Condition,
     RunResult,
+    UnavailableReason,
+)
+from model_council.live_contract import (
+    CallTiming,
+    FinishReason,
+    ProviderUsage,
+    build_provider_call_outcome,
+    empty_provider_metadata,
+    observed_identity,
+    observed_int,
+    observed_str,
+    unavailable,
+    unavailable_identity,
+    unavailable_int,
+    unavailable_metrics,
+    unavailable_number,
+    unavailable_structured,
 )
 from model_council.roles import CONDITION_STAGES, ROLE_SOLVER
 
@@ -726,6 +744,113 @@ class TestOpenAICanary(unittest.TestCase):
             self.assertIn("plumbing/integration evidence only", out)
             self.assertEqual(err, "")
             self.assertFalse((runs / "canary-run-001").exists())
+
+    def test_marker_free_schema_valid_live_response_promotes_and_evaluates(self):
+        candidate = "# Candidate\nApply the bounded parser repair exactly as described."
+        evidence = "# Evidence\nThe visible reproduction now passes without hidden-test changes."
+        self.assertNotIn("PROPOSED_FIX", candidate)
+
+        with TempRoot() as root:
+            runs = Path(root) / "runs"
+            live_requests = []
+
+            def invoke_live(_adapter, request):
+                live_requests.append(request)
+                unavailable_reason = UnavailableReason.NOT_EXPOSED
+                usage = ProviderUsage(
+                    input_tokens=unavailable_int(unavailable_reason),
+                    cached_input_tokens=unavailable_int(unavailable_reason),
+                    cache_write_tokens=unavailable_int(unavailable_reason),
+                    output_tokens=unavailable_int(unavailable_reason),
+                    reasoning_tokens=unavailable_int(unavailable_reason),
+                    total_tokens=unavailable_int(unavailable_reason),
+                    extra=unavailable_metrics(UnavailableReason.NOT_APPLICABLE),
+                )
+                return build_provider_call_outcome(
+                    kind=ProviderCallKind.SUCCESS,
+                    requested_identity=request.requested_identity,
+                    configured_identity=request.configured_identity,
+                    provider_resolved_identity=unavailable_identity(unavailable_reason),
+                    invocation_returned_identity=observed_identity(
+                        model_id=request.configured_identity.model_id
+                    ),
+                    provider_snapshot_identity=unavailable(unavailable_reason),
+                    provider_response_id=observed_str("resp_offline_marker_free"),
+                    provider_request_id=unavailable(unavailable_reason),
+                    provider_response_status=observed_int(200),
+                    finish_reason=observed_str(FinishReason.COMPLETED.value),
+                    raw_output=observed_str("synthetic offline response"),
+                    structured_output=unavailable_structured(
+                        UnavailableReason.NOT_APPLICABLE
+                    ),
+                    tool_use_count=0,
+                    usage=usage,
+                    timing=CallTiming(
+                        provider_processing_ms=unavailable_number(unavailable_reason)
+                    ),
+                    stage_output={
+                        "text": f"{candidate}\n\n{evidence}",
+                        "artifacts": {
+                            "candidate": candidate,
+                            "evidence": evidence,
+                        },
+                        "structured": None,
+                    },
+                    provider_metadata=empty_provider_metadata(),
+                )
+
+            with patch.object(
+                self.module.SubprocessAdapter,
+                "invoke_live",
+                autospec=True,
+                side_effect=invoke_live,
+            ), patch.object(
+                self.module.SubprocessAdapter,
+                "_spawn_worker",
+                side_effect=AssertionError("provider worker must not spawn"),
+            ), patch(
+                "model_council.openai_adapter.build_openai_client",
+                side_effect=AssertionError("OpenAI client must not be built"),
+            ), patch(
+                "model_council.openai_adapter._perform_openai_responses_transport",
+                side_effect=AssertionError("OpenAI transport must not run"),
+            ):
+                code, out, err = _capture_main(
+                    self.module,
+                    _valid_argv(runs, run_id="marker-free-live-response"),
+                )
+
+            self.assertEqual(len(live_requests), 1)
+            self.assertEqual(
+                list(live_requests[0].output_contract["expected_artifacts"]),
+                ["candidate", "evidence"],
+            )
+            self.assertIs(
+                live_requests[0].output_contract["structured_required"], False
+            )
+
+            run_dir = runs / "marker-free-live-response"
+            self.assertEqual(
+                (run_dir / "solver" / "candidate.md").read_text(encoding="utf-8"),
+                candidate,
+            )
+            self.assertEqual(
+                (run_dir / "solver" / "evidence.md").read_text(encoding="utf-8"),
+                evidence,
+            )
+            result = json.loads((run_dir / "run_result.json").read_text())
+            self.assertTrue(
+                result["evaluation"]["passed"], result["evaluation"]["reasons"]
+            )
+            self.assertEqual(result["status"], STATUS_SUCCEEDED)
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            self.assertIn("terminal_status=succeeded", out)
+            verification = ArtifactStore.verify_terminal_run(
+                runs, "marker-free-live-response"
+            )
+            self.assertTrue(verification["terminal_verified"])
+            self.assertEqual(verification["terminal_status"], STATUS_SUCCEEDED)
 
     def test_29_normal_success_invokes_terminal_verification(self):
         with TempRoot() as root:
