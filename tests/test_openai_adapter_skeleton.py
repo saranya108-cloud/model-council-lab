@@ -136,6 +136,7 @@ expected_keys = {
     "background",
     "input",
     "instructions",
+    "max_output_tokens",
     "model",
     "parallel_tool_calls",
     "store",
@@ -146,6 +147,7 @@ expected_keys = {
     "truncation",
 }
 assert set(approved) == expected_keys
+assert approved["max_output_tokens"] == request.max_output_tokens
 
 success_attempts = 0
 captured_body = None
@@ -171,7 +173,7 @@ def success_handler(http_request):
             "error": None,
             "incomplete_details": None,
             "instructions": approved["instructions"],
-            "max_output_tokens": None,
+            "max_output_tokens": approved["max_output_tokens"],
             "max_tool_calls": None,
             "model": approved["model"],
             "output": [
@@ -636,6 +638,7 @@ class _FakeResponses:
             "model": kwargs.get("model"),
             "instructions": kwargs.get("instructions"),
             "input": kwargs.get("input"),
+            "max_output_tokens": kwargs.get("max_output_tokens"),
             "store": kwargs.get("store"),
             "stream": kwargs.get("stream"),
             "background": kwargs.get("background"),
@@ -1024,6 +1027,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
                     "background",
                     "input",
                     "instructions",
+                    "max_output_tokens",
                     "model",
                     "parallel_tool_calls",
                     "store",

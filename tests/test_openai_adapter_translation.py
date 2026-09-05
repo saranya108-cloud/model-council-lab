@@ -334,6 +334,7 @@ class TestOpenAIRequestConstruction(unittest.TestCase):
             {"user": "user-1"},
             {"service_tier": "flex"},
             {"metadata": {"run": "x"}},
+            {"max_output_tokens": 16},
             {"runtime": {"num_ctx": 1}},
             {"reasoning": {"effort": "high", "budget": 12}},
             {"text": {"verbosity": "low", "format": {"type": "text"}}},
@@ -369,13 +370,19 @@ class TestOpenAIRequestConstruction(unittest.TestCase):
         self.assertIs(built["parallel_tool_calls"], False)
         self.assertEqual(built["truncation"], "disabled")
 
-    def test_continuation_and_authority_fields_are_absent(self):
+    def test_runner_authorized_output_ceiling_is_translated_exactly(self):
+        from model_council.openai_adapter import build_openai_responses_request
+
+        request = _solver_request(max_output_tokens=137)
+        built = build_openai_responses_request(request, _CLOSED_TREATMENT)
+        self.assertEqual(built["max_output_tokens"], 137)
+
+    def test_continuation_and_internal_authority_fields_are_absent(self):
         from model_council.openai_adapter import build_openai_responses_request
 
         built = build_openai_responses_request(_solver_request(), _CLOSED_TREATMENT)
         for key in _FORBIDDEN_REQUEST_KEYS:
             self.assertNotIn(key, built)
-        self.assertNotIn("max_output_tokens", built)
         self.assertNotIn("attempt_timeout_seconds", built)
         self.assertNotIn("seed", built)
 

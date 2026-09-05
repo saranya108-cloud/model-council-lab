@@ -866,7 +866,8 @@ class _HostileTool:
 
 class TestOpenAITransportClosedInput(unittest.TestCase):
     def test_accepted_builder_output_reaches_create_once(self):
-        request = _closed_request(_CLOSED_TREATMENT)
+        live_request = _solver_request(max_output_tokens=137)
+        request = build_openai_responses_request(live_request, _CLOSED_TREATMENT)
         result, seen = _invoke(request=request, response=_success_response())
         self.assertIsInstance(result, _OpenAITransportSuccess)
         calls = seen["responses"].calls
@@ -875,6 +876,7 @@ class TestOpenAITransportClosedInput(unittest.TestCase):
         timeout = sent.pop("timeout")
         self.assertEqual(timeout, _TIMEOUT)
         self.assertEqual(sent, request)
+        self.assertEqual(sent["max_output_tokens"], 137)
 
     def test_extra_and_forbidden_keys_are_rejected_before_factory(self):
         cases = (
@@ -888,7 +890,6 @@ class TestOpenAITransportClosedInput(unittest.TestCase):
             ("service_tier", "flex"),
             ("temperature", 0),
             ("top_p", 1),
-            ("max_output_tokens", 16),
             ("metadata", {"run": "x"}),
         )
         for key, value in cases:
@@ -905,6 +906,30 @@ class TestOpenAITransportClosedInput(unittest.TestCase):
                     _invoke(request=request, factory=factory)
                 self.assertEqual(str(ctx.exception), OPENAI_TRANSPORT_REQUEST_INVALID)
                 self.assertEqual(called, [])
+
+    def test_malformed_output_ceilings_are_rejected_before_factory(self):
+        for value in (None, True, False, 0, -1, 1.0, "16", [], {}):
+            with self.subTest(value=repr(value)):
+                request = dict(_closed_request())
+                request["max_output_tokens"] = value
+                called = []
+
+                def factory(*, api_key, max_retries):
+                    called.append(True)
+                    raise AssertionError("factory must not run")
+
+                with self.assertRaises(ProtocolError) as ctx:
+                    _invoke(request=request, factory=factory)
+                self.assertEqual(str(ctx.exception), OPENAI_TRANSPORT_REQUEST_INVALID)
+                self.assertEqual(called, [])
+
+    def test_request_without_output_ceiling_preserves_omission(self):
+        request = dict(_closed_request())
+        request.pop("max_output_tokens", None)
+        result, seen = _invoke(request=request, response=_success_response())
+        self.assertIsInstance(result, _OpenAITransportSuccess)
+        self.assertEqual(len(seen["responses"].calls), 1)
+        self.assertNotIn("max_output_tokens", seen["responses"].calls[0])
 
     def test_missing_required_key_is_rejected_before_factory(self):
         request = dict(_closed_request())
@@ -1772,6 +1797,30 @@ class TestOpenAIProductionActivation(unittest.TestCase):
         self.assertNotIn(_OPENAI_KIND, REGISTRY)
         self.assertIs(LIVE_REGISTRY[_OPENAI_KIND], openai_responses_skeleton)
 
+    def test_runner_authorized_output_ceiling_reaches_sdk_call(self):
+        with TempRoot() as root:
+            python, calls = _install_offline_openai_python(
+                root, _offline_success_config()
+            )
+            adapter = _openai_adapter(python_executable=python)
+            runner = ExperimentRunner(
+                adapter,
+                ExternalEvaluator(EvaluationConfig()),
+                runs_root=Path(root) / "runs",
+            )
+            with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
+                runner.execute(
+                    make_spec(
+                        "provider-output-ceiling",
+                        "A",
+                        max_output_tokens_per_stage=137,
+                    ),
+                    make_task(),
+                )
+            records = _read_offline_calls(calls)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["max_output_tokens"], 137)
+
     def test_real_worker_success_path_uses_configured_model_and_one_sdk_call(self):
         request = _solver_request()
         outcome, failure, records, last = _invoke_offline_live(
@@ -1788,6 +1837,7 @@ class TestOpenAIProductionActivation(unittest.TestCase):
         self.assertEqual(record["max_retries"], 0)
         self.assertEqual(record["model"], CONFIGURED.model_id)
         self.assertNotEqual(record["model"], REQUESTED_ALIAS.model_id)
+        self.assertEqual(record["max_output_tokens"], request.max_output_tokens)
         self.assertEqual(record["instructions"], request.role_instruction)
         self.assertEqual(
             record["input"],

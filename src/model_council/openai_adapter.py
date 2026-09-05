@@ -161,7 +161,7 @@ _OPENAI_TRANSPORT_REQUIRED_KEYS = frozenset(
         "text",
     }
 )
-_OPENAI_TRANSPORT_OPTIONAL_KEYS = frozenset({"reasoning"})
+_OPENAI_TRANSPORT_OPTIONAL_KEYS = frozenset({"max_output_tokens", "reasoning"})
 _OPENAI_TRANSPORT_ALLOWED_KEYS = (
     _OPENAI_TRANSPORT_REQUIRED_KEYS | _OPENAI_TRANSPORT_OPTIONAL_KEYS
 )
@@ -449,6 +449,7 @@ def build_openai_responses_request(
         "model": request.configured_identity.model_id,
         "instructions": request.role_instruction,
         "input": canonical_json({"stage_inputs": dict(request.stage_inputs)}),
+        "max_output_tokens": request.max_output_tokens,
         "store": False,
         "stream": False,
         "background": False,
@@ -1165,6 +1166,10 @@ def _validate_openai_transport_request(translated_request: Any) -> dict[str, Any
         _reject_openai_transport_request()
     if closed["truncation"] != "disabled":
         _reject_openai_transport_request()
+    if "max_output_tokens" in closed:
+        max_output_tokens = closed["max_output_tokens"]
+        if type(max_output_tokens) is not int or max_output_tokens < 1:
+            _reject_openai_transport_request()
     _require_openai_transport_text(closed["text"])
     if "reasoning" in closed:
         _require_openai_transport_reasoning(closed["reasoning"])
