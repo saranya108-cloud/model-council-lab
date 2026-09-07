@@ -189,7 +189,16 @@ def _run_live(kind: str, options: dict, request: dict) -> int:
             "openai_responses adapter runtime options must be empty",
         )
     try:
-        result = LIVE_REGISTRY[kind](options, provider_treatment_config, live_request)
+        if kind == "openai_responses":
+            from .attempt_lifecycle import JournalWriter, LIFECYCLE_FD_ENV, validate_worker_binding
+            raw_fd = os.environ.pop(LIFECYCLE_FD_ENV, None)
+            if type(raw_fd) is not str or not raw_fd.isascii() or not raw_fd.isdigit():
+                raise ProtocolError("missing lifecycle descriptor")
+            writer = JournalWriter(int(raw_fd), request.get("attempt_id"))
+            validate_worker_binding(writer, live_request)
+            result = LIVE_REGISTRY[kind](options, provider_treatment_config, live_request, lifecycle=writer)
+        else:
+            result = LIVE_REGISTRY[kind](options, provider_treatment_config, live_request)
     except ModelFailure:
         return _fail(
             "ProtocolError",

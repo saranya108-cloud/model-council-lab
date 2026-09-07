@@ -40,7 +40,7 @@ from .live_contract import (
     unavailable_structured,
     validate_closed_schema,
 )
-from .security import canonical_json, normalize_provider_treatment_config
+from .security import canonical_json, digest_json, normalize_provider_treatment_config
 
 HOST_OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
 CHILD_OPENAI_API_KEY_ENV = "MCL_OPENAI_API_KEY"
@@ -1809,6 +1809,7 @@ def _perform_openai_responses_transport(
     residual_timeout_seconds: int | float,
     *,
     client_factory: Callable[..., Any] | None = None,
+    lifecycle=None,
 ) -> _OpenAITransportResult:
     owned_translated_request = None
     residual_timeout = None
@@ -1820,18 +1821,23 @@ def _perform_openai_responses_transport(
         client = build_openai_client(
             runtime_credential, client_factory=client_factory
         )
+        if lifecycle is None:
+            raise ProtocolError("OpenAI SDK dispatch requires attempt lifecycle authorization")
+        lifecycle.append("sdk_call_boundary", {"wire_request_digest": digest_json(owned_translated_request)})
         try:
             raw_response = client.responses.create(
                 **owned_translated_request,
                 timeout=residual_timeout,
             )
         except Exception as caught:
+            lifecycle.append("sdk_exception_observed")
             try:
                 failure = _normalize_openai_sdk_exception(caught)
             except BaseException:
                 failure = _closed_unknown_transport_failure()
             caught = None
             return failure
+        lifecycle.append("sdk_return_observed")
         try:
             extracted = _extract_openai_sdk_response(raw_response)
         except _OpenAITranslationReject:
@@ -1994,6 +2000,8 @@ def openai_responses_skeleton(
     options: Mapping[str, Any],
     provider_treatment_config: Mapping[str, Any],
     request: Any,
+    *,
+    lifecycle=None,
 ) -> Any:
     """Registered OpenAI live adapter. One runner-authorized attempt, no retry."""
     secret = acquire_child_openai_runtime_secret()
@@ -2009,6 +2017,7 @@ def openai_responses_skeleton(
             translated,
             secret,
             request.attempt_timeout_seconds,
+            lifecycle=lifecycle,
         )
         result_type = type(transport_result)
         if result_type is _OpenAITransportSuccess:
@@ -2034,4 +2043,7 @@ def openai_responses_skeleton(
         raise ProtocolError(closed_failure)
     if outcome is None:
         raise ProtocolError(OPENAI_TRANSPORT_RESULT_INVALID)
+    if lifecycle is None:
+        raise ProtocolError("OpenAI outcome requires attempt lifecycle authorization")
+    lifecycle.outcome(outcome)
     return outcome

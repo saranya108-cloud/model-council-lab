@@ -28,7 +28,9 @@ Second-audit remediation:
 from __future__ import annotations
 
 import json
+import hashlib
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
@@ -270,6 +272,9 @@ class ExperimentRunner:
                 "context_policy_version": CONTEXT_POLICY_VERSION,
             }
             if state.provider_identity_policy is not None:
+                from .attempt_lifecycle import LIFECYCLE_SCHEMA
+                execution_binding["attempt_lifecycle_schema"] = LIFECYCLE_SCHEMA
+                execution_binding["execution_instance_id"] = uuid.uuid4().hex
                 execution_binding["provider_identity_policy"] = state.provider_identity_policy
                 execution_binding["provider_identity_policy_version"] = (
                     state.provider_identity_policy["schema"]
@@ -286,6 +291,13 @@ class ExperimentRunner:
             store.write_treatment_declaration(declaration, state.treatment_hash)
             store.freeze_run_authority()
             state.authority_committed = True
+            if self.adapter.kind == "openai_responses":
+                # An empty inventory is explicit even for a configuration
+                # rejection before any attempt is prepared.
+                with (store.run_dir / MANIFEST).open("x"):
+                    pass
+            if self.adapter.kind == "openai_responses" and run_spec.resource_limits.max_stage_retries != 0:
+                raise GovernanceViolation("F5 production OpenAI attempts require zero automatic retries")
             # Preflight identity check uses the configured adapter identity;
             # per-invocation actual identity is re-verified from child output.
             if self.adapter.identity.key() != run_spec.model_identifier:
@@ -549,6 +561,46 @@ class ExperimentRunner:
         return refs
 
     def _execute_stage(self, run_spec: RunSpec, role: str, context, store, state: _RunState):
+        if self.adapter.kind != "openai_responses":
+            return self._execute_stage_body(run_spec, role, context, store, state)
+        from .attempt_lifecycle import AttemptJournal, request_digest, sync_tree
+        stage_inputs = {key: context[key] for key in sorted(ALLOWED_INPUT_KEYS[(run_spec.condition, role)])}
+        budget = run_spec.resource_limits
+        request = build_live_invocation_request(
+            condition=run_spec.condition.value, role=role, role_instruction=ROLE_INSTRUCTIONS[role],
+            stage_inputs=stage_inputs, requested_identity=self.adapter.identity,
+            configured_identity=self.adapter.identity, seed=run_spec.seed,
+            max_output_tokens=budget.max_output_tokens_per_stage, max_tool_calls=budget.max_tool_calls_per_stage,
+            attempt_timeout_seconds=budget.stage_timeout_seconds,
+        )
+        sync_tree(store.run_dir)
+        journal = AttemptJournal.create(store.run_dir, {
+            "run_id": run_spec.run_id, "role": role, "attempt": 1,
+            "execution_instance_id": json.loads((store.run_dir / "execution_binding.json").read_text())["execution_instance_id"],
+            "harness_protocol_version": HARNESS_PROTOCOL_VERSION,
+            "predecessor_attempt_id": None,
+            "treatment_digest": state.treatment_hash,
+            "authority_digest": hashlib.sha256((store.run_dir / RUN_AUTHORITY).read_bytes()).hexdigest(),
+            "request_digest": request_digest(request), "input_content_digest": request.input_content_digest,
+            "request_parameter_digest": request.request_parameter_digest,
+            "configured_identity": self.adapter.identity.to_dict(),
+            "wire_model": state.provider_identity_policy["wire_model"],
+            "identity_policy_digest": digest_json(state.provider_identity_policy),
+            "resource_limits": budget.to_dict(), "attempt_timeout_seconds": budget.stage_timeout_seconds,
+        })
+        self.adapter.attempt_journal = journal
+        store._lifecycle_journals[role] = journal
+        try:
+            return self._execute_stage_body(run_spec, role, context, store, state)
+        finally:
+            if not journal.persistence_failed and not journal.permission_granted and not journal.path.with_name("closed.json").exists():
+                # A partially persisted permission may exist despite a failed
+                # fsync. Reconstruct rather than trusting the in-memory flag.
+                if len(journal.inspect()["events"]) == 1:
+                    journal.close("not_started", worker_reaped=True)
+            self.adapter.attempt_journal = None
+
+    def _execute_stage_body(self, run_spec: RunSpec, role: str, context, store, state: _RunState):
         budget = run_spec.resource_limits
         deadline = _StageDeadline(self._monotonic, budget.stage_timeout_seconds)
         allowed_keys = sorted(ALLOWED_INPUT_KEYS[(run_spec.condition, role)])
@@ -1046,6 +1098,12 @@ class ExperimentRunner:
             projected_tokens_in=projected_tokens_in,
             consumed_tokens_in=consumed_tokens_in,
             harness_observed_latency_seconds=latency,
+            attempt_lifecycle=store.lifecycle_summary(role, close_not_started=True),
+            lifecycle_observed_outcome=(
+                store._lifecycle_journals[role].inspect()["outcome"]
+                if role in store._lifecycle_journals else None
+            ),
+            harness_protocol_version=HARNESS_PROTOCOL_VERSION,
         )
         store.record_invocation(role, attempt, record, raw_text)
 
@@ -1072,7 +1130,14 @@ class ExperimentRunner:
                 max_tool_calls=budget.max_tool_calls_per_stage,
                 attempt_timeout_seconds=remaining,
             )
-            outcome = self.adapter.invoke_live(live_request)
+            try:
+                outcome = self.adapter.invoke_live(live_request)
+            except NeutralProviderFailure as exc:
+                if self.adapter.kind == "openai_responses" and exc.outcome is not None:
+                    self._assert_lifecycle_outcome(exc.outcome)
+                raise
+            if self.adapter.kind == "openai_responses":
+                self._assert_lifecycle_outcome(outcome)
             if outcome.kind is not ProviderCallKind.SUCCESS:
                 raise ProtocolError("invoke_live returned a non-success outcome without raising")
             try:
@@ -1090,6 +1155,11 @@ class ExperimentRunner:
             )
             return response, None
         raise ProtocolError(f"unsupported execution profile {profile!r}")
+
+    def _assert_lifecycle_outcome(self, outcome):
+        journal = self.adapter.attempt_journal
+        if journal is None or journal.inspect(require_closed=True)["outcome"] != outcome.to_dict():
+            raise ProtocolError("provider outcome lacks matching closed lifecycle evidence")
 
     def _check_identity(
         self,
@@ -1350,7 +1420,15 @@ class ExperimentRunner:
                 for s in state.stage_results
             ],
         }
+        if self.adapter.kind == "openai_responses":
+            try:
+                payload["attempt_lifecycle"] = {role: store.lifecycle_summary(role) for role in store._lifecycle_journals}
+            except (IntegrityViolation, OSError):
+                payload["attempt_lifecycle"] = None
         store.record_event(EVENT_RUN_RESULT, payload)
+        if self.adapter.kind == "openai_responses":
+            from .attempt_lifecycle import sync_tree
+            sync_tree(store.run_dir)
 
     def _build_result(self, run_spec: RunSpec, state: _RunState, run_started: str) -> RunResult:
         return RunResult(

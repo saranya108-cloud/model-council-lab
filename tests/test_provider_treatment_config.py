@@ -180,6 +180,9 @@ def _rewrite_invocation_field(
         "invocations": seal.get("invocations") or [],
         "expected_attempts": seal.get("expected_attempts", 0),
     }
+    if "attempt_lifecycle" in seal:
+        body["attempt_lifecycle"] = seal["attempt_lifecycle"]
+        body["lifecycle_binding_version"] = seal["lifecycle_binding_version"]
     seal["stage_digest"] = sha256_text(json.dumps(body, sort_keys=True))
     seal_path.write_text(json.dumps(seal, indent=2, sort_keys=True))
 
@@ -680,7 +683,7 @@ class TestProviderTreatmentConfigNeutrality(unittest.TestCase):
 
 class TestProviderTreatmentProtocolV12(unittest.TestCase):
     def test_new_artifacts_identify_harness_protocol_v12(self):
-        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v14")
+        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v15")
         self.assertEqual(LIVE_CONTRACT_VERSION, "m1-live-contract-v4")
         self.assertEqual(RUN_AUTHORITY_SCHEMA, "m1-run-authority-v1")
         with TempRoot() as root:
@@ -695,10 +698,10 @@ class TestProviderTreatmentProtocolV12(unittest.TestCase):
             authority = json.loads((run_dir / RUN_AUTHORITY).read_text())
             terminal = json.loads((run_dir / "run_result.json").read_text())
             invocation = _load_invocation(run_dir, "solver", 1)
-            self.assertEqual(binding["harness_protocol_version"], "m1-dev-harness-v14")
-            self.assertEqual(declaration["harness_protocol_version"], "m1-dev-harness-v14")
-            self.assertEqual(authority["harness_protocol_version"], "m1-dev-harness-v14")
-            self.assertEqual(terminal["harness_protocol_version"], "m1-dev-harness-v14")
+            self.assertEqual(binding["harness_protocol_version"], "m1-dev-harness-v15")
+            self.assertEqual(declaration["harness_protocol_version"], "m1-dev-harness-v15")
+            self.assertEqual(authority["harness_protocol_version"], "m1-dev-harness-v15")
+            self.assertEqual(terminal["harness_protocol_version"], "m1-dev-harness-v15")
             expected = _expected_attempt_digest_from_trusted_authority(run_dir, "solver")
             self.assertEqual(invocation["treatment_digest"], expected)
             v11 = treatment_digest_for_attempt(

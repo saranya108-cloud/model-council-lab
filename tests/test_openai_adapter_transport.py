@@ -8,6 +8,8 @@ the real worker via a disposable python_executable wrapper.
 
 from __future__ import annotations
 
+from test_attempt_lifecycle_dispatch import invoke_with_journal, synthetic_writer, observed_transport_success
+
 import ast
 import hashlib
 import inspect
@@ -121,6 +123,7 @@ from model_council.openai_adapter import (
     build_openai_responses_request,
 )
 from test_openai_adapter_translation import _solver_request
+from test_attempt_lifecycle_dispatch import synthetic_writer
 
 EXPECTED_VERSION = "2.54.0"
 assert importlib.metadata.version("openai") == EXPECTED_VERSION
@@ -149,9 +152,10 @@ def run_case(name, handler):
             http_client=httpx.Client(transport=httpx.MockTransport(wrapped)),
         )
 
-    result = _perform_openai_responses_transport(
-        approved, RuntimeSecret("not-a-real-openai-key"), 3.25, client_factory=factory
-    )
+    with synthetic_writer(_solver_request()) as writer:
+        result = _perform_openai_responses_transport(
+            approved, RuntimeSecret("not-a-real-openai-key"), 3.25, client_factory=factory, lifecycle=writer
+        )
     payload = {
         "attempts": attempts["count"],
         "max_retries": seen["max_retries"],
@@ -331,7 +335,7 @@ def _invoke_offline_live(test, config, *, request=None, treatment=None, timeout=
         )
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             try:
-                outcome = adapter.invoke_live(live_request)
+                outcome = invoke_with_journal(adapter, live_request)
                 failure = None
             except NeutralProviderFailure as exc:
                 outcome = exc.outcome
@@ -498,9 +502,11 @@ def _invoke(
         "model_council.openai_adapter._import_openai_sdk",
         return_value=openai_module,
     ):
-        result = _perform_openai_responses_transport(
-            request, secret, timeout, client_factory=chosen
-        )
+        with synthetic_writer(_solver_request()) as writer:
+            result = _perform_openai_responses_transport(
+                request, secret, timeout, client_factory=chosen, lifecycle=writer
+            )
+            seen["lifecycle_events"] = writer.events()
     return result, seen
 
 
@@ -1323,6 +1329,58 @@ class TestOpenAITransport429Policy(unittest.TestCase):
 
 
 class TestOpenAITransportExceptionMapping(unittest.TestCase):
+    def test_exception_observation_precedes_normalization_and_survives_failure(self):
+        from model_council.attempt_lifecycle import AttemptJournal
+        from model_council.openai_adapter import _normalize_openai_sdk_exception
+        from test_attempt_lifecycle_dispatch import synthetic_journal
+
+        for normalization_fails in (False, True):
+            with self.subTest(normalization_fails=normalization_fails), synthetic_journal(_solver_request()) as journal:
+                journal.permit()
+                writer = journal.open_writer()
+                responses = _FakeResponses(error=RuntimeError("synthetic SDK exception"))
+                entered = []
+
+                def normalize(caught):
+                    entered.append((AttemptJournal(journal.path).inspect(), sync.call_count))
+                    if normalization_fails:
+                        raise RuntimeError("synthetic normalization failure")
+                    return _normalize_openai_sdk_exception(caught)
+
+                try:
+                    with patch("socket.socket", side_effect=AssertionError("network")) as network, patch(
+                        "model_council.openai_adapter._import_openai_sdk", return_value=_FakeOpenAI,
+                    ), patch(
+                        "model_council.attempt_lifecycle.os.fsync", wraps=os.fsync,
+                    ) as sync, patch(
+                        "model_council.openai_adapter._normalize_openai_sdk_exception", side_effect=normalize,
+                    ) as normalizer:
+                        result = _perform_openai_responses_transport(
+                            _closed_request(), RuntimeSecret(_FAKE_CREDENTIAL), _TIMEOUT,
+                            client_factory=lambda **kwargs: _FakeClient(responses), lifecycle=writer,
+                        )
+                    normalizer.assert_called_once()
+                    network.assert_not_called()
+                    self.assertEqual(len(responses.calls), 1)
+                    snapshot, sync_count = entered[0]
+                    self.assertEqual([event["event"] for event in snapshot["events"]], [
+                        "attempt_prepared", "dispatch_permitted", "sdk_call_boundary", "sdk_exception_observed",
+                    ])
+                    self.assertEqual(snapshot["events"][-1]["data"], {})
+                    self.assertEqual(sync_count, 2)
+                    self.assertIsInstance(result, _OpenAITransportFailure)
+                    self.assertEqual(result.kind, ProviderCallKind.TRANSPORT_ERROR)
+                    self.assertEqual(result.category, ProviderErrorCategory.UNKNOWN_SANITIZED_FAILURE)
+                    for field in ("http_status", "request_id", "error_type", "error_code", "param"):
+                        self.assertIsNone(getattr(result, field))
+                finally:
+                    os.close(writer.fd)
+                journal.close("returned", worker_reaped=True)
+                closed = AttemptJournal(journal.path).inspect(require_closed=True)
+                self.assertEqual(closed["events"], snapshot["events"])
+                self.assertIsNone(closed["outcome"])
+                self.assertEqual(closed["retry_safety"], "indeterminate")
+
     def test_specific_sdk_classes_map_to_closed_categories(self):
         cases = (
             (_FakeAuthenticationError, ProviderCallKind.PROVIDER_ERROR, ProviderErrorCategory.AUTHENTICATION_CONFIGURATION),
@@ -1814,6 +1872,7 @@ class TestOpenAIProductionActivation(unittest.TestCase):
                         "provider-output-ceiling",
                         "A",
                         max_output_tokens_per_stage=137,
+                        max_stage_retries=0,
                     ),
                     make_task(),
                 )
@@ -2201,10 +2260,10 @@ class TestOpenAIProductionActivation(unittest.TestCase):
             )
             with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
                 with self.assertRaises(InfrastructureError):
-                    adapter.invoke_live(_solver_request())
+                    invoke_with_journal(adapter, _solver_request())
             self.assertEqual(_read_offline_calls(calls), [])
 
-    def test_runner_owns_retry_decisions_for_retryable_and_nonretryable_failures(self):
+    def test_f5_preserves_error_categories_but_never_retries(self):
         cases = (
             (
                 "nonretryable_quota",
@@ -2233,7 +2292,7 @@ class TestOpenAIProductionActivation(unittest.TestCase):
                     code="rate_limit_exceeded",
                     type="rate_limit_error",
                 ),
-                3,
+                1,
                 "retry_exhausted",
             ),
         )
@@ -2261,7 +2320,7 @@ class TestOpenAIProductionActivation(unittest.TestCase):
                     )
                     with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
                         result = runner.execute(
-                            make_spec(f"oa-{name}", "A", max_stage_retries=2),
+                            make_spec(f"oa-{name}", "A", max_stage_retries=0),
                             make_task(),
                         )
                     self.assertEqual(result.status, status)
@@ -2446,10 +2505,15 @@ class TestOpenAITransportFailureConversionBoundary(unittest.TestCase):
             treatment={},
             request=_solver_request(),
         )
+        def observed_failure(translated, secret, timeout, *, lifecycle):
+            from model_council.security import digest_json
+            lifecycle.append("sdk_call_boundary", {"wire_request_digest": digest_json(translated)})
+            lifecycle.append("sdk_exception_observed")
+            return failure
         with _isolated_environ(**{_CHILD_KEY: _FAKE_CREDENTIAL}):
             with patch(
                 "model_council.openai_adapter._perform_openai_responses_transport",
-                return_value=failure,
+                side_effect=observed_failure,
             ):
                 with patch("socket.socket", side_effect=AssertionError("network")):
                     code, parsed = _run_worker(payload)

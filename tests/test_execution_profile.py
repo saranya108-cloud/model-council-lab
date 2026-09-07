@@ -340,11 +340,11 @@ class TestLiveContractV4Binding(unittest.TestCase):
             _persisted_declaration,
         )
 
-        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v14")
+        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v15")
         self.assertEqual(LIVE_CONTRACT_VERSION, "m1-live-contract-v4")
         self.assertEqual(CONTRACT_VERSION, "m1-live-contract-v4")
         self.assertEqual(EXECUTION_PROFILE_LIVE_CONTRACT_V1, "live_contract_v1")
-        self.assertEqual(INVOCATION_SCHEMA, "m1-invocation-record-v2")
+        self.assertEqual(INVOCATION_SCHEMA, "m1-invocation-record-v3")
         self.assertEqual(RUN_AUTHORITY_SCHEMA, "m1-run-authority-v1")
         with TempRoot() as root:
             runner, runs_root = make_runner(root, kind="live_stub")
@@ -356,9 +356,9 @@ class TestLiveContractV4Binding(unittest.TestCase):
             authority = json.loads((run_dir / RUN_AUTHORITY).read_text())
             record = _load_record(run_dir, "solver", 1)
             outcome = record["adapter_evidence"]["provider_call_outcome"]
-            self.assertEqual(binding["harness_protocol_version"], "m1-dev-harness-v14")
-            self.assertEqual(declaration["harness_protocol_version"], "m1-dev-harness-v14")
-            self.assertEqual(authority["harness_protocol_version"], "m1-dev-harness-v14")
+            self.assertEqual(binding["harness_protocol_version"], "m1-dev-harness-v15")
+            self.assertEqual(declaration["harness_protocol_version"], "m1-dev-harness-v15")
+            self.assertEqual(authority["harness_protocol_version"], "m1-dev-harness-v15")
             self.assertEqual(binding["live_contract_version"], "m1-live-contract-v4")
             self.assertEqual(declaration["live_contract_version"], "m1-live-contract-v4")
             self.assertEqual(authority["live_contract_version"], "m1-live-contract-v4")

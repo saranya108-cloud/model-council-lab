@@ -21,6 +21,7 @@ from .types import IntegrityViolation
 
 LIFECYCLE_SCHEMA = "m1-attempt-lifecycle-v1"
 LIFECYCLE_PROTOCOL = "m1-dev-harness-v15"
+LIFECYCLE_FD_ENV = "MCL_ATTEMPT_LIFECYCLE_FD"
 LIFECYCLE_ROOT = "attempt-lifecycle"
 MAX_JOURNAL_BYTES = 16_000_000
 MAX_FRAME_BYTES = 8_000_000
@@ -52,6 +53,39 @@ def _digest(value):
     return type(value) is str and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
+def request_digest(request):
+    # Deadline grants are enforcement, not request treatment. They are bounded
+    # separately by the preparation record and existing invocation evidence.
+    return digest_json({k: v for k, v in request.to_dict().items() if k != "attempt_timeout_seconds"})
+
+
+def validate_prepared_binding(journal, request):
+    snapshot = journal.inspect()
+    _require(not snapshot["closed"] and len(snapshot["events"]) == 1, "attempt is not prepared")
+    binding = snapshot["binding"]
+    _require(binding["request_digest"] == request_digest(request)
+             and binding["role"] == request.role
+             and binding["configured_identity"] == request.configured_identity.to_dict()
+             and binding["wire_model"] == request.configured_identity.model_id
+             and binding["input_content_digest"] == request.input_content_digest
+             and binding["request_parameter_digest"] == request.request_parameter_digest,
+             "prepared request binding mismatch")
+
+
+def validate_worker_binding(writer, request):
+    events = writer.events()
+    _require(events[0]["attempt_id"] == writer.attempt_id, "wrong attempt descriptor")
+    _require(events[-1]["event"] == "dispatch_permitted", "missing or reused dispatch permission")
+    binding = events[0]["data"]
+    _require(binding["request_digest"] == request_digest(request)
+             and binding["role"] == request.role
+             and request.attempt_timeout_seconds == events[-1]["data"]["granted_timeout_seconds"], "request binding mismatch")
+
+
+def summary(snapshot):
+    return {key: snapshot[key] for key in (
+        "schema", "attempt_id", "head_digest", "closure_digest", "closed", "retry_safety", "outcome_digest",
+    )}
 
 
 def journal_paths(run_dir):
@@ -93,6 +127,17 @@ def sync_directory(path: Path) -> None:
         os.close(fd)
 
 
+def sync_tree(root: Path) -> None:
+    """Make existing authority durable before granting dispatch capability."""
+    for path in sorted(root.rglob("*")):
+        _require(not path.is_symlink(), "symlink in authority tree")
+        if path.is_file():
+            with path.open("rb") as stream:
+                os.fsync(stream.fileno())
+    for path in sorted((p for p in root.rglob("*") if p.is_dir()), reverse=True):
+        sync_directory(path)
+    sync_directory(root)
+    sync_directory(root.parent)
 
 
 def _write_all(fd: int, data: bytes) -> None:

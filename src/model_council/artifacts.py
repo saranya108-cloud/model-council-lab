@@ -143,6 +143,7 @@ class ArtifactStore:
         # artifact and its seal file cannot fool the active run.
         self._authoritative: dict[tuple[str, str], str] = {}
         self._authoritative_invocations: dict[tuple[str, int, str], str] = {}
+        self._lifecycle_journals = {}
         self.max_raw_evidence_bytes = int(max_raw_evidence_bytes)
         staging = None
         # Identity of the private staging directory, captured before rename.
@@ -189,6 +190,17 @@ class ArtifactStore:
     @property
     def spec_path(self) -> Path:
         return self._spec_path
+
+    def lifecycle_summary(self, role: str, *, close_not_started=False):
+        from .attempt_lifecycle import summary
+        journal = self._lifecycle_journals.get(role)
+        if journal is None:
+            return None
+        snapshot = journal.inspect()
+        if close_not_started and len(snapshot["events"]) == 1 and not snapshot["closed"]:
+            journal.close("not_started", worker_reaped=True)
+            snapshot = journal.inspect()
+        return summary(snapshot)
 
     def artifact_path(self, role: str, name: str) -> Path:
         return self.run_dir / role / f"{name}.md"
@@ -473,6 +485,12 @@ class ArtifactStore:
             "invocations": invocation_entries,
             "expected_attempts": bound_attempts,
         }
+        lifecycle = self.lifecycle_summary(role)
+        if lifecycle is not None:
+            if lifecycle["closed"] is not True:
+                raise IntegrityViolation("cannot seal an open provider attempt")
+            seal_body["attempt_lifecycle"] = lifecycle
+            seal_body["lifecycle_binding_version"] = "m1-stage-lifecycle-binding-v1"
         seal = {
             "role": role,
             "sealed_at": _utcnow(),
@@ -481,6 +499,9 @@ class ArtifactStore:
             "expected_attempts": bound_attempts,
             "stage_digest": sha256_text(json.dumps(seal_body, sort_keys=True)),
         }
+        if lifecycle is not None:
+            seal["attempt_lifecycle"] = lifecycle
+            seal["lifecycle_binding_version"] = "m1-stage-lifecycle-binding-v1"
         if before_persist is not None:
             before_persist()
         seal_path = self.run_dir / "seals" / f"{role}.json"
@@ -511,6 +532,8 @@ class ArtifactStore:
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise IntegrityViolation(f"malformed seal record for stage {role!r}") from exc
         _assert_persisted_seal_shape(role, seal)
+        if role in self._lifecycle_journals and seal.get("attempt_lifecycle") != self.lifecycle_summary(role):
+            raise IntegrityViolation("sealed lifecycle evidence changed")
         entries = seal["artifacts"]
         stage_digest = seal["stage_digest"]
 
@@ -1380,6 +1403,8 @@ def _reconstruct_treatment(
             raise IntegrityViolation(
                 "historical execution binding cannot claim provider identity policy evidence"
             )
+        if "attempt_lifecycle_schema" in execution_binding:
+            raise IntegrityViolation("historical protocol cannot claim lifecycle evidence")
     elif execution_binding.get("adapter_kind") == "openai_responses":
         required_exec = (*required_exec, "provider_identity_policy", "provider_identity_policy_version")
     elif policy_fields_present:
@@ -1435,7 +1460,7 @@ def _reconstruct_treatment(
         "live_contract_version": execution_binding["live_contract_version"],
     }
     if (
-        protocol_version == HARNESS_PROTOCOL_VERSION
+        protocol_version in {"m1-dev-harness-v14", "m1-dev-harness-v15"}
         and execution_binding["adapter_kind"] == "openai_responses"
     ):
         policy = execution_binding["provider_identity_policy"]
@@ -1578,6 +1603,10 @@ def _verify_provider_identity_policy_evidence(
 ) -> dict:
     """Recompute v14 identity verdicts; preserve explicit v13 semantics."""
     protocol_version = execution_binding.get("harness_protocol_version")
+    if (protocol_version == HISTORICAL_HARNESS_PROTOCOL_VERSION
+            or execution_binding.get("adapter_kind") != "openai_responses"):
+        if (run_dir / "attempt-lifecycle").exists():
+            raise IntegrityViolation("protocol or adapter cannot claim lifecycle evidence")
     if protocol_version not in VERIFIABLE_HARNESS_PROTOCOL_VERSIONS:
         raise IntegrityViolation("execution binding harness protocol version mismatch")
     policy_fields_present = bool(
@@ -1592,6 +1621,8 @@ def _verify_provider_identity_policy_evidence(
         return {
             "provider_identity_policy_verified": False,
             "provider_identity_policy_schema": None,
+            "attempt_lifecycle_verified": False,
+            "attempt_lifecycle_schema": None,
         }
     if execution_binding.get("adapter_kind") != "openai_responses":
         if policy_fields_present:
@@ -1601,6 +1632,8 @@ def _verify_provider_identity_policy_evidence(
         return {
             "provider_identity_policy_verified": False,
             "provider_identity_policy_schema": None,
+            "attempt_lifecycle_verified": False,
+            "attempt_lifecycle_schema": None,
         }
     missing_policy_fields = [
         key
@@ -1693,10 +1726,121 @@ def _verify_provider_identity_policy_evidence(
             raise IntegrityViolation(f"invocation {ref} late response is not a timeout")
         identity_records.append((record, expected_verdict, late))
     _assert_provider_identity_topology(run_dir, manifest_entries, identity_records)
+    lifecycle_report = _verify_lifecycle_evidence(run_dir, execution_binding, identity_records)
     return {
         "provider_identity_policy_verified": True,
         "provider_identity_policy_schema": PROVIDER_IDENTITY_POLICY_SCHEMA,
+        **lifecycle_report,
     }
+
+
+def _verify_lifecycle_evidence(run_dir, execution_binding, identity_records):
+    from .attempt_lifecycle import AttemptJournal, LIFECYCLE_ROOT, LIFECYCLE_PROTOCOL, LIFECYCLE_SCHEMA, journal_paths, request_digest, summary
+    from .live_contract import build_live_invocation_request
+    from .openai_adapter import build_openai_responses_request
+    if execution_binding["harness_protocol_version"] != LIFECYCLE_PROTOCOL:
+        if (run_dir / LIFECYCLE_ROOT).exists():
+            raise IntegrityViolation("historical protocol cannot claim F5 evidence")
+        return {"attempt_lifecycle_verified": False, "attempt_lifecycle_schema": None}
+    if execution_binding.get("attempt_lifecycle_schema") != LIFECYCLE_SCHEMA:
+        raise IntegrityViolation("missing or unsupported lifecycle policy")
+    canonical = json.loads(_load_json_object(run_dir / "run_spec.json", "spec")["canonical"])
+    roles = CONDITION_STAGES[Condition(canonical["condition"])]
+    task = _load_json_object(run_dir / TASK_RECORD, "task")
+    identity = _adapter_identity_from_execution_binding(execution_binding)
+    limits = ResourceLimits(**canonical["resource_limits"])
+    records = {r["role"]: r for r, _, _ in identity_records}
+    if len(records) != len(identity_records):
+        raise IntegrityViolation("F5 forbids multiple attempts per stage")
+    paths = journal_paths(run_dir)
+    seen_ids = set()
+    inventory = {}
+    for path in paths:
+        if path.is_symlink() or any(p.is_symlink() for p in path.parents if p != run_dir.parent):
+            raise IntegrityViolation("lifecycle symlink")
+        snap = AttemptJournal(path).inspect(require_closed=True)
+        binding = snap["binding"]
+        role = binding["role"]
+        if role not in roles or path != run_dir / LIFECYCLE_ROOT / role / "attempt-0001" / "journal.jsonl":
+            raise IntegrityViolation("lifecycle path mismatch")
+        if snap["attempt_id"] in seen_ids or role in inventory:
+            raise IntegrityViolation("duplicate lifecycle identity")
+        seen_ids.add(snap["attempt_id"])
+        inputs = _stage_inputs_from_trusted_authority(run_dir, Condition(canonical["condition"]), role, task)
+        request = build_live_invocation_request(
+            condition=canonical["condition"], role=role, role_instruction=ROLE_INSTRUCTIONS[role],
+            stage_inputs=inputs, requested_identity=identity, configured_identity=identity,
+            seed=canonical["seed"], max_output_tokens=limits.max_output_tokens_per_stage,
+            max_tool_calls=limits.max_tool_calls_per_stage, attempt_timeout_seconds=limits.stage_timeout_seconds,
+        )
+        expected = {
+            "run_id": canonical["run_id"], "role": role, "attempt": 1,
+            "execution_instance_id": execution_binding.get("execution_instance_id"),
+            "harness_protocol_version": LIFECYCLE_PROTOCOL,
+            "predecessor_attempt_id": None,
+            "treatment_digest": _load_json_object(run_dir / TREATMENT_DECLARATION, "treatment")["treatment_hash"],
+            "authority_digest": _sha256_file(run_dir / RUN_AUTHORITY),
+            "request_digest": request_digest(request), "input_content_digest": request.input_content_digest,
+            "request_parameter_digest": request.request_parameter_digest,
+            "configured_identity": identity.to_dict(), "wire_model": execution_binding["provider_identity_policy"]["wire_model"],
+            "identity_policy_digest": digest_json(execution_binding["provider_identity_policy"]),
+            "resource_limits": limits.to_dict(), "attempt_timeout_seconds": limits.stage_timeout_seconds,
+        }
+        if binding != expected or limits.max_stage_retries != 0:
+            raise IntegrityViolation("lifecycle authority binding mismatch")
+        for event in snap["events"]:
+            if event["event"] == "sdk_call_boundary" and event["data"]["wire_request_digest"] != digest_json(
+                build_openai_responses_request(request, execution_binding["provider_treatment_config"])
+            ):
+                raise IntegrityViolation("lifecycle wire request mismatch")
+        record = records.get(role)
+        if record is not None:
+            try:
+                serialize_invocation_record(record)
+            except GovernanceViolation as exc:
+                raise IntegrityViolation("invalid lifecycle invocation schema") from exc
+            if record.get("schema") != "m1-invocation-record-v3" or record.get("attempt_lifecycle") != summary(snap):
+                raise IntegrityViolation("invocation lifecycle binding mismatch")
+            if record.get("lifecycle_observed_outcome") != snap["outcome"]:
+                raise IntegrityViolation("invocation outcome differs from durable observation")
+            received_outcome = record["adapter_evidence"].get("provider_call_outcome")
+            if received_outcome is not None and received_outcome != snap["outcome"]:
+                raise IntegrityViolation("received outcome differs from durable observation")
+            if len(snap["events"]) > 1 and record.get("attempt_timeout_seconds") != snap["events"][1]["data"]["granted_timeout_seconds"]:
+                raise IntegrityViolation("invocation differs from durable time grant")
+            if record.get("retry_decision") == "retry" or record.get("attempt") != 1:
+                raise IntegrityViolation("F5 automatic retries are disabled")
+            if record.get("retry_decision") == "promote" and (
+                snap["outcome"] is None or snap["outcome"]["kind"] != "success"
+            ):
+                raise IntegrityViolation("promotion lacks durable response")
+        seal_path = run_dir / "seals" / f"{role}.json"
+        if seal_path.exists():
+            seal = _load_json_object(seal_path, "seal")
+            if seal.get("lifecycle_binding_version") != "m1-stage-lifecycle-binding-v1":
+                raise IntegrityViolation("missing lifecycle seal version")
+            if record is None or record.get("retry_decision") != "promote" or seal.get("attempt_lifecycle") != summary(snap):
+                raise IntegrityViolation("seal lacks matching lifecycle evidence")
+        elif any((run_dir / "seals" / f"{later}.json").exists() for later in roles[roles.index(role) + 1:]):
+            raise IntegrityViolation("downstream seal after incomplete lifecycle stage")
+        if any(not (run_dir / "seals" / f"{earlier}.json").exists() for earlier in roles[:roles.index(role)]):
+            raise IntegrityViolation("lifecycle dispatch lacks prior success")
+        inventory[role] = summary(snap)
+    if set(records) - set(inventory):
+        raise IntegrityViolation("invocation lacks lifecycle journal")
+    root = run_dir / LIFECYCLE_ROOT
+    expected_files = {p for path in paths for p in (path, path.with_name("closed.json"))}
+    if root.exists() and {p for p in root.rglob("*") if p.is_file()} != expected_files:
+        raise IntegrityViolation("unrecognized lifecycle evidence")
+    terminal_path = run_dir / EVENT_RUN_RESULT
+    if terminal_path.exists():
+        terminal = _load_json_object(terminal_path, "terminal")
+        if terminal.get("attempt_lifecycle") != inventory:
+            raise IntegrityViolation("terminal lifecycle inventory mismatch")
+        if terminal.get("status") == STATUS_SUCCEEDED and set(inventory) != set(roles):
+            raise IntegrityViolation("terminal success lacks lifecycle topology")
+    return {"attempt_lifecycle_verified": True, "attempt_lifecycle_schema": "m1-attempt-lifecycle-v1",
+            "attempt_retry_safety": {role: item["retry_safety"] for role, item in inventory.items()}}
 
 
 def _assert_provider_identity_topology(run_dir, manifest_entries, identity_records) -> None:
@@ -2147,11 +2291,15 @@ def _assert_seal_invocation_entry(role: str, entry: object) -> None:
 
 
 def _seal_digest_body(seal: dict, artifacts: list) -> dict:
-    return {
+    body = {
         "artifacts": artifacts,
         "invocations": _seal_invocations(seal),
         "expected_attempts": seal.get("expected_attempts", 0),
     }
+    if "attempt_lifecycle" in seal:
+        body["attempt_lifecycle"] = seal["attempt_lifecycle"]
+        body["lifecycle_binding_version"] = seal.get("lifecycle_binding_version")
+    return body
 
 
 def _invocation_seal_entry(entry: dict) -> dict:

@@ -797,6 +797,8 @@ class TestOpenAIResponseTranslation(unittest.TestCase):
         )
 
     def test_production_entrypoint_composes_transport_success_into_translation(self):
+        from test_attempt_lifecycle_dispatch import synthetic_writer
+        from model_council.security import digest_json
         from model_council.openai_adapter import (
             _OpenAITransportSuccess,
             openai_responses_skeleton,
@@ -806,13 +808,18 @@ class TestOpenAIResponseTranslation(unittest.TestCase):
         fixture = _completed_fixture(_solver_envelope(), usage=_usage_fixture())
         isolated = {key: os.environ[key] for key in os.environ if key != "OPENAI_API_KEY"}
         isolated[_CHILD_KEY] = _FAKE_CREDENTIAL
-        with patch.dict(os.environ, isolated, clear=True):
+        def observed_transport(translated, secret, timeout, *, lifecycle):
+            lifecycle.append("sdk_call_boundary", {"wire_request_digest": digest_json(translated)})
+            lifecycle.append("sdk_return_observed")
+            return _OpenAITransportSuccess(response=fixture)
+
+        with patch.dict(os.environ, isolated, clear=True), synthetic_writer(request) as writer:
             with patch(
                 "model_council.openai_adapter._perform_openai_responses_transport",
-                return_value=_OpenAITransportSuccess(response=fixture),
+                side_effect=observed_transport,
             ) as transport:
                 with patch("model_council.openai_adapter.build_openai_client") as factory:
-                    outcome = openai_responses_skeleton({}, deep_freeze({}), request)
+                    outcome = openai_responses_skeleton({}, deep_freeze({}), request, lifecycle=writer)
             factory.assert_not_called()
             transport.assert_called_once()
             self.assertNotIn(_CHILD_KEY, os.environ)

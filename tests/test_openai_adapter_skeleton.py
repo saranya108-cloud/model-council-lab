@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from test_attempt_lifecycle_dispatch import invoke_with_journal, synthetic_writer, observed_transport_success
+
 import ast
 import hashlib
 import inspect
@@ -377,6 +379,18 @@ def _close_fd(fd):
 
 
 def _run_openai_worker_with_protocol_fd(payload):
+    from model_council.live_contract import parse_live_invocation_request, LiveContractError
+    try:
+        request = parse_live_invocation_request(payload.get("live_invocation_request"))
+    except LiveContractError:
+        return _run_openai_worker_with_protocol_fd_body(payload)
+    with synthetic_writer(request) as writer:
+        payload = {**payload, "attempt_id": writer.attempt_id}
+        with patch.dict(os.environ, {"MCL_ATTEMPT_LIFECYCLE_FD": str(writer.fd)}):
+            return _run_openai_worker_with_protocol_fd_body(payload)
+
+
+def _run_openai_worker_with_protocol_fd_body(payload):
     """In-process OpenAI worker using the same inherited-pipe protocol channel as the executor."""
     protocol_r, protocol_w = os.pipe()
     os.set_inheritable(protocol_r, False)
@@ -1099,7 +1113,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
                 )
             )
             with self.assertRaises(ProtocolError):
-                adapter.invoke_live(make_request())
+                invoke_with_journal(adapter, make_request())
             sent = json.loads(mocked.call_args.kwargs["input"])
         self.assertEqual(sent["provider_treatment_config"], expected)
         self.assertNotIn("provider_treatment_config", sent["adapter"]["options"])
@@ -1111,17 +1125,17 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
     def test_openai_runtime_options_must_be_empty(self):
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter(options={"timeout": 1})
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 with self.assertRaises(InfrastructureError):
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
                 mocked.assert_not_called()
             callable_adapter = _openai_adapter(options={"client_factory": object()})
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 with self.assertRaises(InfrastructureError):
-                    callable_adapter.invoke_live(make_request())
+                    invoke_with_journal(callable_adapter, make_request())
                 mocked.assert_not_called()
             empty = _openai_adapter(options={})
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 mocked.return_value = _completed(
                     json.dumps(
                         {
@@ -1132,7 +1146,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
                     )
                 )
                 with self.assertRaises(ProtocolError):
-                    empty.invoke_live(make_request())
+                    invoke_with_journal(empty, make_request())
                 sent = json.loads(mocked.call_args.kwargs["input"])
             self.assertEqual(sent["adapter"]["options"], {})
 
@@ -1145,10 +1159,10 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
         from test_openai_adapter_translation import _completed_fixture, _solver_envelope
 
         fixture = _completed_fixture(_solver_envelope())
-        with _isolated_environ(**{_CHILD_KEY: _FAKE_CREDENTIAL}):
+        with _isolated_environ(**{_CHILD_KEY: _FAKE_CREDENTIAL}), synthetic_writer(make_request()) as writer:
             with patch(
                 "model_council.openai_adapter._perform_openai_responses_transport",
-                return_value=_OpenAITransportSuccess(response=fixture),
+                side_effect=observed_transport_success(fixture),
             ) as transport:
                 with patch("model_council.openai_adapter.build_openai_client") as factory:
                     with patch(
@@ -1160,7 +1174,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
                             side_effect=AssertionError("network path opened"),
                         ):
                             outcome = openai_responses_skeleton(
-                                {}, deep_freeze({}), make_request()
+                                {}, deep_freeze({}), make_request(), lifecycle=writer
                             )
             factory.assert_not_called()
             transport.assert_called_once()
@@ -1204,9 +1218,9 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
             openai_mod.build_openai_client(secret, client_factory=factory)
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter(options={"client_factory": factory})
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 with self.assertRaises(InfrastructureError):
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
                 mocked.assert_not_called()
 
     def test_openai_sdk_object_cannot_cross_worker_protocol(self):
@@ -1224,7 +1238,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
             json.dumps({"client": client})
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter()
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 mocked.return_value = _completed(
                     json.dumps(
                         {
@@ -1235,7 +1249,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
                     )
                 )
                 with self.assertRaises(ProtocolError):
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
                 raw_input = mocked.call_args.kwargs["input"]
             parsed = json.loads(raw_input)
         self.assertEqual(parsed["adapter"]["options"], {})
@@ -1257,11 +1271,11 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
                     }
                 )
             )
-            with patch("model_council.executor.subprocess.run", side_effect=fake_run):
+            with patch("model_council.executor._run_openai_worker", side_effect=fake_run):
                 with self.assertRaises(ProtocolError):
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
             env = captured["env"]
-            self.assertEqual(set(env), {"PATH", "PYTHONPATH", _CHILD_KEY, _PROTOCOL_FD_KEY})
+            self.assertEqual(set(env), {"PATH", "PYTHONPATH", _CHILD_KEY, _PROTOCOL_FD_KEY, "MCL_ATTEMPT_LIFECYCLE_FD"})
             self.assertTrue(env[_PROTOCOL_FD_KEY].isdigit())
             self.assertGreaterEqual(int(env[_PROTOCOL_FD_KEY]), 3)
             self.assertEqual(env[_CHILD_KEY], _FAKE_CREDENTIAL)
@@ -1272,7 +1286,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
     def test_runtime_secret_is_absent_from_serialized_envelope_and_last_request(self):
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter(provider_treatment_config=REASONING_SHAPED)
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 mocked.return_value = _completed(
                     json.dumps(
                         {
@@ -1283,7 +1297,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
                     )
                 )
                 with self.assertRaises(ProtocolError):
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
                 raw_input = mocked.call_args.kwargs["input"]
             last = adapter.last_request
         _assert_secret_absent(
@@ -1301,9 +1315,9 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
     def test_missing_runtime_credential_fails_before_spawn(self):
         with _isolated_environ():
             adapter = _openai_adapter()
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 with self.assertRaises(InfrastructureError) as ctx:
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
                 mocked.assert_not_called()
             _assert_secret_absent(self, str(ctx.exception))
             self.assertIn("missing", str(ctx.exception).lower())
@@ -1311,9 +1325,9 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
     def test_empty_runtime_credential_fails_before_spawn(self):
         with _isolated_environ(**{_HOST_KEY: ""}):
             adapter = _openai_adapter()
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 with self.assertRaises(InfrastructureError) as ctx:
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
                 mocked.assert_not_called()
             _assert_secret_absent(self, str(ctx.exception))
 
@@ -1333,9 +1347,9 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
             with self.subTest(kind="environ", size=len(value)):
                 with _isolated_environ(**{_HOST_KEY: value}):
                     adapter = _openai_adapter()
-                    with patch("model_council.executor.subprocess.run") as mocked:
+                    with patch("model_council.executor._run_openai_worker") as mocked:
                         with self.assertRaises(InfrastructureError) as ctx:
-                            adapter.invoke_live(make_request())
+                            invoke_with_journal(adapter, make_request())
                         mocked.assert_not_called()
                     message = str(ctx.exception)
                     if value:
@@ -1356,13 +1370,13 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
         from test_openai_adapter_translation import _completed_fixture, _solver_envelope
 
         fixture = _completed_fixture(_solver_envelope())
-        with _isolated_environ(**{_CHILD_KEY: _FAKE_CREDENTIAL}):
+        with _isolated_environ(**{_CHILD_KEY: _FAKE_CREDENTIAL}), synthetic_writer(make_request()) as writer:
             with patch(
                 "model_council.openai_adapter._perform_openai_responses_transport",
-                return_value=_OpenAITransportSuccess(response=fixture),
+                side_effect=observed_transport_success(fixture),
             ):
                 outcome = openai_responses_skeleton(
-                    {}, deep_freeze({}), make_request()
+                    {}, deep_freeze({}), make_request(), lifecycle=writer
                 )
             self.assertNotIn(_CHILD_KEY, os.environ)
         self.assertEqual(outcome.kind, ProviderCallKind.SUCCESS)
@@ -1385,11 +1399,11 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
                     }
                 )
             )
-            with patch("model_council.executor.subprocess.run", side_effect=fake_run):
+            with patch("model_council.executor._run_openai_worker", side_effect=fake_run):
                 with self.assertRaises(ProtocolError):
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
             env = captured["env"]
-            self.assertEqual(set(env), {"PATH", "PYTHONPATH", _CHILD_KEY, _PROTOCOL_FD_KEY})
+            self.assertEqual(set(env), {"PATH", "PYTHONPATH", _CHILD_KEY, _PROTOCOL_FD_KEY, "MCL_ATTEMPT_LIFECYCLE_FD"})
             self.assertTrue(env[_PROTOCOL_FD_KEY].isdigit())
             self.assertGreaterEqual(int(env[_PROTOCOL_FD_KEY]), 3)
             for name in _AMBIENT_SECRET_ENV:
@@ -1481,10 +1495,10 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
         digest = hashlib.sha256(stderr_body.encode("utf-8")).hexdigest()
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter()
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 mocked.return_value = _completed("", returncode=1, stderr=stderr_body)
                 with self.assertRaises(InfrastructureError) as ctx:
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
             message = str(ctx.exception)
         _assert_secret_absent(self, message)
         self.assertNotIn("stderr_sha256", message)
@@ -1520,7 +1534,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
                 runs_root=runs_root,
             )
             with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
-                result = runner.execute(make_spec("oa-secret-absent", "A"), make_task())
+                result = runner.execute(make_spec("oa-secret-absent", "A", max_stage_retries=0), make_task())
             self.assertEqual(result.status, "infrastructure_failure")
             run_dir = runs_root / "oa-secret-absent"
             blob = _durable_text(run_dir)
@@ -1594,7 +1608,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
             payload = json.loads((runs_root / "oa-crash-diag" / "run_result.json").read_text())
             self.assertIn("stderr_sha256", payload["error"])
             self.assertIn("stderr_bytes", payload["error"])
-        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v14")
+        self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v15")
         self.assertNotIn("openai", sys.modules)
 
 
@@ -1624,7 +1638,7 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
         self.assertEqual(validate_openai_runtime_credential(credential), credential)
         with _isolated_environ(**{_HOST_KEY: credential}):
             adapter = _openai_adapter()
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 mocked.return_value = _completed(
                     json.dumps(
                         {
@@ -1635,7 +1649,7 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
                     )
                 )
                 with self.assertRaises(ProtocolError):
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
                 mocked.assert_called()
 
     def test_more_than_4096_utf8_bytes_are_rejected(self):
@@ -1648,9 +1662,9 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
         self.assertIn("malformed", str(ctx.exception).lower())
         with _isolated_environ(**{_HOST_KEY: oversized}):
             adapter = _openai_adapter()
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 with self.assertRaises(InfrastructureError):
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
                 mocked.assert_not_called()
 
     def test_printable_non_ascii_credential_is_accepted(self):
@@ -1669,18 +1683,18 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
                     }
                 )
             )
-            with patch("model_council.executor.subprocess.run", side_effect=fake_run):
+            with patch("model_council.executor._run_openai_worker", side_effect=fake_run):
                 with self.assertRaises(ProtocolError):
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
             self.assertEqual(captured["env"][_CHILD_KEY], credential)
 
     def test_malformed_parent_credential_traceback_locals_are_secret_free(self):
         malformed = _FAKE_CREDENTIAL + " "
         with _isolated_environ(**{_HOST_KEY: malformed}):
             adapter = _openai_adapter()
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 with self.assertRaises(InfrastructureError) as ctx:
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
                 mocked.assert_not_called()
         self._assert_harness_graph_secret_free(ctx.exception)
         self.assertIsNone(ctx.exception.__cause__)
@@ -1804,7 +1818,7 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter(python_executable=missing_python)
             with self.assertRaises(InfrastructureError) as ctx:
-                adapter.invoke_live(make_request())
+                invoke_with_journal(adapter, make_request())
         exc = ctx.exception
         self.assertIsNone(exc.__cause__)
         self.assertIsNone(exc.__context__)
@@ -1823,9 +1837,9 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
                     stderr=_FAKE_CREDENTIAL,
                 )
 
-            with patch("model_council.executor.subprocess.run", side_effect=boom):
+            with patch("model_council.executor._run_openai_worker", side_effect=boom):
                 with self.assertRaises(StageTimeout) as ctx:
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
         exc = ctx.exception
         self.assertIsNone(exc.__cause__)
         self.assertIsNone(exc.__context__)
@@ -1837,10 +1851,10 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
         stderr_body = "err:" + _FAKE_CREDENTIAL
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter()
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 mocked.return_value = _completed(stdout_body, returncode=7, stderr=stderr_body)
                 with self.assertRaises(InfrastructureError) as ctx:
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
         exc = ctx.exception
         self._assert_harness_graph_secret_free(exc, require_no_completed=True)
         self.assertNotIn("stderr_sha256", str(exc))
@@ -1851,9 +1865,9 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter(options=_FalseyMapping({"timeout": 1}))
             self.assertFalse(bool(_FalseyMapping({"timeout": 1})))
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 with self.assertRaises(InfrastructureError):
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
                 mocked.assert_not_called()
 
     def test_falsey_nonempty_options_are_rejected_on_direct_skeleton(self):
@@ -1907,10 +1921,10 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
         garbage = "Authorization: Bearer " + _FAKE_CREDENTIAL + "\n{not-json"
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter()
-            with patch("model_council.executor.subprocess.run") as mocked:
+            with patch("model_council.executor._run_openai_worker") as mocked:
                 mocked.return_value = _completed(garbage, returncode=0, stderr=garbage)
                 with self.assertRaises(ProtocolError) as ctx:
-                    adapter.invoke_live(make_request())
+                    invoke_with_journal(adapter, make_request())
         exc = ctx.exception
         self.assertIn("not valid JSON", str(exc))
         _assert_openai_parent_graph_closed(self, exc)
@@ -2055,9 +2069,15 @@ class TestOpenAIWorkerProtocolFdFailClosed(unittest.TestCase):
         invoked = []
         original = LIVE_REGISTRY["live_stub"]
 
-        def spy(options, provider_treatment_config, request):
+        def spy(options, provider_treatment_config, request, *, lifecycle):
             invoked.append(True)
-            return original(options, provider_treatment_config, request)
+            from model_council.security import digest_json
+            from model_council.openai_adapter import build_openai_responses_request
+            lifecycle.append("sdk_call_boundary", {"wire_request_digest": digest_json(build_openai_responses_request(request, provider_treatment_config))})
+            lifecycle.append("sdk_return_observed")
+            outcome = original(options, provider_treatment_config, request)
+            lifecycle.outcome(outcome)
+            return outcome
 
         with patch.dict(LIVE_REGISTRY, {_OPENAI_KIND: spy}):
             code, parsed, stdout_text = _run_openai_worker_with_protocol_fd(payload)
@@ -2102,9 +2122,9 @@ class TestOpenAIProtocolReaderStartFailure(unittest.TestCase):
             adapter = _openai_adapter()
             with patch("model_council.executor.os.pipe", tracking_pipe):
                 with patch("model_council.executor.threading.Thread", _FailingReaderThread):
-                    with patch("model_council.executor.subprocess.run") as mocked:
+                    with patch("model_council.executor._run_openai_worker") as mocked:
                         with self.assertRaises(RuntimeError) as ctx:
-                            adapter.invoke_live(make_request())
+                            invoke_with_journal(adapter, make_request())
                         mocked.assert_not_called()
         self.assertIs(ctx.exception, start_error)
         self.assertIsNone(ctx.exception.__context__)
@@ -2136,9 +2156,9 @@ class TestOpenAIProtocolReaderStartFailure(unittest.TestCase):
             adapter = _openai_adapter()
             with patch("model_council.executor.os.pipe", tracking_pipe):
                 with patch("model_council.executor.threading.Thread", _FailingReaderThread):
-                    with patch("model_council.executor.subprocess.run") as mocked:
+                    with patch("model_council.executor._run_openai_worker") as mocked:
                         with self.assertRaises(InfrastructureError) as ctx:
-                            adapter.invoke_live(make_request())
+                            invoke_with_journal(adapter, make_request())
                         mocked.assert_not_called()
         self.assertIn("failed to spawn adapter process", str(ctx.exception))
         self.assertIsNone(ctx.exception.__cause__)
@@ -2165,10 +2185,10 @@ class TestOpenAIProtocolReaderStartFailure(unittest.TestCase):
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter()
             with patch("model_council.executor.threading.Thread", _TrackingThread):
-                with patch("model_council.executor.subprocess.run") as mocked:
+                with patch("model_council.executor._run_openai_worker") as mocked:
                     mocked.return_value = _completed('{"ok": true}', returncode=0)
                     with self.assertRaises(ProtocolError):
-                        adapter.invoke_live(make_request())
+                        invoke_with_journal(adapter, make_request())
                     mocked.assert_called_once()
         self.assertEqual(started, [True])
         self.assertTrue(joined)

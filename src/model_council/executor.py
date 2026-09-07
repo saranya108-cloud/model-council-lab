@@ -65,6 +65,72 @@ _OPENAI_ENV_ASSIGNMENT_PREFIXES = (
 )
 
 
+class _WorkerExitUncertain(InfrastructureError):
+    """The parent cannot attest that the worker lost its append capability."""
+
+
+class _WorkerReaping:
+    """Affirmative reaping evidence. Never inferred from an escaping exception."""
+
+    _ATTESTABLE = frozenset({"unstarted", "reaped"})
+
+    def __init__(self):
+        self.status = "unstarted"
+
+    def mark_uncertain(self):
+        self.status = "uncertain"
+
+    def mark_reaped(self):
+        self.status = "reaped"
+
+    def may_attest(self):
+        return self.status in self._ATTESTABLE
+
+
+def _run_openai_worker(args, *, input, capture_output, text, timeout, **kwargs):
+    """Like run(), but interruption must either reap the child or remain open.
+
+    Popen.__exit__ deliberately bounds its KeyboardInterrupt wait. F5 needs an
+    explicit confirmed wait before writing closure, including on that path.
+    """
+    reaping = kwargs.pop("reaping", None)
+    if reaping is None:
+        reaping = _WorkerReaping()
+    process = None
+    reaping.mark_uncertain()
+    try:
+        try:
+            process = subprocess.Popen(
+                args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=text, **kwargs,
+            )
+        except (KeyboardInterrupt, SystemExit):
+            raise _WorkerExitUncertain("worker launch interrupted; exit unconfirmed") from None
+        try:
+            stdout, stderr = process.communicate(input, timeout=timeout)
+            reaping.mark_reaped()
+            return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+        except BaseException:
+            try:
+                process.kill()
+                process.wait(timeout=5.0)
+            except BaseException:
+                reaping.mark_uncertain()
+                raise _WorkerExitUncertain("worker termination unconfirmed") from None
+            reaping.mark_reaped()
+            raise
+    finally:
+        if process is not None:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except BaseException:
+                        pass
+        kwargs.clear()
+        process = None
+
+
 def _close_fd(fd: int | None) -> None:
     if fd is None:
         return
@@ -192,6 +258,7 @@ class SubprocessAdapter:
         self.last_attempt_timeout_seconds: float | None = None
         self.last_request: dict | None = None
         self.last_harness_observed_latency_seconds: float | None = None
+        self.attempt_journal = None
 
     @property
     def scratch_dir(self) -> str | None:
@@ -281,10 +348,28 @@ class SubprocessAdapter:
             "live_invocation_request": live_request.to_dict(),
         }
         self.last_request = envelope
-        payload = self._spawn_worker(envelope, attempt_timeout)
+        if self.kind == "openai_responses":
+            from .attempt_lifecycle import validate_prepared_binding, validate_worker_binding
+            if self.attempt_journal is None:
+                raise ProtocolError("OpenAI v15 requires runner-owned attempt lifecycle authorization")
+            validate_prepared_binding(self.attempt_journal, live_request)
+            self.attempt_journal.permit(attempt_timeout)
+            writer = self.attempt_journal.open_writer()
+            try:
+                validate_worker_binding(writer, live_request)
+                envelope["attempt_id"] = writer.attempt_id
+                self._lifecycle_fd = writer.fd
+                payload = self._spawn_worker(envelope, attempt_timeout)
+            finally:
+                self._lifecycle_fd = None
+                os.close(writer.fd)
+        else:
+            payload = self._spawn_worker(envelope, attempt_timeout)
         return self._parse_live_payload(payload)
 
     def _spawn_worker(self, request: dict, attempt_timeout: float) -> dict:
+        if self.kind == "openai_responses" and self.attempt_journal is None:
+            raise ProtocolError("OpenAI worker requires attempt lifecycle authorization")
         if attempt_timeout <= 0:
             raise StageTimeout(
                 f"adapter process exceeded {attempt_timeout}s and was terminated"
@@ -307,6 +392,7 @@ class SubprocessAdapter:
         protocol_holder = []
         protocol_reader = None
         protocol_reader_started = False
+        worker_reaping = _WorkerReaping()
         try:
             if self.kind == "openai_responses":
                 from .openai_adapter import (
@@ -326,7 +412,12 @@ class SubprocessAdapter:
                 os.set_inheritable(protocol_r, False)
                 os.set_inheritable(protocol_w, True)
                 env[_WORKER_PROTOCOL_FD_ENV] = str(protocol_w)
-                spawn_kwargs["pass_fds"] = (protocol_w,)
+                from .attempt_lifecycle import LIFECYCLE_FD_ENV
+                lifecycle_fd = getattr(self, "_lifecycle_fd", None)
+                if type(lifecycle_fd) is not int:
+                    raise ProtocolError("missing lifecycle descriptor")
+                env[LIFECYCLE_FD_ENV] = str(lifecycle_fd)
+                spawn_kwargs["pass_fds"] = (protocol_w, lifecycle_fd)
 
                 def _drain_protocol():
                     protocol_holder.append(
@@ -342,7 +433,10 @@ class SubprocessAdapter:
                 self.last_scratch_dir = scratch
                 started = time.monotonic()
                 try:
-                    completed = subprocess.run(
+                    if self.kind == "openai_responses":
+                        spawn_kwargs["reaping"] = worker_reaping
+                    launch = _run_openai_worker if self.kind == "openai_responses" else subprocess.run
+                    completed = launch(
                         [self.python_executable, "-B", "-m", "model_council.worker"],
                         input=json.dumps(request),
                         capture_output=True,
@@ -352,12 +446,18 @@ class SubprocessAdapter:
                         env=dict(env),
                         **spawn_kwargs,
                     )
+                    if self.kind == "openai_responses":
+                        if not worker_reaping.may_attest():
+                            raise _WorkerExitUncertain("worker termination unconfirmed")
+                        self.attempt_journal.close("returned" if completed.returncode == 0 else "infrastructure", worker_reaped=True)
                 finally:
                     self.last_harness_observed_latency_seconds = time.monotonic() - started
         except subprocess.TimeoutExpired as exc:
             if self.kind == "openai_responses":
                 _scrub_openai_subprocess_exception(exc)
                 openai_timeout = True
+                if worker_reaping.may_attest():
+                    self.attempt_journal.close("timeout", worker_reaped=True)
                 exc = None
             else:
                 raise StageTimeout(
@@ -369,13 +469,29 @@ class SubprocessAdapter:
                 _scrub_openai_subprocess_exception(exc)
                 completed = None
                 exc = None
+                if (not self.attempt_journal.persistence_failed
+                        and worker_reaping.may_attest()
+                        and not self.attempt_journal.path.with_name("closed.json").exists()):
+                    self.attempt_journal.close("infrastructure", worker_reaped=True)
             else:
                 raise InfrastructureError(
                     f"failed to spawn adapter process: {exc}"
                 ) from exc
+        except BaseException as exc:
+            if self.kind == "openai_responses":
+                if (worker_reaping.may_attest()
+                        and not self.attempt_journal.persistence_failed
+                        and not self.attempt_journal.path.with_name("closed.json").exists()):
+                    self.attempt_journal.close(
+                        "interrupted" if not isinstance(exc, Exception) else "infrastructure",
+                        worker_reaped=True,
+                    )
+                _scrub_openai_subprocess_exception(exc)
+            raise
         finally:
             env.pop(_OPENAI_CHILD_ENV_KEY, None)
             env.pop(_WORKER_PROTOCOL_FD_ENV, None)
+            env.pop("MCL_ATTEMPT_LIFECYCLE_FD", None)
             _close_fd(protocol_w)
             protocol_w = None
             if protocol_reader_started:

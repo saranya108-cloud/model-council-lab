@@ -105,7 +105,10 @@ _RECORD_FIELDS = frozenset(
     }
 )
 
-INVOCATION_SCHEMA = "m1-invocation-record-v2"
+HISTORICAL_INVOCATION_SCHEMA = "m1-invocation-record-v2"
+INVOCATION_SCHEMA = "m1-invocation-record-v3"
+_LIFECYCLE_RECORD_FIELDS = frozenset({"attempt_lifecycle", "lifecycle_observed_outcome"})
+_RECORD_FIELDS = _RECORD_FIELDS | _LIFECYCLE_RECORD_FIELDS
 
 _FORBIDDEN_KEY_MARKERS = (
     "authorization",
@@ -407,6 +410,9 @@ def build_invocation_record(
     projected_tokens_in: int | None = None,
     consumed_tokens_in: int | None = None,
     harness_observed_latency_seconds: float | None = None,
+    attempt_lifecycle: dict | None = None,
+    lifecycle_observed_outcome: dict | None = None,
+    harness_protocol_version: str = HARNESS_PROTOCOL_VERSION,
 ) -> dict[str, Any]:
     if retry_decision not in RETRY_DECISIONS:
         raise GovernanceViolation(f"invalid retry_decision {retry_decision!r}")
@@ -472,6 +478,8 @@ def build_invocation_record(
         raise GovernanceViolation(f"unsupported execution profile {execution_profile!r}")
     record = {
         "schema": INVOCATION_SCHEMA,
+        "attempt_lifecycle": attempt_lifecycle,
+        "lifecycle_observed_outcome": lifecycle_observed_outcome,
         "run_id": run_id,
         "condition": condition,
         "role": role,
@@ -497,6 +505,12 @@ def build_invocation_record(
         "raw_output": raw_view,
         "promoted_artifact_refs": refs,
     }
+    if harness_protocol_version in {"m1-dev-harness-v13", "m1-dev-harness-v14"}:
+        if attempt_lifecycle is not None or lifecycle_observed_outcome is not None:
+            raise GovernanceViolation("historical invocation cannot claim lifecycle evidence")
+        record["schema"] = HISTORICAL_INVOCATION_SCHEMA
+        for key in _LIFECYCLE_RECORD_FIELDS:
+            record.pop(key)
     _reject_secret_keys(record, "invocation record")
     extra = set(record) - _RECORD_FIELDS
     if extra:
@@ -506,10 +520,13 @@ def build_invocation_record(
 
 def serialize_invocation_record(record: Mapping[str, Any]) -> str:
     _reject_secret_keys(record, "invocation record")
-    missing = _RECORD_FIELDS - set(record)
+    if record.get("schema") not in {INVOCATION_SCHEMA, HISTORICAL_INVOCATION_SCHEMA}:
+        raise GovernanceViolation("unknown invocation schema")
+    fields = _RECORD_FIELDS if record.get("schema") == INVOCATION_SCHEMA else _RECORD_FIELDS - _LIFECYCLE_RECORD_FIELDS
+    missing = fields - set(record)
     if missing:
         raise GovernanceViolation(f"invocation record missing fields: {sorted(missing)}")
-    extra = set(record) - _RECORD_FIELDS
+    extra = set(record) - fields
     if extra:
         raise GovernanceViolation(f"invocation record has unexpected fields: {sorted(extra)}")
     return canonical_json(dict(record))

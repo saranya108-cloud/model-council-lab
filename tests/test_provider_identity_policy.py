@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from test_attempt_lifecycle_dispatch import offline_dispatch
+
 import json
 import hashlib
 import unittest
@@ -43,6 +45,7 @@ OPENAI_IDENTITY = AdapterIdentity(
 
 
 def _spec(run_id: str, condition: str = "A", **limits):
+    limits.setdefault("max_stage_retries", 0)
     return replace(
         make_spec(run_id, condition, **limits),
         model_identifier=OPENAI_IDENTITY.key(),
@@ -126,7 +129,7 @@ def _run_with_observations(root: str, run_id: str, condition: str, observations)
         return real_evaluate(candidate)
 
     runner.evaluator.evaluate = evaluate
-    with patch.object(runner.adapter, "invoke_live", side_effect=invoke):
+    with patch.object(runner.adapter, "invoke_live", side_effect=lambda request: offline_dispatch(runner.adapter, request, lambda: invoke(request))):
         result = runner.execute(_spec(run_id, condition), make_task())
     return result, runs_root, called, evaluated
 
@@ -236,7 +239,7 @@ class TestProviderIdentityPromotionGate(unittest.TestCase):
                 )
                 return parse_provider_call_outcome(payload)
 
-            with patch.object(runner.adapter, "invoke_live", side_effect=invoke):
+            with patch.object(runner.adapter, "invoke_live", side_effect=lambda request: offline_dispatch(runner.adapter, request, lambda: invoke(request))):
                 result = runner.execute(_spec("f2-authority"), make_task())
             self.assertEqual(result.status, "failed_governance")
             record = json.loads(
@@ -271,7 +274,7 @@ class TestProviderIdentityPromotionGate(unittest.TestCase):
                 }
                 return parse_provider_call_outcome(payload)
 
-            with patch.object(runner.adapter, "invoke_live", side_effect=invoke):
+            with patch.object(runner.adapter, "invoke_live", side_effect=lambda request: offline_dispatch(runner.adapter, request, lambda: invoke(request))):
                 result = runner.execute(_spec("f2-runtime-alias"), make_task())
             self.assertEqual(result.status, "failed_governance")
             self.assertFalse(
@@ -337,7 +340,7 @@ class TestProviderIdentityCrossStage(unittest.TestCase):
                 self.assertIsNot(outcome.kind, ProviderCallKind.SUCCESS)
                 raise NeutralProviderFailure(outcome.error, outcome=outcome)
 
-            with patch.object(runner.adapter, "invoke_live", side_effect=fail):
+            with patch.object(runner.adapter, "invoke_live", side_effect=lambda request: offline_dispatch(runner.adapter, request, lambda: fail(request))):
                 result = runner.execute(
                     _spec("f2-provider-error", "A", max_stage_retries=0),
                     make_task(),
@@ -422,7 +425,7 @@ class TestProviderIdentityTerminalVerification(unittest.TestCase):
             with self.assertRaises(IntegrityViolation):
                 ArtifactStore.verify_terminal_run(runs_root, "f2-verdict-tamper")
 
-    def test_new_f2_record_uses_v14_discriminator_through_bound_evidence(self):
+    def test_new_f2_record_uses_current_discriminator_through_bound_evidence(self):
         with TempRoot() as root:
             runs_root, run_dir = self._successful_run(root, "f2-v14")
             binding = json.loads((run_dir / "execution_binding.json").read_text())
@@ -431,7 +434,7 @@ class TestProviderIdentityTerminalVerification(unittest.TestCase):
             )["declaration"]
             authority = json.loads((run_dir / "run_authority.json").read_text())
             terminal = json.loads((run_dir / "run_result.json").read_text())
-            self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v14")
+            self.assertEqual(HARNESS_PROTOCOL_VERSION, "m1-dev-harness-v15")
             self.assertEqual(binding["harness_protocol_version"], HARNESS_PROTOCOL_VERSION)
             self.assertEqual(declaration["harness_protocol_version"], HARNESS_PROTOCOL_VERSION)
             self.assertEqual(authority["harness_protocol_version"], HARNESS_PROTOCOL_VERSION)
@@ -492,7 +495,7 @@ class TestProviderIdentityTerminalVerification(unittest.TestCase):
             with self.assertRaises(IntegrityViolation):
                 ArtifactStore.verify_terminal_run(runs_root, "f2-policy-downgrade")
 
-    def test_v14_discriminator_cannot_be_downgraded_while_authority_remains_v14(self):
+    def test_current_discriminator_cannot_be_downgraded_while_authority_remains_current(self):
         with TempRoot() as root:
             runs_root, run_dir = self._successful_run(root, "f2-version-downgrade")
 
@@ -684,7 +687,7 @@ class TestF2RemainingBlockers(unittest.TestCase):
             outcome = _outcome(request, observed)
             clock[0] = elapsed
             return outcome
-        with patch.object(runner.adapter, "invoke_live", side_effect=invoke):
+        with patch.object(runner.adapter, "invoke_live", side_effect=lambda request: offline_dispatch(runner.adapter, request, lambda: invoke(request))):
             result = runner.execute(
                 _spec("timed", max_stage_retries=retries, stage_timeout_seconds=1), make_task()
             )
@@ -737,16 +740,15 @@ class TestF2RemainingBlockers(unittest.TestCase):
                 with self.assertRaises(IntegrityViolation):
                     ArtifactStore.verify_terminal_run(runs, "promotion")
 
-    def test_late_outcome_with_retry_budget_does_not_dispatch_again(self):
+    def test_nonzero_retry_budget_is_rejected_before_any_dispatch(self):
         with TempRoot() as root:
             result, runs = self._timed_run(root, "wrong-model", 2.0, retries=2)
-            self.assertEqual(result.status, "retry_exhausted")
+            self.assertEqual(result.status, "failed_governance")
             records = [json.loads(path.read_text()) for path in sorted(
                 (runs / "timed/invocations/solver").glob("*/invocation.json")
             )]
-            self.assertEqual(len(records), 3)
-            self.assertEqual([r["invocation_began"] for r in records], [True, False, False])
-            self.assertEqual([r["identity_verdict"] for r in records], ["not_evaluated"] * 3)
+            self.assertEqual(records, [])
+            self.assertFalse((runs / "timed/attempt-lifecycle").exists())
             self.assertTrue(ArtifactStore.verify_terminal_run(runs, "timed")["terminal_verified"])
 
     def test_late_outcome_cannot_be_forced_into_identity_evaluation(self):
@@ -787,7 +789,7 @@ class TestF2RemainingBlockers(unittest.TestCase):
                 with self.assertRaises(IntegrityViolation):
                     ArtifactStore.verify_terminal_run(runs, "residue")
 
-    def test_successful_retry_does_not_allow_an_earlier_stop(self):
+    def test_f5_refuses_configured_retry_even_when_second_response_would_succeed(self):
         with TempRoot() as root:
             runner, runs = make_runner(root, kind="openai_responses", identity=OPENAI_IDENTITY)
             calls = []
@@ -797,13 +799,11 @@ class TestF2RemainingBlockers(unittest.TestCase):
                     outcome = live_stub_generate({"neutral_error_category": "rate_limit"}, {}, request)
                     raise NeutralProviderFailure(outcome.error, outcome=outcome)
                 return _outcome(request)
-            with patch.object(runner.adapter, "invoke_live", side_effect=invoke):
+            with patch.object(runner.adapter, "invoke_live", side_effect=lambda request: offline_dispatch(runner.adapter, request, lambda: invoke(request))):
                 result = runner.execute(_spec("retry", max_stage_retries=1), make_task())
-            self.assertEqual(result.status, "succeeded")
+            self.assertEqual(result.status, "failed_governance")
+            self.assertEqual(calls, [])
             self.assertTrue(ArtifactStore.verify_terminal_run(runs, "retry")["terminal_verified"])
-            _rewrite_invocation_field(runs / "retry", "solver", 1, "retry_decision", "stop")
-            with self.assertRaises(IntegrityViolation):
-                ArtifactStore.verify_terminal_run(runs, "retry")
 
     def test_each_b_c_stage_rejects_missing_malformed_or_mismatching_identity(self):
         for condition, roles in (("B", ("draft", "self_review", "reviser")), ("C", ("solver", "verifier", "reviser"))):
