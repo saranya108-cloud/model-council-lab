@@ -10,7 +10,8 @@ condition, treatment, budget, retry, or recovery overrides. Each invocation
 executes one run at most. Never repeat an ambiguous request under another ID.
 Evidence remains in <runs-root>/<run-id>; this launcher never repairs it.
 
-F5 remains open: missing evidence cannot establish absence of dispatch.
+Protocol v15 terminal acceptance requires verified attempt-lifecycle evidence.
+Missing or incomplete evidence never authorizes a rerun.
 F6 remains open: all existing response materialization ceilings are unchanged.
 The 2048 input ceiling is harness-estimated, not provider-tokenizer parity.
 One successful live run covers its observed findings branch only. Zero findings,
@@ -109,8 +110,8 @@ def _prepare(run_id: str, runs_root: str | Path) -> CanaryPlan:
         "solver", "verifier", "reviser"
     ):
         raise CanaryError("Condition C requires exactly solver, verifier, reviser in order")
-    if HARNESS_PROTOCOL_VERSION != "m1-dev-harness-v14":
-        raise CanaryError("reviewed v14 harness is required")
+    if HARNESS_PROTOCOL_VERSION != "m1-dev-harness-v15":
+        raise CanaryError("v15 harness is required")
     run_id = require_run_id(run_id)
     root = Path(runs_root).resolve()
     if root == REPO_ROOT.resolve() or not root.is_relative_to(REPO_ROOT.resolve()):
@@ -223,6 +224,15 @@ def _accept_condition_c_evidence(plan: CanaryPlan, records: dict) -> dict:
         raise CanaryError("Condition C canonical findings or disposition acceptance failed") from None
 
 
+def _require_v15_lifecycle_verification(verification: object) -> None:
+    """Require the production verifier's F5 result; do not reconstruct evidence."""
+    if (type(verification) is not dict
+            or verification.get("attempt_lifecycle_verified") is not True
+            or verification.get("attempt_lifecycle_schema") != "m1-attempt-lifecycle-v1"
+            or type(verification.get("attempt_retry_safety")) is not dict):
+        raise CanaryError("v15 lifecycle verification is unconfirmed")
+
+
 def evidence_summary(plan: CanaryPlan, *, interrupted: bool = False) -> dict:
     """Report verified records, never infer processing from configured identity or gaps.
 
@@ -230,6 +240,7 @@ def evidence_summary(plan: CanaryPlan, *, interrupted: bool = False) -> dict:
     It runs only after execution; it cannot authorize any further attempt.
     """
     verification = ArtifactStore.verify_terminal_run(plan.runs_root, plan.run_spec.run_id)
+    _require_v15_lifecycle_verification(verification)
     terminal = json.loads((plan.destination / "run_result.json").read_text())
     if (type(verification) is not dict or verification.get("terminal_verified") is not True
             or verification.get("run_id") != plan.run_spec.run_id
@@ -293,6 +304,9 @@ def evidence_summary(plan: CanaryPlan, *, interrupted: bool = False) -> dict:
         "run_id": plan.run_spec.run_id, "run_directory": str(plan.destination),
         "terminal_status": terminal["status"], "terminal_verified": verification["terminal_verified"],
         "provider_identity_policy_verified": verification.get("provider_identity_policy_verified", False),
+        "attempt_lifecycle_verified": verification["attempt_lifecycle_verified"],
+        "attempt_lifecycle_schema": verification["attempt_lifecycle_schema"],
+        "attempt_retry_safety": verification["attempt_retry_safety"],
         "evaluation_passed": (terminal.get("evaluation") or {}).get("passed"),
         "ambiguous_dispatch": ambiguous, "maximum_provider_attempts": 3,
         "invocation_records": sum(row["invocation_records"] for row in rows),
@@ -337,6 +351,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         verification = ArtifactStore.verify_terminal_run(plan.runs_root, plan.run_spec.run_id)
         accept_terminal_verification(plan, result, verification)
+        _require_v15_lifecycle_verification(verification)
         summary = evidence_summary(plan)
         print(json.dumps(summary, sort_keys=True))
         if summary["ambiguous_dispatch"]:

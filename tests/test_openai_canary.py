@@ -10,9 +10,11 @@ import math
 import os
 import sys
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
+
+from test_attempt_lifecycle_dispatch import offline_dispatch
 
 from helpers import TempRoot
 from model_council import (
@@ -134,18 +136,13 @@ def _action(parser, option):
     return parser._option_string_actions[option]
 
 
+@contextmanager
 def _forbid_worker_spawn():
     import subprocess as subprocess_mod
 
-    real_run = subprocess_mod.run
-
-    def guarded_run(*args, **kwargs):
-        command = args[0] if args else kwargs.get("args")
-        if isinstance(command, (list, tuple)) and "model_council.worker" in command:
-            raise AssertionError("provider worker spawn must not occur")
-        return real_run(*args, **kwargs)
-
-    return patch.object(subprocess_mod, "run", side_effect=guarded_run)
+    with patch.object(subprocess_mod, "run", side_effect=OSError("worker spawn forbidden")), \
+         patch.object(subprocess_mod, "Popen", side_effect=OSError("worker spawn forbidden")):
+        yield
 
 
 def _capture_main(module, argv):
@@ -264,6 +261,13 @@ class TestOpenAICanary(unittest.TestCase):
             self.assertNotIn(HOST_KEY, text)
             self.assertNotIn(CHILD_KEY, text)
             self.assertNotIn("sk-test-canary-secret-not-real", lowered)
+
+    def test_worker_spawn_guard_blocks_run_and_popen(self):
+        import subprocess
+        with _forbid_worker_spawn():
+            for launch in (subprocess.run, subprocess.Popen):
+                with self.subTest(launch=launch), self.assertRaisesRegex(OSError, "worker spawn forbidden"):
+                    launch([sys.executable, "-B", "-m", "model_council.worker"])
 
     def test_01_importing_the_module_is_inert(self):
         self.assertTrue(CANARY_PATH.is_file())
@@ -805,7 +809,7 @@ class TestOpenAICanary(unittest.TestCase):
                 self.module.SubprocessAdapter,
                 "invoke_live",
                 autospec=True,
-                side_effect=invoke_live,
+                side_effect=lambda adapter, request: offline_dispatch(adapter, request, lambda: invoke_live(adapter, request)),
             ), patch.object(
                 self.module.SubprocessAdapter,
                 "_spawn_worker",
@@ -853,6 +857,8 @@ class TestOpenAICanary(unittest.TestCase):
             )
             self.assertTrue(verification["terminal_verified"])
             self.assertEqual(verification["terminal_status"], STATUS_SUCCEEDED)
+            self.assertIs(verification["attempt_lifecycle_verified"], True)
+            self.assertEqual(verification["attempt_lifecycle_schema"], "m1-attempt-lifecycle-v1")
 
     def test_29_normal_success_invokes_terminal_verification(self):
         with TempRoot() as root:

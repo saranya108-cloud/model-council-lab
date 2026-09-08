@@ -14,11 +14,16 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from test_attempt_lifecycle_dispatch import offline_dispatch, synthetic_journal
+
 from helpers import SRC
 from model_council import ArtifactStore, Condition
 from model_council.adapters import live_stub_generate
 from model_council.errors import InfrastructureError, StageTimeout
-from model_council.live_contract import parse_live_invocation_request
+from model_council.attempt_lifecycle import AttemptJournal, summary as lifecycle_summary
+from model_council.types import IntegrityViolation
+from model_council.roles import ROLE_INSTRUCTIONS
+from model_council.live_contract import build_live_invocation_request, parse_live_invocation_request
 from model_council.protocol import HARNESS_PROTOCOL_VERSION
 from model_council.openai_adapter import build_openai_responses_request, translate_openai_responses_result
 from test_openai_adapter_translation import _completed_fixture
@@ -122,8 +127,136 @@ class TestConditionCCanary(unittest.TestCase):
                 "execution_profile": "live_contract_v1", "outcome": outcome,
             }
 
-        self.spawn.side_effect = spawn
+        self.spawn.side_effect = lambda adapter, envelope, timeout: offline_dispatch(
+            adapter, parse_live_invocation_request(envelope["live_invocation_request"]),
+            lambda: spawn(adapter, envelope, timeout),
+        )
         return calls
+
+    def assert_lifecycle_inventory(self, directory, roles, *, success=False, interrupted_role=None):
+        paths = sorted(directory.glob("attempt-lifecycle/*/attempt-*/journal.jsonl"))
+        self.assertEqual({path.parent.parent.name for path in paths}, set(roles))
+        self.assertEqual(len(paths), len(roles))
+        inventory = {}
+        for role in roles:
+            path = directory / "attempt-lifecycle" / role / "attempt-0001/journal.jsonl"
+            snapshot = AttemptJournal(path).inspect(require_closed=True)
+            inventory[role] = lifecycle_summary(snapshot)
+            records = list((directory / "invocations" / role).glob("attempt-*/invocation.json"))
+            if role == interrupted_role:
+                self.assertEqual(records, [])
+                self.assertEqual(snapshot["closure"]["reason"], "interrupted")
+                self.assertEqual(snapshot["events"][-1]["event"], "sdk_exception_observed")
+                self.assertIsNone(snapshot["outcome"])
+                self.assertFalse((directory / "seals" / f"{role}.json").exists())
+                continue
+            self.assertEqual(len(records), 1)
+            record = json.loads(records[0].read_text())
+            self.assertEqual(record["schema"], "m1-invocation-record-v3")
+            self.assertEqual(record["attempt"], 1)
+            self.assertNotEqual(record["retry_decision"], "retry")
+            self.assertEqual(record["attempt_lifecycle"], inventory[role])
+            self.assertEqual(record["lifecycle_observed_outcome"], snapshot["outcome"])
+            received = record["adapter_evidence"].get("provider_call_outcome")
+            if received is not None:
+                self.assertEqual(received, snapshot["outcome"])
+            if success:
+                self.assertEqual([event["event"] for event in snapshot["events"]], [
+                    "attempt_prepared", "dispatch_permitted", "sdk_call_boundary",
+                    "sdk_return_observed", "outcome_observed",
+                ])
+                self.assertEqual(record["retry_decision"], "promote")
+                self.assertEqual(received, snapshot["outcome"])
+                self.assertEqual(received["adapter_internal_retry_count"], 0)
+                seal = json.loads((directory / "seals" / f"{role}.json").read_text())
+                self.assertEqual(seal["lifecycle_binding_version"], "m1-stage-lifecycle-binding-v1")
+                self.assertEqual(seal["attempt_lifecycle"], inventory[role])
+        terminal = json.loads((directory / "run_result.json").read_text())
+        self.assertEqual(terminal["attempt_lifecycle"], inventory)
+        report = ArtifactStore.verify_terminal_run(directory.parent, directory.name)
+        self.assertIs(report["terminal_verified"], True)
+        self.assertIs(report["attempt_lifecycle_verified"], True)
+        self.assertEqual(report["attempt_lifecycle_schema"], "m1-attempt-lifecycle-v1")
+        self.assertEqual(report["attempt_retry_safety"],
+                         {role: value["retry_safety"] for role, value in inventory.items()})
+        if success:
+            self.assertIs(report["provider_identity_policy_verified"], True)
+
+    def test_protocol_mismatch_rejected_before_execution(self):
+        for version in ("m1-dev-harness-v14", "m1-dev-harness-v16"):
+            with self.subTest(version=version), patch.object(self.c, "HARNESS_PROTOCOL_VERSION", version), \
+                 patch.object(self.c, "ExperimentRunner", side_effect=AssertionError("runner forbidden")):
+                self.assertEqual(self.main(self.args(execute=True))[0], 2)
+        self.spawn.assert_not_called()
+        self.assertFalse((self.root / "runs").exists())
+
+    def test_lifecycle_verification_required_for_acceptance_and_summary(self):
+        prepared = self.c.prepare_canary(self.c.build_parser().parse_args(self.args()))
+        self.synthetic()
+        self.assertEqual(self.main(self.args(execute=True))[0], 0)
+        real_verify = ArtifactStore.verify_terminal_run
+        verified = real_verify(prepared.runs_root, prepared.run_spec.run_id)
+        for field, value, missing in (
+            ("attempt_lifecycle_verified", None, True),
+            ("attempt_lifecycle_verified", False, False),
+            ("attempt_lifecycle_verified", None, False),
+            ("attempt_lifecycle_verified", 1, False),
+            ("attempt_lifecycle_verified", "true", False),
+            ("attempt_lifecycle_schema", None, True),
+            ("attempt_lifecycle_schema", "unsupported", False),
+            ("attempt_retry_safety", None, True),
+            ("attempt_retry_safety", [], False),
+        ):
+            invalid = dict(verified)
+            if missing:
+                invalid.pop(field)
+            else:
+                invalid[field] = value
+            with self.subTest(field=field, value=value, missing=missing), \
+                 patch.object(ArtifactStore, "verify_terminal_run", return_value=invalid):
+                with self.assertRaises(self.c.CanaryError):
+                    self.c.evidence_summary(prepared)
+        # Exercise both independent verification calls in main, with real evidence.
+        for invalid_call in (1, 2):
+            with self.subTest(invalid_call=invalid_call), tempfile.TemporaryDirectory() as tmp:
+                with patch.object(self, "root", Path(tmp).resolve()), patch.object(self.c, "REPO_ROOT", Path(tmp).resolve()):
+                    self.synthetic()
+                    count = 0
+                    def verify(*args):
+                        nonlocal count
+                        count += 1
+                        value = real_verify(*args)
+                        if count == invalid_call:
+                            if invalid_call == 1:
+                                value.pop("attempt_lifecycle_verified")
+                            else:
+                                value["attempt_lifecycle_verified"] = False
+                        return value
+                    with patch.object(ArtifactStore, "verify_terminal_run", side_effect=verify):
+                        code, out, _ = self.main(self.args(execute=True))
+                    self.assertEqual(code, 1)
+                    self.assertNotIn("LIVE PASS", out)
+                    self.assertIn("INCONCLUSIVE", out)
+
+    def test_lifecycle_journal_tampering_blocks_downstream(self):
+        calls = self.synthetic()
+        original = ArtifactStore.seal_stage
+        def seal(store, role, **kwargs):
+            result = original(store, role, **kwargs)
+            if role == "solver":
+                path = store.run_dir / "attempt-lifecycle/solver/attempt-0001/journal.jsonl"
+                with path.open("a") as stream:
+                    stream.write("tampered\n")
+            return result
+        with patch.object(ArtifactStore, "seal_stage", autospec=True, side_effect=seal):
+            code, out, _ = self.main(self.args(execute=True))
+        self.assertEqual(code, 1)
+        self.assertEqual([request.role for request in calls], ["solver"])
+        directory = self.root / "runs/c-test"
+        self.assertFalse((directory / "evaluation.json").exists())
+        self.assertNotIn("LIVE PASS", out)
+        with self.assertRaises(IntegrityViolation):
+            ArtifactStore.verify_terminal_run(directory.parent, directory.name)
 
     def test_preflight_has_no_side_effects(self):
         with patch.object(self.c, "ExperimentRunner", side_effect=AssertionError("runner forbidden")), \
@@ -240,6 +373,7 @@ class TestConditionCCanary(unittest.TestCase):
             for name, content in record["adapter_evidence"]["provider_call_outcome"]["stage_output"]["artifacts"].items():
                 if request.role != "verifier":
                     self.assertEqual((directory / request.role / f"{name}.md").read_text(), content)
+        self.assert_lifecycle_inventory(directory, [r.role for r in calls], success=True)
         report = ArtifactStore.verify_terminal_run(directory.parent, directory.name)
         self.assertTrue(report["provider_identity_policy_verified"])
         self.assertTrue(report["terminal_verified"])
@@ -264,6 +398,7 @@ class TestConditionCCanary(unittest.TestCase):
                         self.assertFalse((directory / "seals" / f"{role}.json").exists())
                         self.assertEqual(list((directory / role).iterdir()), [])
                         self.assertFalse((directory / "evaluation.json").exists())
+                        self.assert_lifecycle_inventory(directory, [r.role for r in calls])
                         report = ArtifactStore.verify_terminal_run(directory.parent, directory.name)
                         self.assertEqual(report["terminal_status"], "failed_governance")
                         self.assertTrue(report["terminal_verified"])
@@ -286,7 +421,10 @@ class TestConditionCCanary(unittest.TestCase):
                         directory = self.root / "runs/c-test"
                         self.assertFalse((directory / "evaluation.json").exists())
                         self.assertFalse((directory / "seals" / f"{role}.json").exists())
-                        ArtifactStore.verify_terminal_run(directory.parent, directory.name)
+                        self.assert_lifecycle_inventory(
+                            directory, [r.role for r in calls],
+                            interrupted_role=role if mode == "interrupt" else None,
+                        )
                         if mode != "provider":
                             self.assertIn("INCONCLUSIVE", out)
                             self.assertIn("DO NOT AUTOMATICALLY RERUN", out)
@@ -304,18 +442,47 @@ class TestConditionCCanary(unittest.TestCase):
 
     def test_worker_command_uses_validated_interpreter(self):
         plan = self.c.prepare_canary(self.c.build_parser().parse_args(self.args()))
+        limits = plan.run_spec.resource_limits
+        request = build_live_invocation_request(
+            condition=Condition.C, role="solver", role_instruction=ROLE_INSTRUCTIONS["solver"],
+            stage_inputs={"task": plan.task.agent_visible_text()},
+            requested_identity=plan.identity, configured_identity=plan.identity,
+            seed=plan.run_spec.seed, max_output_tokens=limits.max_output_tokens_per_stage,
+            max_tool_calls=limits.max_tool_calls_per_stage,
+            attempt_timeout_seconds=limits.stage_timeout_seconds,
+        )
         adapter = self.c.SubprocessAdapter(plan.identity, kind="openai_responses",
-                                          python_executable=sys.executable, options={})
-        # Exercise the real executor up to a synthetic spawn failure. No worker,
-        # SDK client, real credential or network operation is possible here.
-        with patch.object(os, "environ", {"OPENAI_API_KEY": "synthetic-offline-only"}), \
-             patch("model_council.openai_adapter.validate_openai_runtime_credential",
-                   return_value="synthetic-offline-only"), \
-             patch("model_council.executor.subprocess.run", side_effect=OSError("synthetic spawn failure")) as run:
-            with self.assertRaises(InfrastructureError):
-                self.real_spawn(adapter, {}, 30.0)
-        self.assertEqual(run.call_count, 1)
-        self.assertEqual(run.call_args.args[0], [sys.executable, "-B", "-m", "model_council.worker"])
+                                                  python_executable=sys.executable, options={})
+        self.spawn.side_effect = lambda adapter, envelope, timeout: self.real_spawn(adapter, envelope, timeout)
+        with synthetic_journal(request, adapter) as journal:
+            def reject_launch(command, **kwargs):
+                self.assertEqual(command, [sys.executable, "-B", "-m", "model_council.worker"])
+                envelope = json.loads(kwargs["input"])
+                self.assertEqual(envelope["harness_protocol_version"], "m1-dev-harness-v15")
+                self.assertEqual(envelope["live_invocation_request"], request.to_dict())
+                snapshot = journal.inspect()
+                self.assertEqual(envelope["attempt_id"], snapshot["attempt_id"])
+                self.assertEqual([event["event"] for event in snapshot["events"]],
+                                 ["attempt_prepared", "dispatch_permitted"])
+                fd = int(kwargs["env"]["MCL_ATTEMPT_LIFECYCLE_FD"])
+                self.assertIn(fd, kwargs["pass_fds"])
+                self.assertEqual(os.fstat(fd).st_ino, journal.path.stat().st_ino)
+                raise OSError("synthetic spawn failure")
+
+            # Real authorization and command construction; no provider child starts.
+            with patch.object(os, "environ", {"OPENAI_API_KEY": "synthetic-offline-only"}), \
+                 patch("model_council.openai_adapter.validate_openai_runtime_credential",
+                       return_value="synthetic-offline-only"), \
+                 patch("model_council.executor.subprocess.Popen", side_effect=AssertionError("child forbidden")), \
+                 patch("model_council.executor._run_openai_worker", side_effect=reject_launch) as launch:
+                with self.assertRaises(InfrastructureError):
+                    adapter.invoke_live(request)
+            launch.assert_called_once()
+            snapshot = journal.inspect(require_closed=True)
+            self.assertEqual([event["event"] for event in snapshot["events"]],
+                             ["attempt_prepared", "dispatch_permitted"])
+            self.assertIsNone(snapshot["outcome"])
+            self.assertEqual(snapshot["closure"]["reason"], "infrastructure")
 
     def test_attempt_and_usage_summary_preserves_unavailable_values(self):
         self.synthetic(usage=True)
@@ -325,6 +492,9 @@ class TestConditionCCanary(unittest.TestCase):
         prepared = replace(prepared, run_spec=replace(prepared.run_spec, run_id="c-test"),
                            destination=self.root / "runs/c-test")
         report = self.c.evidence_summary(prepared)
+        verified = ArtifactStore.verify_terminal_run(prepared.runs_root, prepared.run_spec.run_id)
+        for field in ("attempt_lifecycle_verified", "attempt_lifecycle_schema", "attempt_retry_safety"):
+            self.assertEqual(report[field], verified[field])
         self.assertEqual(report["provider_attempts"], 3)
         self.assertEqual(report["provider_usage_total"], {
             "input_tokens": 30, "output_tokens": 12, "total_tokens": 42,
@@ -589,6 +759,12 @@ class TestConditionCCanary(unittest.TestCase):
                     self.assertFalse((self.root / "runs/c-test/evaluation.json").exists())
                     self.assertNotIn("LIVE PASS", out)
 
+                    if mode == "input":
+                        snapshot = AttemptJournal(self.root / "runs/c-test/attempt-lifecycle/solver/attempt-0001/journal.jsonl").inspect(require_closed=True)
+                        self.assertEqual([event["event"] for event in snapshot["events"]], ["attempt_prepared"])
+                        self.assertEqual(snapshot["closure"]["event"], "closed_not_started")
+                        self.assertIsNone(snapshot["outcome"])
+
     def test_c_acceptance_rejects_inconsistent_stored_projection(self):
         self.synthetic()
         self.assertEqual(self.main(self.args(execute=True))[0], 0)
@@ -668,10 +844,14 @@ class TestConditionCCanary(unittest.TestCase):
                         ))
                         return {"harness_protocol_version": HARNESS_PROTOCOL_VERSION,
                                 "execution_profile": "live_contract_v1", "outcome": outcome.to_dict()}
-                    self.spawn.side_effect = spawn
+                    self.spawn.side_effect = lambda adapter, envelope, timeout: offline_dispatch(
+                        adapter, parse_live_invocation_request(envelope["live_invocation_request"]),
+                        lambda: spawn(adapter, envelope, timeout),
+                    )
                     code, out, err = self.main(self.args(execute=True))
                     self.assertEqual(code, 0, out + err)
                     self.assertEqual([r.role for r in calls], ["solver", "verifier", "reviser"])
+                    self.assert_lifecycle_inventory(self.root / "runs/c-test", [r.role for r in calls], success=True)
                     report = self.summary()
                     self.assertEqual(report["provider_attempts"], 3)
                     self.assertEqual(report["findings_count"], 0 if empty else 1)
