@@ -20,8 +20,11 @@ Failure taxonomy:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import json
+import math
 import os
+import selectors
 import subprocess
 import sys
 import tempfile
@@ -129,6 +132,304 @@ def _run_openai_worker(args, *, input, capture_output, text, timeout, **kwargs):
                         pass
         kwargs.clear()
         process = None
+
+
+# F6a Checkpoint 1 only: these policies and the collector below are INACTIVE.
+# The protocol ceiling above is inherited; diagnostic ceilings are new,
+# explicitly approved defensive policies, not application-response limits.
+_MAX_WORKER_STDOUT_BYTES = 64 * 1024
+_MAX_WORKER_STDERR_BYTES = 64 * 1024
+_MAX_WORKER_DIAGNOSTIC_BYTES = 96 * 1024  # Independent aggregate policy.
+# Implementation quanta, not accepted-output limits. One operation per ready
+# descriptor per arbitration cycle; status/deadline checks also occur per turn.
+_WORKER_IO_QUANTUM_BYTES = 64 * 1024
+_WORKER_STATUS_POLL_SECONDS = 0.05
+# Five seconds inherits the old wait duration, but sharing ONE allowance across
+# all cleanup phases is new. It never extends the communication deadline.
+_WORKER_CLEANUP_TIMEOUT_SECONDS = 5.0
+
+
+@dataclass(frozen=True)
+class _WorkerCollection:
+    """Owned collector facts, NOT lifecycle evidence or permission to retry.
+
+    Observed counters freeze at the first abort. They do not report total
+    producer output. High-water marks measure payload bytes, not allocator
+    capacity or process RSS; conversion of protocol to bytes may also copy it.
+    No diagnostic body or exception object is retained in this result.
+    """
+
+    protocol: bytes | None = field(repr=False)
+    failure: str | None
+    abort_reason: str | None
+    returncode: int | None
+    reaped: bool
+    pipes_eof: bool
+    cleanup_complete: bool
+    interruption: str | None
+    stdout_observed: int
+    stderr_observed: int
+    diagnostic_observed: int
+    protocol_high_water: int
+    read_high_water: int
+    diagnostic_high_water: int = 0
+
+
+def _collect_openai_worker(process, *, input: bytes, protocol_fd: int,
+                           deadline: float, monotonic=time.monotonic) -> _WorkerCollection:
+    """Inactive POSIX collector for an already-spawned, binary/unbuffered child.
+
+    The caller establishes an absolute monotonic deadline BEFORE setup/spawn,
+    closes its protocol WRITE descriptor after spawn, and passes exclusive
+    ownership of stdin/stdout/stderr and protocol_fd here. Argument validation
+    precedes ownership transfer. Never pass a descriptor used by another reader.
+
+    This function does not spawn, dispatch, parse protocol, write evidence, or
+    alter _WorkerReaping. Checkpoint 2 must separately integrate these facts:
+    direct reaping alone is insufficient when cleanup_complete is false.
+    Interruptions are reported explicitly after cleanup, not silently accepted;
+    a future caller must preserve interrupt semantics when handling the result.
+    OS calls and the injected monotonic clock must behave normally; there is no
+    hard global bound against an unresponsive kernel or filesystem.
+    """
+    if type(input) is not bytes or not isinstance(deadline, (int, float)) or not math.isfinite(deadline):
+        raise ValueError("collector requires bytes and a finite absolute deadline")
+    protocol = bytearray()
+    accepted = None
+    counts = {"stdout": 0, "stderr": 0}
+    diagnostic_count = 0
+    protocol_high_water = 0
+    read_high_water = 0
+    chunk = None
+    offset = 0
+    abort_reason = None
+    interruption = None
+    cleanup_deadline = None
+    cleanup_error = False
+    reaped = False
+    returncode = None
+    kill_attempted = False
+    eof = set()
+    endpoints = {}
+    registered = set()
+    selector = None
+
+    def start_cleanup(now):
+        nonlocal cleanup_deadline
+        if cleanup_deadline is None:
+            cleanup_deadline = now + _WORKER_CLEANUP_TIMEOUT_SECONDS
+
+    def note_exception(exc):
+        nonlocal interruption
+        if isinstance(exc, KeyboardInterrupt):
+            interruption = "keyboard_interrupt"
+        elif isinstance(exc, SystemExit):
+            interruption = "system_exit"
+        elif not isinstance(exc, Exception):
+            interruption = "base_exception"
+
+    def close_endpoint(name):
+        nonlocal cleanup_error
+        endpoint = endpoints.pop(name, None)
+        if endpoint is None:
+            return
+        fd, stream = endpoint
+        if name in registered:
+            registered.remove(name)
+            try:
+                selector.unregister(fd)
+            except BaseException as exc:
+                note_exception(exc)
+                cleanup_error = True
+        try:
+            if stream is None:
+                os.close(fd)
+            else:
+                stream.close()
+        except BaseException as exc:
+            note_exception(exc)
+            cleanup_error = True
+
+    def abort(reason, now):
+        nonlocal abort_reason, kill_attempted
+        if abort_reason is None:
+            abort_reason = reason
+        protocol.clear()
+        start_cleanup(now)
+        # Signal before closing/draining: cleanup operations must not postpone
+        # cancellation. A failed kill may race with an independently reaped exit.
+        if not reaped and not kill_attempted:
+            kill_attempted = True
+            try:
+                process.kill()
+            except BaseException as exc:
+                note_exception(exc)
+        close_endpoint("stdin")
+
+    def observe_exit(now):
+        nonlocal reaped, returncode
+        if reaped:
+            return
+        try:
+            returncode = process.wait(timeout=0)
+        except subprocess.TimeoutExpired:
+            return
+        except BaseException as exc:
+            note_exception(exc)
+            abort("process_error", now)
+            return
+        reaped = True
+        start_cleanup(now)
+        close_endpoint("stdin")
+
+    def arbitrate():
+        now = monotonic()
+        observe_exit(now)
+        if abort_reason is None and now >= deadline:
+            abort("deadline", now)
+        if cleanup_error:
+            abort("io_error", now)
+        return now
+
+    try:
+        # Take ownership of every descriptor before operations that may fail.
+        endpoints["protocol"] = (protocol_fd, None)
+        for name in ("stdin", "stdout", "stderr"):
+            stream = getattr(process, name)
+            endpoints[name] = (stream.fileno(), stream)
+        selector = selectors.DefaultSelector()
+        for name in ("stdin", "stdout", "stderr", "protocol"):
+            fd, _ = endpoints[name]
+            os.set_blocking(fd, False)
+            selector.register(fd, selectors.EVENT_WRITE if name == "stdin" else selectors.EVENT_READ, name)
+            registered.add(name)
+        if not input:
+            close_endpoint("stdin")
+        while True:
+            now = arbitrate()
+            if reaped and eof == {"stdout", "stderr", "protocol"}:
+                break
+            if cleanup_deadline is not None and now >= cleanup_deadline:
+                break
+            until = cleanup_deadline if abort_reason is not None else deadline
+            if cleanup_deadline is not None:
+                until = min(until, cleanup_deadline)
+            ready = selector.select(min(_WORKER_STATUS_POLL_SECONDS, max(0.0, until - now)))
+            for key, _ in ready:
+                now = arbitrate()
+                if cleanup_deadline is not None and now >= cleanup_deadline:
+                    break
+                name = key.data
+                if name not in endpoints:
+                    continue
+                fd, _ = endpoints[name]
+                try:
+                    if name == "stdin":
+                        written = os.write(fd, memoryview(input)[offset:offset + _WORKER_IO_QUANTUM_BYTES])
+                        offset += written
+                        if offset == len(input):
+                            close_endpoint(name)
+                        continue
+                    size = _WORKER_IO_QUANTUM_BYTES
+                    if abort_reason is None:
+                        if name == "protocol":
+                            remaining = _MAX_WORKER_PROTOCOL_BYTES - len(protocol)
+                        else:
+                            ceiling = _MAX_WORKER_STDOUT_BYTES if name == "stdout" else _MAX_WORKER_STDERR_BYTES
+                            remaining = min(ceiling - counts[name], _MAX_WORKER_DIAGNOSTIC_BYTES - diagnostic_count)
+                        size = min(size, remaining + 1)
+                    chunk = os.read(fd, size)
+                    read_high_water = max(read_high_water, len(chunk))
+                    if not chunk:
+                        eof.add(name)
+                        # Stop polling EOF, but defer descriptor closes until
+                        # communication (including its final copy) is latched.
+                        selector.unregister(fd)
+                        registered.remove(name)
+                    elif abort_reason is None:
+                        if name == "protocol":
+                            if len(protocol) + len(chunk) > _MAX_WORKER_PROTOCOL_BYTES:
+                                abort("protocol_limit", monotonic())
+                            else:
+                                protocol.extend(chunk)
+                                protocol_high_water = max(protocol_high_water, len(protocol))
+                        else:
+                            counts[name] += len(chunk)
+                            diagnostic_count += len(chunk)
+                            if counts[name] > ceiling:
+                                abort(name + "_limit", monotonic())
+                            elif diagnostic_count > _MAX_WORKER_DIAGNOSTIC_BYTES:
+                                abort("diagnostic_limit", monotonic())
+                    chunk = None  # Diagnostics never survive the current operation.
+                except (BlockingIOError, InterruptedError):
+                    chunk = None
+                    continue
+                except BrokenPipeError:
+                    chunk = None
+                    if name == "stdin":
+                        close_endpoint(name)
+                    else:
+                        raise
+        # Finalize communication BEFORE final descriptor/selector cleanup.
+        # The cleanup allowance already started at abort or observed exit;
+        # it is independent of this one-time communication deadline decision.
+        if (reaped and eof == {"stdout", "stderr", "protocol"}
+                and abort_reason is None and not cleanup_error and not interruption
+                and returncode == 0):
+            accepted = bytes(protocol)
+            if monotonic() >= deadline:
+                accepted = None
+                abort("deadline", monotonic())
+        protocol.clear()
+    except BaseException as exc:
+        chunk = None
+        note_exception(exc)
+        abort("interrupted" if interruption else "io_error", monotonic())
+        # The I/O mechanism itself failed; do not claim EOF or resume a broken
+        # selector. Still attempt a confirmed wait within the SAME allowance.
+        if not reaped:
+            try:
+                returncode = process.wait(timeout=max(0.0, cleanup_deadline - monotonic()))
+                reaped = True
+            except BaseException as wait_exc:
+                note_exception(wait_exc)
+    finally:
+        chunk = None
+        for name in tuple(endpoints):
+            close_endpoint(name)
+        if selector is not None:
+            try:
+                selector.close()
+            except BaseException as exc:
+                note_exception(exc)
+                cleanup_error = True
+
+    pipes_eof = eof == {"stdout", "stderr", "protocol"}
+    cleanup_complete = reaped and pipes_eof and not cleanup_error
+    if cleanup_deadline is not None and monotonic() > cleanup_deadline:
+        cleanup_complete = False
+    if not cleanup_complete:
+        failure = "cleanup_uncertain"
+    elif interruption:
+        failure = "interrupted"
+    elif abort_reason is not None:
+        failure = abort_reason
+    elif returncode != 0:
+        failure = "worker_exit"
+    else:
+        failure = None
+    # Cleanup failure/uncertainty can veto the latched result. Elapsed cleanup
+    # time is never compared with the communication deadline here.
+    if failure is not None:
+        accepted = None
+    return _WorkerCollection(
+        protocol=accepted, failure=failure, abort_reason=abort_reason,
+        returncode=returncode, reaped=reaped, pipes_eof=pipes_eof,
+        cleanup_complete=cleanup_complete, interruption=interruption,
+        stdout_observed=counts["stdout"], stderr_observed=counts["stderr"],
+        diagnostic_observed=diagnostic_count, protocol_high_water=protocol_high_water,
+        read_high_water=read_high_water,
+    )
 
 
 def _close_fd(fd: int | None) -> None:
