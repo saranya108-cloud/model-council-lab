@@ -12,7 +12,6 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import types
 import unittest
 from contextlib import contextmanager
@@ -754,13 +753,24 @@ def _completed(stdout, returncode=0, stderr=""):
     )
 
 
+def _collected(protocol, returncode=0, stderr=""):
+    from model_council.executor import _WorkerCollection
+    return _WorkerCollection(
+        protocol=protocol.encode(), failure=None, abort_reason=None,
+        returncode=returncode, reaped=True, pipes_eof=True, cleanup_complete=True,
+        interruption=None, stdout_observed=0, stderr_observed=len(stderr.encode()),
+        diagnostic_observed=len(stderr.encode()), protocol_high_water=len(protocol.encode()),
+        read_high_water=0,
+    )
+
+
 def _capture_run(stdout, returncode=0, stderr=""):
     captured = {}
 
     def _run(*args, **kwargs):
         captured["env"] = dict(kwargs.get("env") or {})
         captured["input"] = kwargs.get("input")
-        return _completed(stdout, returncode=returncode, stderr=stderr)
+        return _collected(stdout, returncode=returncode, stderr=stderr)
 
     return captured, _run
 
@@ -1136,7 +1146,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
                 mocked.assert_not_called()
             empty = _openai_adapter(options={})
             with patch("model_council.executor._run_openai_worker") as mocked:
-                mocked.return_value = _completed(
+                mocked.return_value = _collected(
                     json.dumps(
                         {
                             "ok": False,
@@ -1239,7 +1249,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter()
             with patch("model_council.executor._run_openai_worker") as mocked:
-                mocked.return_value = _completed(
+                mocked.return_value = _collected(
                     json.dumps(
                         {
                             "ok": False,
@@ -1287,7 +1297,7 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter(provider_treatment_config=REASONING_SHAPED)
             with patch("model_council.executor._run_openai_worker") as mocked:
-                mocked.return_value = _completed(
+                mocked.return_value = _collected(
                     json.dumps(
                         {
                             "ok": False,
@@ -1495,8 +1505,11 @@ class TestOpenAIAdapterSkeleton(unittest.TestCase):
         digest = hashlib.sha256(stderr_body.encode("utf-8")).hexdigest()
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter()
-            with patch("model_council.executor._run_openai_worker") as mocked:
-                mocked.return_value = _completed("", returncode=1, stderr=stderr_body)
+            real_popen = subprocess.Popen
+            def launch(args, **kwargs):
+                code = "import os;os.write(2," + repr(stderr_body.encode()) + ");os._exit(1)"
+                return real_popen([sys.executable, "-B", "-c", code], **kwargs)
+            with patch("model_council.executor.subprocess.Popen", side_effect=launch):
                 with self.assertRaises(InfrastructureError) as ctx:
                     invoke_with_journal(adapter, make_request())
             message = str(ctx.exception)
@@ -1639,7 +1652,7 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
         with _isolated_environ(**{_HOST_KEY: credential}):
             adapter = _openai_adapter()
             with patch("model_council.executor._run_openai_worker") as mocked:
-                mocked.return_value = _completed(
+                mocked.return_value = _collected(
                     json.dumps(
                         {
                             "ok": False,
@@ -1851,8 +1864,11 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
         stderr_body = "err:" + _FAKE_CREDENTIAL
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter()
-            with patch("model_council.executor._run_openai_worker") as mocked:
-                mocked.return_value = _completed(stdout_body, returncode=7, stderr=stderr_body)
+            real_popen = subprocess.Popen
+            def launch(args, **kwargs):
+                code = "import os;os.write(2," + repr(stderr_body.encode()) + ");os._exit(7)"
+                return real_popen([sys.executable, "-B", "-c", code], **kwargs)
+            with patch("model_council.executor.subprocess.Popen", side_effect=launch):
                 with self.assertRaises(InfrastructureError) as ctx:
                     invoke_with_journal(adapter, make_request())
         exc = ctx.exception
@@ -1922,7 +1938,7 @@ class TestOpenAIAdapterSkeletonRemediation(unittest.TestCase):
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter()
             with patch("model_council.executor._run_openai_worker") as mocked:
-                mocked.return_value = _completed(garbage, returncode=0, stderr=garbage)
+                mocked.return_value = _collected(garbage, returncode=0, stderr=garbage)
                 with self.assertRaises(ProtocolError) as ctx:
                     invoke_with_journal(adapter, make_request())
         exc = ctx.exception
@@ -2098,100 +2114,58 @@ class TestOpenAIWorkerProtocolFdFailClosed(unittest.TestCase):
         self.assertEqual(parsed["execution_profile"], EXECUTION_PROFILE_LIVE_CONTRACT_V1)
 
 
-class TestOpenAIProtocolReaderStartFailure(unittest.TestCase):
-    def test_reader_start_failure_does_not_join_unstarted_thread_or_leak_fds(self):
-        joined = []
+class TestOpenAIProtocolOwnership(unittest.TestCase):
+    def test_pipe_setup_failure_closes_both_descriptors_before_launch(self):
         created = []
-        start_error = RuntimeError("synthetic protocol reader start failure")
         real_pipe = os.pipe
-
-        def tracking_pipe():
+        def pipe():
             pair = real_pipe()
             created.extend(pair)
             return pair
-
-        class _FailingReaderThread(threading.Thread):
-            def start(self):
-                raise start_error
-
-            def join(self, timeout=None):
-                joined.append(timeout)
-                return super().join(timeout)
-
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter()
-            with patch("model_council.executor.os.pipe", tracking_pipe):
-                with patch("model_council.executor.threading.Thread", _FailingReaderThread):
-                    with patch("model_council.executor._run_openai_worker") as mocked:
-                        with self.assertRaises(RuntimeError) as ctx:
-                            invoke_with_journal(adapter, make_request())
-                        mocked.assert_not_called()
-        self.assertIs(ctx.exception, start_error)
-        self.assertIsNone(ctx.exception.__context__)
-        self.assertEqual(joined, [])
+            with patch("model_council.executor.os.pipe", pipe), patch(
+                "model_council.executor.os.set_inheritable", side_effect=OSError("setup failed")
+            ), patch("model_council.executor._run_openai_worker") as launch:
+                with self.assertRaises(InfrastructureError):
+                    invoke_with_journal(adapter, make_request())
+                launch.assert_not_called()
         self.assertEqual(len(created), 2)
         for fd in created:
             with self.assertRaises(OSError):
                 os.fstat(fd)
 
-    def test_reader_start_oserror_preserves_spawn_failure_without_join(self):
-        joined = []
+    def test_launch_failure_closes_untransferred_descriptors(self):
         created = []
         real_pipe = os.pipe
-
-        def tracking_pipe():
+        def pipe():
             pair = real_pipe()
             created.extend(pair)
             return pair
-
-        class _FailingReaderThread(threading.Thread):
-            def start(self):
-                raise OSError("synthetic protocol reader start oserror")
-
-            def join(self, timeout=None):
-                joined.append(timeout)
-                return super().join(timeout)
-
         with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
             adapter = _openai_adapter()
-            with patch("model_council.executor.os.pipe", tracking_pipe):
-                with patch("model_council.executor.threading.Thread", _FailingReaderThread):
-                    with patch("model_council.executor._run_openai_worker") as mocked:
-                        with self.assertRaises(InfrastructureError) as ctx:
-                            invoke_with_journal(adapter, make_request())
-                        mocked.assert_not_called()
-        self.assertIn("failed to spawn adapter process", str(ctx.exception))
-        self.assertIsNone(ctx.exception.__cause__)
-        self.assertIsNone(ctx.exception.__context__)
-        self.assertEqual(joined, [])
+            with patch("model_council.executor.os.pipe", pipe), patch(
+                "model_council.executor._run_openai_worker", side_effect=OSError("launch failed")
+            ):
+                with self.assertRaises(InfrastructureError):
+                    invoke_with_journal(adapter, make_request())
         self.assertEqual(len(created), 2)
         for fd in created:
             with self.assertRaises(OSError):
                 os.fstat(fd)
 
-    def test_reader_thread_starts_and_joins_on_normal_spawn(self):
-        started = []
-        joined = []
-
-        class _TrackingThread(threading.Thread):
-            def start(self):
-                started.append(True)
-                return super().start()
-
-            def join(self, timeout=None):
-                joined.append(timeout)
-                return super().join(timeout)
-
-        with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
-            adapter = _openai_adapter()
-            with patch("model_council.executor.threading.Thread", _TrackingThread):
-                with patch("model_council.executor._run_openai_worker") as mocked:
-                    mocked.return_value = _completed('{"ok": true}', returncode=0)
-                    with self.assertRaises(ProtocolError):
-                        invoke_with_journal(adapter, make_request())
-                    mocked.assert_called_once()
-        self.assertEqual(started, [True])
-        self.assertTrue(joined)
+    def test_normal_worker_needs_no_protocol_reader_thread(self):
+        import threading
+        from model_council.live_contract import NeutralProviderFailure
+        config = {"response": {}}
+        with TempRoot() as root:
+            executable, calls = _install_offline_openai_python(root, config)
+            adapter = _openai_adapter(python_executable=executable)
+            with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}), patch.object(
+                threading.Thread, "start", side_effect=AssertionError("competing reader")
+            ):
+                with self.assertRaises((ProtocolError, NeutralProviderFailure)):
+                    invoke_with_journal(adapter, make_request())
 
 
 if __name__ == "__main__":

@@ -160,7 +160,14 @@ class TestLifecycleTerminal(unittest.TestCase):
         from test_openai_adapter_skeleton import _isolated_environ
 
         class _FailingStream:
+            def __init__(self):
+                self.stream = open(os.devnull, "rb", buffering=0)
+
+            def fileno(self):
+                return self.stream.fileno()
+
             def close(self):
+                self.stream.close()
                 raise OSError("cleanup failed")
 
         class _UncertainWorker:
@@ -168,9 +175,6 @@ class TestLifecycleTerminal(unittest.TestCase):
                 self.stdin = _FailingStream()
                 self.stdout = _FailingStream()
                 self.stderr = _FailingStream()
-
-            def communicate(self, input, timeout=None):
-                raise RuntimeError("worker interrupted before exit")
 
             def kill(self):
                 raise OSError("kill unconfirmed")
@@ -207,7 +211,14 @@ class TestLifecycleTerminal(unittest.TestCase):
 
     def _uncertain_worker_popen(self, close_exc=None, *, saw_close=None):
         class _Stream:
+            def __init__(self):
+                self.stream = open(os.devnull, "rb", buffering=0)
+
+            def fileno(self):
+                return self.stream.fileno()
+
             def close(self):
+                self.stream.close()
                 if saw_close is not None:
                     saw_close.append(close_exc)
                 if close_exc is not None:
@@ -218,9 +229,6 @@ class TestLifecycleTerminal(unittest.TestCase):
                 self.stdin = _Stream()
                 self.stdout = _Stream()
                 self.stderr = _Stream()
-
-            def communicate(self, input, timeout=None):
-                raise RuntimeError("worker interrupted before exit")
 
             def kill(self):
                 raise OSError("kill unconfirmed")
@@ -263,8 +271,8 @@ class TestLifecycleTerminal(unittest.TestCase):
                 "model_council.executor.subprocess.Popen",
                 side_effect=self._uncertain_worker_popen(KeyboardInterrupt, saw_close=saw_close),
             ):
-                result = runner.execute(_spec("uncertain-ki-cleanup"), make_task())
-            self.assertEqual(result.status, "infrastructure_failure")
+                with self.assertRaises(KeyboardInterrupt):
+                    runner.execute(_spec("uncertain-ki-cleanup"), make_task())
             self._assert_reaping_uncertain(runs, "uncertain-ki-cleanup", saw=saw_close)
 
     def test_stream_cleanup_systemexit_does_not_attest_reaping(self):
@@ -277,8 +285,8 @@ class TestLifecycleTerminal(unittest.TestCase):
                 "model_council.executor.subprocess.Popen",
                 side_effect=self._uncertain_worker_popen(SystemExit, saw_close=saw_close),
             ):
-                result = runner.execute(_spec("uncertain-systemexit-cleanup"), make_task())
-            self.assertEqual(result.status, "infrastructure_failure")
+                with self.assertRaises(SystemExit):
+                    runner.execute(_spec("uncertain-systemexit-cleanup"), make_task())
             self._assert_reaping_uncertain(runs, "uncertain-systemexit-cleanup", saw=saw_close)
 
     def test_scratch_cleanup_oserror_does_not_attest_reaping(self):
@@ -398,12 +406,9 @@ class TestLifecycleTerminal(unittest.TestCase):
 
         class _LiveUnreaped:
             def __init__(self):
-                self.stdin = None
-                self.stdout = None
-                self.stderr = None
-
-            def communicate(self, input, timeout=None):
-                raise KeyboardInterrupt()
+                self.stdin = open(os.devnull, "rb", buffering=0)
+                self.stdout = open(os.devnull, "rb", buffering=0)
+                self.stderr = open(os.devnull, "rb", buffering=0)
 
             def kill(self):
                 raise OSError("kill unconfirmed")
@@ -428,78 +433,35 @@ class TestLifecycleTerminal(unittest.TestCase):
 
     def test_normal_return_closure_requires_explicit_reaping_state(self):
         from model_council.executor import _WorkerReaping
-        from test_openai_adapter_skeleton import _isolated_environ
-
-        class _QuietStream:
-            def close(self):
-                return None
-
-        class _ReturnedWorker:
-            def __init__(self):
-                self.returncode = 0
-                self.stdin = _QuietStream()
-                self.stdout = _QuietStream()
-                self.stderr = _QuietStream()
-
-            def communicate(self, input, timeout=None):
-                return ("{}", "")
-
+        marked = []
         def fake_mark_reaped(self):
+            marked.append(True)
             return None
-
-        saw_return = []
-        def worker_factory():
-            saw_return.append(True)
-            return _ReturnedWorker()
-
-        with TemporaryDirectory() as root:
-            runner, runs = make_runner(root, kind="openai_responses", identity=OPENAI_IDENTITY)
-            with _isolated_environ(OPENAI_API_KEY="offline-f5-not-a-real-key"), patch(
-                "model_council.executor.subprocess.Popen",
-                side_effect=self._worker_only_popen(worker_factory),
-            ), patch.object(_WorkerReaping, "mark_reaped", fake_mark_reaped):
-                result = runner.execute(_spec("return-without-reaped"), make_task())
+        with TemporaryDirectory() as root, patch.object(_WorkerReaping, "mark_reaped", fake_mark_reaped):
+            result, journal, calls, runs = run_fault_worker(root)
             self.assertEqual(result.status, "infrastructure_failure")
-            self._assert_reaping_uncertain(runs, "return-without-reaped", saw=saw_return)
+            self.assertEqual(len(calls), 1)
+            self._assert_reaping_uncertain(runs, "fault", saw=marked)
+            self.assertIsNotNone(journal.inspect()["outcome"])
+        unknown = _WorkerReaping()
+        unknown.status = "not-a-recognized-state"
+        self.assertFalse(unknown.may_attest())
 
     def test_unknown_reaping_state_does_not_attest_closure(self):
         from model_council.executor import _WorkerReaping
-        from test_openai_adapter_skeleton import _isolated_environ
-
-        class _QuietStream:
-            def close(self):
-                return None
-
-        class _ReturnedWorker:
-            def __init__(self):
-                self.returncode = 0
-                self.stdin = _QuietStream()
-                self.stdout = _QuietStream()
-                self.stderr = _QuietStream()
-
-            def communicate(self, input, timeout=None):
-                return ("{}", "")
-
+        marked = []
         def fake_mark_reaped(self):
+            marked.append(True)
             self.status = "not-a-recognized-state"
-
-        saw_return = []
-        def worker_factory():
-            saw_return.append(True)
-            return _ReturnedWorker()
-
-        with TemporaryDirectory() as root:
-            runner, runs = make_runner(root, kind="openai_responses", identity=OPENAI_IDENTITY)
-            with _isolated_environ(OPENAI_API_KEY="offline-f5-not-a-real-key"), patch(
-                "model_council.executor.subprocess.Popen",
-                side_effect=self._worker_only_popen(worker_factory),
-            ), patch.object(_WorkerReaping, "mark_reaped", fake_mark_reaped):
-                result = runner.execute(_spec("unknown-reaping-state"), make_task())
+        with TemporaryDirectory() as root, patch.object(_WorkerReaping, "mark_reaped", fake_mark_reaped):
+            result, journal, calls, runs = run_fault_worker(root)
             self.assertEqual(result.status, "infrastructure_failure")
-            unknown = _WorkerReaping()
-            unknown.status = "not-a-recognized-state"
-            self.assertFalse(unknown.may_attest())
-            self._assert_reaping_uncertain(runs, "unknown-reaping-state", saw=saw_return)
+            self.assertEqual(len(calls), 1)
+            self._assert_reaping_uncertain(runs, "fault", saw=marked)
+            self.assertIsNotNone(journal.inspect()["outcome"])
+        unknown = _WorkerReaping()
+        unknown.status = "not-a-recognized-state"
+        self.assertFalse(unknown.may_attest())
 
     def test_crash_after_durable_closure_reconstructs_from_disk(self):
         close = AttemptJournal.close
@@ -677,3 +639,82 @@ class TestLifecycleTerminal(unittest.TestCase):
             self.assertFalse(report["attempt_lifecycle_verified"])
             self.assertIsNone(report["attempt_lifecycle_schema"])
             self.assertNotIn("attempt_retry_safety", report)
+
+
+class TestActivatedClosureAuthority(unittest.TestCase):
+    def test_reaped_child_with_failed_selector_cleanup_cannot_close(self):
+        from model_council import executor as ex
+        real_collect = ex._collect_openai_worker
+        real_selector = ex.selectors.DefaultSelector
+        collected = []
+        def collect(process, **kwargs):
+            selector = real_selector()
+            close = selector.close
+            def fail_close():
+                close()
+                raise OSError('PRIVATE_CLEANUP_SENTINEL')
+            with patch.object(ex.selectors, 'DefaultSelector', return_value=selector), patch.object(selector, 'close', fail_close):
+                result = real_collect(process, **kwargs)
+            collected.append(result)
+            return result
+        with TemporaryDirectory() as root, patch.object(ex, '_collect_openai_worker', collect):
+            result, journal, calls, runs = run_fault_worker(root)
+            self.assertEqual(result.status, 'infrastructure_failure')
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(collected[0].reaped)
+            self.assertFalse(collected[0].cleanup_complete)
+            self.assertFalse(journal.inspect()['closed'])
+            self.assertEqual(journal.inspect()['outcome']['kind'], 'success')
+            self.assertFalse((runs / 'fault/seals/solver.json').exists())
+            with self.assertRaises(IntegrityViolation):
+                ArtifactStore.verify_terminal_run(runs, 'fault')
+
+    def test_held_protocol_writer_keeps_reaped_attempt_open(self):
+        import subprocess
+        from model_council import executor as ex
+        real_popen = subprocess.Popen
+        held = []
+        def launch(args, **kwargs):
+            if 'model_council.worker' in args:
+                held.append(os.dup(kwargs['pass_fds'][0]))
+            return real_popen(args, **kwargs)
+        try:
+            with TemporaryDirectory() as root, patch.object(ex.subprocess, 'Popen', launch):
+                result, journal, calls, runs = run_fault_worker(root)
+                self.assertEqual(result.status, 'infrastructure_failure')
+                self.assertEqual(len(calls), 1)
+                self.assertFalse(journal.inspect()['closed'])
+                self.assertIsNotNone(journal.inspect()['outcome'])
+                self.assertFalse((runs / 'fault/seals/solver.json').exists())
+                with self.assertRaises(IntegrityViolation):
+                    ArtifactStore.verify_terminal_run(runs, 'fault')
+        finally:
+            for fd in held:
+                os.close(fd)
+
+    def test_closure_fsync_failure_does_not_accept_collected_success(self):
+        real_close = AttemptJournal.close
+        real_fsync = os.fsync
+        failed = []
+        def close(journal, reason, **kwargs):
+            identity = journal.path.stat()
+            def fsync(fd):
+                info = os.fstat(fd)
+                if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino):
+                    failed.append(True)
+                    raise OSError('closure sync failed')
+                return real_fsync(fd)
+            with patch('model_council.attempt_lifecycle.os.fsync', fsync):
+                return real_close(journal, reason, **kwargs)
+        with TemporaryDirectory() as root, patch.object(AttemptJournal, 'close', close):
+            result, journal, calls, runs = run_fault_worker(root)
+            # Invocation recording rejects the failed lifecycle journal via the
+            # existing IntegrityViolation -> GovernanceViolation path.
+            self.assertEqual(result.status, 'failed_governance')
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(len(failed), 1)
+            self.assertFalse(journal.path.with_name('closed.json').exists())
+            self.assertEqual(journal.inspect()['outcome']['kind'], 'success')
+            self.assertFalse((runs / 'fault/seals/solver.json').exists())
+            with self.assertRaises(IntegrityViolation):
+                ArtifactStore.verify_terminal_run(runs, 'fault')

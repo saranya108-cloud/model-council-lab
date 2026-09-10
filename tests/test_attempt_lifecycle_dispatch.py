@@ -1,5 +1,5 @@
 """Real journal fixtures and offline dispatch boundary tests. No provider I/O."""
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import os
@@ -120,7 +120,22 @@ import time
 import model_council.attempt_lifecycle as lifecycle
 _original_append = lifecycle.JournalWriter.append
 _fault = _CONFIG.get("lifecycle_fault", "")
+_early_out = os.dup(1) if _fault.startswith("diagnostic_") else None
+_early_err = os.dup(2) if _fault.startswith("diagnostic_") else None
+def _emit(fd, size):
+    body = (b"PRIVATE_DIAGNOSTIC_SENTINEL" * (size // len(b"PRIVATE_DIAGNOSTIC_SENTINEL") + 1))[:size]
+    while body:
+        body = body[os.write(fd, body):]
 def _fault_append(self, event, data=None):
+    if _fault.startswith("diagnostic_") and event == "sdk_call_boundary":
+        if _fault == "diagnostic_stdout":
+            _emit(_early_out, 65537)
+        elif _fault == "diagnostic_stderr":
+            _emit(_early_err, 65537)
+        else:
+            _emit(_early_out, 49152)
+            _emit(_early_err, 49153)
+        os._exit(76)
     if _fault == "before_sdk" and event == "sdk_call_boundary":
         os._exit(73)
     if _fault == "torn_return" and event == "sdk_return_observed":
@@ -128,15 +143,27 @@ def _fault_append(self, event, data=None):
         os.fsync(self.fd)
         os._exit(74)
     _original_append(self, event, data)
+    if event == "outcome_observed" and _fault in ("protocol_overflow", "protocol_malformed"):
+        import model_council.worker as worker
+        fd = worker._protocol_out.fileno()
+        if _fault == "protocol_overflow":
+            _emit(fd, 8000001)
+        else:
+            os.write(fd, b'{malformed')
+        os._exit(0)
     if _fault == "after_" + event:
         os._exit(75)
     if _fault == "timeout_" + event:
+        if _CONFIG.get("lifecycle_ready_path"):
+            # Signal only after the lifecycle append and its fsync completed.
+            with open(_CONFIG["lifecycle_ready_path"], "xb"):
+                pass
         time.sleep(60)
 lifecycle.JournalWriter.append = _fault_append
 '''
 
 
-def run_fault_worker(root, mode="", *, timeout=3.0):
+def run_fault_worker(root, mode="", *, timeout=3.0, timeout_at_marker=False):
     """Real executor/worker/adapter with an offline SDK and exact crash points."""
     from helpers import make_task
     from model_council import ExperimentRunner, SubprocessAdapter, ExternalEvaluator, EvaluationConfig
@@ -154,6 +181,9 @@ def run_fault_worker(root, mode="", *, timeout=3.0):
     elif mode == "malformed":
         config["response"] = {}
     config["lifecycle_fault"] = mode
+    ready = Path(root) / "lifecycle-ready"
+    if timeout_at_marker:
+        config["lifecycle_ready_path"] = str(ready)
     executable, calls = _install_offline_openai_python(root, config)
     path = Path(executable)
     source = path.read_text()
@@ -161,8 +191,29 @@ def run_fault_worker(root, mode="", *, timeout=3.0):
     runs = Path(root) / "runs"
     adapter = SubprocessAdapter(OPENAI_IDENTITY, kind="openai_responses", python_executable=executable)
     runner = ExperimentRunner(adapter, ExternalEvaluator(EvaluationConfig()), runs_root=runs)
-    with _isolated_environ(OPENAI_API_KEY="offline-f5-not-a-real-key"):
+    with ExitStack() as stack:
+        stack.enter_context(_isolated_environ(OPENAI_API_KEY="offline-f5-not-a-real-key"))
+        if timeout_at_marker:
+            import time
+            from model_council import executor
+            real_collect = executor._collect_openai_worker
+            def collect(process, **kwargs):
+                started = time.monotonic()
+                deadline = kwargs["deadline"]
+                expired_at = None
+                def clock():
+                    nonlocal expired_at
+                    now = time.monotonic()
+                    # This prefix test controls when the communication clock
+                    # expires; a real-time watchdog still bounds fixture failure.
+                    if expired_at is None and (ready.exists() or now - started >= 10):
+                        expired_at = now
+                    return deadline - 1 if expired_at is None else deadline + now - expired_at
+                return real_collect(process, monotonic=clock, **kwargs)
+            stack.enter_context(patch.object(executor, "_collect_openai_worker", collect))
         result = runner.execute(_spec("fault", stage_timeout_seconds=timeout), make_task())
+    if timeout_at_marker and not ready.exists():
+        raise AssertionError("offline worker did not reach the requested durable marker")
     journal = AttemptJournal(runs / "fault/attempt-lifecycle/solver/attempt-0001/journal.jsonl")
     return result, journal, _read_offline_calls(calls), runs
 
@@ -195,7 +246,7 @@ class TestDurableDispatchFaults(unittest.TestCase):
         from model_council import ArtifactStore
         for marker, events, calls in (("sdk_call_boundary", 3, 0), ("sdk_return_observed", 4, 1), ("outcome_observed", 5, 1)):
             with self.subTest(marker=marker), TemporaryDirectory() as root:
-                result, journal, observed, runs = run_fault_worker(root, "timeout_" + marker, timeout=1.0)
+                result, journal, observed, runs = run_fault_worker(root, "timeout_" + marker, timeout=1.0, timeout_at_marker=True)
                 self.assertEqual(result.status, "retry_exhausted")
                 self.assertEqual(len(observed), calls)
                 snapshot = journal.inspect(require_closed=True)
@@ -237,3 +288,48 @@ class TestDurableDispatchFaults(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             with self.assertRaises(IntegrityViolation):
                 ArtifactStore.verify_terminal_run(runs, "fault")
+
+
+class TestActivatedCommunicationEvidence(unittest.TestCase):
+    def test_durable_outcome_survives_failed_protocol_delivery(self):
+        import json
+        from model_council import ArtifactStore
+        for mode, reason in (("protocol_overflow", "infrastructure"), ("protocol_malformed", "returned")):
+            with self.subTest(mode=mode), TemporaryDirectory() as root:
+                result, journal, calls, runs = run_fault_worker(root, mode)
+                self.assertEqual(result.status, "infrastructure_failure")
+                self.assertEqual(len(calls), 1)
+                snapshot = journal.inspect(require_closed=True)
+                self.assertEqual(snapshot['closure']['reason'], reason)
+                self.assertEqual(snapshot['outcome']['kind'], 'success')
+                record = json.loads((runs / 'fault/invocations/solver/attempt-0001/invocation.json').read_text())
+                self.assertEqual(record['lifecycle_observed_outcome'], snapshot['outcome'])
+                self.assertIsNone(record['adapter_evidence']['provider_call_outcome'])
+                self.assertEqual(record['retry_decision'], 'stop')
+                self.assertEqual(record['promoted_artifact_refs'], [])
+                self.assertFalse((runs / 'fault/seals/solver.json').exists())
+                self.assertFalse((runs / 'fault/attempt-lifecycle/verifier').exists())
+                report = ArtifactStore.verify_terminal_run(runs, 'fault')
+                self.assertEqual(report['attempt_retry_safety'], {'solver': 'unsafe_response_observed'})
+
+    def test_diagnostic_overflow_before_sdk_has_no_observations_or_leaks(self):
+        import json
+        from model_council import ArtifactStore
+        for mode in ('stdout', 'stderr', 'aggregate'):
+            with self.subTest(mode=mode), TemporaryDirectory() as root:
+                result, journal, calls, runs = run_fault_worker(root, 'diagnostic_' + mode)
+                self.assertEqual(result.status, 'infrastructure_failure')
+                self.assertEqual(calls, [])
+                snapshot = journal.inspect(require_closed=True)
+                self.assertEqual([e['event'] for e in snapshot['events']], ['attempt_prepared', 'dispatch_permitted'])
+                self.assertEqual(snapshot['closure']['reason'], 'infrastructure')
+                self.assertFalse((runs / 'fault/seals/solver.json').exists())
+                self.assertFalse((runs / 'fault/attempt-lifecycle/verifier').exists())
+                record = json.loads((runs / 'fault/invocations/solver/attempt-0001/invocation.json').read_text())
+                self.assertEqual(record['retry_decision'], 'stop')
+                self.assertIsNone(record['lifecycle_observed_outcome'])
+                for path in (runs / 'fault').rglob('*'):
+                    if path.is_file():
+                        # Boolean assertion deliberately cannot print the body.
+                        self.assertFalse(b'PRIVATE_DIAGNOSTIC_SENTINEL' in path.read_bytes(), 'diagnostic content persisted')
+                self.assertTrue(ArtifactStore.verify_terminal_run(runs, 'fault')['attempt_lifecycle_verified'])

@@ -28,7 +28,6 @@ import selectors
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from pathlib import Path
 
@@ -90,51 +89,86 @@ class _WorkerReaping:
         return self.status in self._ATTESTABLE
 
 
-def _run_openai_worker(args, *, input, capture_output, text, timeout, **kwargs):
-    """Like run(), but interruption must either reap the child or remain open.
+def _run_openai_worker(args, *, input, deadline, protocol_fds, reaping, **kwargs):
+    """Launch once, then transfer all communication ownership to the collector.
 
-    Popen.__exit__ deliberately bounds its KeyboardInterrupt wait. F5 needs an
-    explicit confirmed wait before writing closure, including on that path.
+    protocol_fds holds only caller-owned descriptors. Popping transfers them;
+    this also leaves pre-launch failures safe for the caller's finally block.
+    No second wait/close/kill path runs after collector ownership transfer.
     """
-    reaping = kwargs.pop("reaping", None)
-    if reaping is None:
-        reaping = _WorkerReaping()
+    if type(input) is not bytes or not math.isfinite(deadline):
+        raise ValueError("worker requires bytes and a finite absolute deadline")
     process = None
-    reaping.mark_uncertain()
+    protocol_r = protocol_fds.pop("read")
+    protocol_w = protocol_fds.pop("write")
+    transferred = False
     try:
+        reaping.mark_uncertain()  # Before Popen, including partial launch failure.
         try:
             process = subprocess.Popen(
                 args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=text, **kwargs,
+                stderr=subprocess.PIPE, text=False, bufsize=0, **kwargs,
             )
         except (KeyboardInterrupt, SystemExit):
             raise _WorkerExitUncertain("worker launch interrupted; exit unconfirmed") from None
-        try:
-            stdout, stderr = process.communicate(input, timeout=timeout)
+        write_fd, protocol_w = protocol_w, None
+        os.close(write_fd)
+        # Arguments are validated above; from entry the collector owns every
+        # process stream and the protocol reader, even if collection fails.
+        transferred = True
+        result = _collect_openai_worker(
+            process, input=input, protocol_fd=protocol_r, deadline=deadline,
+        )
+        if result.reaped is True and result.cleanup_complete is True:
             reaping.mark_reaped()
-            return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
-        except BaseException:
-            try:
-                process.kill()
-                process.wait(timeout=5.0)
-            except BaseException:
-                reaping.mark_uncertain()
-                raise _WorkerExitUncertain("worker termination unconfirmed") from None
-            reaping.mark_reaped()
-            raise
+        if result.interruption:
+            # Reconstruct only the signal, never a caught exception or its data.
+            if result.interruption == "keyboard_interrupt":
+                raise KeyboardInterrupt()
+            if result.interruption == "system_exit":
+                raise SystemExit()
+            raise BaseException("worker communication interrupted")
+        if not reaping.may_attest():
+            reason = result.abort_reason or "none"
+            raise _WorkerExitUncertain(
+                f"worker cleanup_uncertain (communication_reason={reason})"
+            )
+        if result.failure == "deadline":
+            raise subprocess.TimeoutExpired(args, timeout=0)
+        if result.failure == "protocol_limit":
+            raise ProtocolError("worker communication failed: protocol_limit")
+        if result.failure == "worker_exit":
+            raise _openai_nonzero_worker_failure(result.returncode, result.stderr_observed)
+        if result.failure is not None:
+            raise InfrastructureError(f"worker communication failed: {result.failure}")
+        return result
     finally:
-        if process is not None:
-            for stream in (process.stdin, process.stdout, process.stderr):
-                if stream is not None:
-                    try:
-                        stream.close()
-                    except BaseException:
-                        pass
+        if not transferred:
+            # Only setup/launch failures reach this cleanup. They cannot attest
+            # collection completeness, even when the direct child is reaped.
+            cleanup_deadline = time.monotonic() + _WORKER_CLEANUP_TIMEOUT_SECONDS
+            if process is not None:
+                try:
+                    process.kill()
+                except BaseException:
+                    pass
+                try:
+                    process.wait(timeout=max(0.0, cleanup_deadline - time.monotonic()))
+                except BaseException:
+                    pass
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except BaseException:
+                            pass
+            _close_fd(protocol_r)
+        _close_fd(protocol_w)
         kwargs.clear()
         process = None
 
 
-# F6a Checkpoint 1 only: these policies and the collector below are INACTIVE.
+# Accepted F6a communication policies; shared by production and contract tests.
 # The protocol ceiling above is inherited; diagnostic ceilings are new,
 # explicitly approved defensive policies, not application-response limits.
 _MAX_WORKER_STDOUT_BYTES = 64 * 1024
@@ -177,7 +211,7 @@ class _WorkerCollection:
 
 def _collect_openai_worker(process, *, input: bytes, protocol_fd: int,
                            deadline: float, monotonic=time.monotonic) -> _WorkerCollection:
-    """Inactive POSIX collector for an already-spawned, binary/unbuffered child.
+    """POSIX collector for an already-spawned, binary/unbuffered child.
 
     The caller establishes an absolute monotonic deadline BEFORE setup/spawn,
     closes its protocol WRITE descriptor after spawn, and passes exclusive
@@ -185,10 +219,10 @@ def _collect_openai_worker(process, *, input: bytes, protocol_fd: int,
     precedes ownership transfer. Never pass a descriptor used by another reader.
 
     This function does not spawn, dispatch, parse protocol, write evidence, or
-    alter _WorkerReaping. Checkpoint 2 must separately integrate these facts:
+    alter _WorkerReaping. The launch wrapper separately integrates these facts:
     direct reaping alone is insufficient when cleanup_complete is false.
     Interruptions are reported explicitly after cleanup, not silently accepted;
-    a future caller must preserve interrupt semantics when handling the result.
+    the caller must preserve interrupt semantics when handling the result.
     OS calls and the injected monotonic clock must behave normally; there is no
     hard global bound against an unresponsive kernel or filesystem.
     """
@@ -441,26 +475,6 @@ def _close_fd(fd: int | None) -> None:
         pass
 
 
-def _read_protocol_fd(fd: int | None, *, limit: int) -> bytes | None:
-    if fd is None:
-        return None
-    chunks = []
-    total = 0
-    try:
-        while True:
-            chunk = os.read(fd, 65536)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > limit:
-                chunks = None
-                return None
-            chunks.append(chunk)
-    except OSError:
-        return None
-    return b"".join(chunks)
-
-
 def _openai_env_assignment(item: object) -> bool:
     if isinstance(item, str):
         encoded = item.encode("utf-8", "surrogateescape")
@@ -506,22 +520,11 @@ def _scrub_openai_subprocess_exception(exc: BaseException) -> None:
     exc.__traceback__ = None
 
 
-def _openai_nonzero_worker_failure(completed: subprocess.CompletedProcess) -> InfrastructureError:
-    """Build a sanitized crash error, then release secret-bearing subprocess buffers."""
-    exit_status = completed.returncode
-    stderr_text = completed.stderr
-    stderr_bytes = (
-        0
-        if stderr_text is None
-        else len(str(stderr_text).encode("utf-8", "replace"))
-    )
-    completed.stdout = None
-    completed.stderr = None
-    stderr_text = None
-    completed = None
+def _openai_nonzero_worker_failure(exit_status: int, stderr_observed: int) -> InfrastructureError:
+    """Report numeric observations only; no diagnostic body is retained."""
     return InfrastructureError(
         f"{WORKER_CRASH_SUMMARY} (exit {exit_status}; "
-        f"stderr_bytes={stderr_bytes}; suppressed=True)"
+        f"stderr_bytes_observed={stderr_observed}; suppressed=True)"
     )
 
 
@@ -669,6 +672,9 @@ class SubprocessAdapter:
         return self._parse_live_payload(payload)
 
     def _spawn_worker(self, request: dict, attempt_timeout: float) -> dict:
+        communication_deadline = (
+            time.monotonic() + attempt_timeout if self.kind == "openai_responses" else None
+        )
         if self.kind == "openai_responses" and self.attempt_journal is None:
             raise ProtocolError("OpenAI worker requires attempt lifecycle authorization")
         if attempt_timeout <= 0:
@@ -690,9 +696,7 @@ class SubprocessAdapter:
         completed = None
         protocol_r = None
         protocol_w = None
-        protocol_holder = []
-        protocol_reader = None
-        protocol_reader_started = False
+        protocol_fds = {}
         worker_reaping = _WorkerReaping()
         try:
             if self.kind == "openai_responses":
@@ -710,6 +714,7 @@ class SubprocessAdapter:
                 finally:
                     raw_credential = None
                 protocol_r, protocol_w = os.pipe()
+                protocol_fds.update(read=protocol_r, write=protocol_w)
                 os.set_inheritable(protocol_r, False)
                 os.set_inheritable(protocol_w, True)
                 env[_WORKER_PROTOCOL_FD_ENV] = str(protocol_w)
@@ -720,33 +725,24 @@ class SubprocessAdapter:
                 env[LIFECYCLE_FD_ENV] = str(lifecycle_fd)
                 spawn_kwargs["pass_fds"] = (protocol_w, lifecycle_fd)
 
-                def _drain_protocol():
-                    protocol_holder.append(
-                        _read_protocol_fd(protocol_r, limit=_MAX_WORKER_PROTOCOL_BYTES)
-                    )
-
-                protocol_reader = threading.Thread(
-                    target=_drain_protocol, daemon=True
-                )
-                protocol_reader.start()
-                protocol_reader_started = True
             with tempfile.TemporaryDirectory(prefix="mcl-scratch-") as scratch:
                 self.last_scratch_dir = scratch
                 started = time.monotonic()
                 try:
+                    command = [self.python_executable, "-B", "-m", "model_council.worker"]
                     if self.kind == "openai_responses":
-                        spawn_kwargs["reaping"] = worker_reaping
-                    launch = _run_openai_worker if self.kind == "openai_responses" else subprocess.run
-                    completed = launch(
-                        [self.python_executable, "-B", "-m", "model_council.worker"],
-                        input=json.dumps(request),
-                        capture_output=True,
-                        text=True,
-                        timeout=attempt_timeout,
-                        cwd=scratch,
-                        env=dict(env),
-                        **spawn_kwargs,
-                    )
+                        completed = _run_openai_worker(
+                            command, input=json.dumps(request).encode("utf-8"),
+                            deadline=communication_deadline, protocol_fds=protocol_fds,
+                            reaping=worker_reaping, cwd=scratch, env=dict(env),
+                            **spawn_kwargs,
+                        )
+                    else:
+                        completed = subprocess.run(
+                            command, input=json.dumps(request), capture_output=True,
+                            text=True, timeout=attempt_timeout, cwd=scratch,
+                            env=dict(env), **spawn_kwargs,
+                        )
                     if self.kind == "openai_responses":
                         if not worker_reaping.may_attest():
                             raise _WorkerExitUncertain("worker termination unconfirmed")
@@ -793,39 +789,22 @@ class SubprocessAdapter:
             env.pop(_OPENAI_CHILD_ENV_KEY, None)
             env.pop(_WORKER_PROTOCOL_FD_ENV, None)
             env.pop("MCL_ATTEMPT_LIFECYCLE_FD", None)
-            _close_fd(protocol_w)
-            protocol_w = None
-            if protocol_reader_started:
-                protocol_reader.join(timeout=1.0)
-                if protocol_reader.is_alive():
-                    _close_fd(protocol_r)
-                    protocol_r = None
-                    protocol_reader.join(timeout=1.0)
-            else:
-                _close_fd(protocol_r)
-                protocol_r = None
+            for fd in protocol_fds.values():
+                _close_fd(fd)
+            protocol_fds.clear()
+            protocol_r = protocol_w = None
             if openai_spawn_failure is not None:
                 env.clear()
                 env = None
 
         if openai_timeout:
-            _close_fd(protocol_r)
-            protocol_r = None
             raise StageTimeout(
                 f"adapter process exceeded {attempt_timeout}s and was terminated"
             )
         if openai_spawn_failure is not None:
-            _close_fd(protocol_r)
-            protocol_r = None
             raise InfrastructureError(openai_spawn_failure)
 
-        if completed.returncode != 0:
-            _close_fd(protocol_r)
-            protocol_r = None
-            if self.kind == "openai_responses":
-                error = _openai_nonzero_worker_failure(completed)
-                completed = None
-                raise error
+        if self.kind != "openai_responses" and completed.returncode != 0:
             meta = suppressed_stream_meta(completed.stderr)
             raise InfrastructureError(
                 f"{WORKER_CRASH_SUMMARY} (exit {completed.returncode}; "
@@ -834,12 +813,7 @@ class SubprocessAdapter:
         openai_invalid_json = False
         stdout_text = None
         if self.kind == "openai_responses":
-            protocol_bytes = protocol_holder[0] if protocol_holder else None
-            protocol_holder = None
-            _close_fd(protocol_r)
-            protocol_r = None
-            completed.stdout = None
-            completed.stderr = None
+            protocol_bytes = completed.protocol
             completed = None
             if protocol_bytes is None:
                 openai_invalid_json = True

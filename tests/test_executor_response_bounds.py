@@ -1,4 +1,4 @@
-"""Offline F6a collector contract; production activation is deliberately absent."""
+"""Offline F6a collector contract; including the active production boundary."""
 import ast
 from contextlib import contextmanager
 import json
@@ -150,7 +150,7 @@ class CollectorContract(unittest.TestCase):
             self.assertFalse(any(isinstance(v, (bytes, bytearray)) and sentinel in v
                                  for v in vars(result).values()))
 
-    def test_new_collector_is_inactive_and_has_no_communicate(self):
+    def test_production_collector_is_active_and_has_no_communicate(self):
         tree = ast.parse(Path(ex.__file__).read_text())
         collector = next((n for n in tree.body if isinstance(n, ast.FunctionDef)
                           and n.name == '_collect_openai_worker'), None)
@@ -159,7 +159,7 @@ class CollectorContract(unittest.TestCase):
                              for n in ast.walk(collector)))
         calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
                  and isinstance(n.func, ast.Name) and n.func.id == '_collect_openai_worker']
-        self.assertEqual(calls, [])
+        self.assertEqual(len(calls), 1)
 
 
 
@@ -587,6 +587,199 @@ class DeterministicContract(unittest.TestCase):
                 self.assertEqual(result.abort_reason, reason)
                 self.assertTrue(result.cleanup_complete)
                 self.assertIsNone(result.protocol)
+
+
+
+class ActiveCollectorContract(unittest.TestCase):
+    def test_real_worker_success_uses_exclusive_collector(self):
+        from tempfile import TemporaryDirectory
+        from test_attempt_lifecycle_dispatch import run_fault_worker
+        observed = []
+        real_collect = ex._collect_openai_worker
+
+        def collect(process, **kwargs):
+            self.assertIs(type(kwargs['input']), bytes)
+            self.assertFalse(isinstance(process.stdin, __import__('io').TextIOBase))
+            with patch.object(process, 'communicate', side_effect=AssertionError('competing capture')):
+                result = real_collect(process, **kwargs)
+            observed.append(result)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                self.assertTrue(stream.closed)
+            with self.assertRaises(OSError):
+                os.fstat(kwargs['protocol_fd'])
+            return result
+
+        with TemporaryDirectory() as root, patch.object(ex, '_collect_openai_worker', collect):
+            result, journal, calls, runs = run_fault_worker(root)
+            self.assertEqual(result.status, 'succeeded')
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(journal.inspect(require_closed=True)['closure']['reason'], 'returned')
+        self.assertEqual(len(observed), 1)
+        self.assertIsNone(observed[0].failure)
+        self.assertTrue(observed[0].cleanup_complete)
+
+    def test_active_output_limits_fail_without_parent_observations(self):
+        from test_attempt_lifecycle_dispatch import synthetic_journal
+        from test_openai_adapter_skeleton import _openai_adapter, _isolated_environ
+        from test_live_contract import make_request
+        from model_council.types import InfrastructureError, ProtocolError
+        real_popen = subprocess.Popen
+        cases = (("protocol_limit", "emit(p,b'x'*8000001)", ProtocolError),
+                 ("stdout_limit", "emit(1,b'x'*65537)", InfrastructureError),
+                 ("stderr_limit", "emit(2,b'x'*65537)", InfrastructureError),
+                 ("diagnostic_limit", "emit(1,b'x'*49152);emit(2,b'x'*49153)", InfrastructureError))
+        for reason, body, error in cases:
+            with self.subTest(reason=reason):
+                def launch(args, **kwargs):
+                    code = 'import os,sys\np=int(os.environ["MCL_WORKER_PROTOCOL_FD"])\n' + WRITE + body
+                    return real_popen([sys.executable, '-B', '-c', code], **kwargs)
+                adapter = _openai_adapter()
+                request = make_request()
+                with synthetic_journal(request, adapter) as journal, _isolated_environ(OPENAI_API_KEY='offline-only'), patch.object(ex.subprocess, 'Popen', launch):
+                    with self.assertRaises(error) as caught:
+                        adapter.invoke_live(request)
+                    self.assertIn(reason, str(caught.exception))
+                    snap = journal.inspect(require_closed=True)
+                    self.assertEqual([e['event'] for e in snap['events']], ['attempt_prepared', 'dispatch_permitted'])
+                    self.assertEqual(snap['closure']['reason'], 'infrastructure')
+                    self.assertIsNone(snap['outcome'])
+
+    def test_active_output_before_large_stdin_cannot_deadlock(self):
+        from test_attempt_lifecycle_dispatch import synthetic_journal
+        from test_openai_adapter_skeleton import _openai_adapter, _isolated_environ
+        from test_live_contract import make_request
+        real_popen = subprocess.Popen
+        code = ('import os,sys,json\np=int(os.environ["MCL_WORKER_PROTOCOL_FD"])\n' + WRITE
+                + "emit(1,b'x'*65536)\nbody=sys.stdin.buffer.read()\n"
+                + "assert len(body)>131072\nemit(p,json.dumps({'ok':False,'error_class':'ProtocolError','message':'offline_done'}).encode())")
+        def launch(args, **kwargs):
+            return real_popen([sys.executable, '-B', '-c', code], **kwargs)
+        request = make_request(stage_inputs={'task': 'x'*131072}, attempt_timeout_seconds=3)
+        adapter = _openai_adapter()
+        with synthetic_journal(request, adapter) as journal, _isolated_environ(OPENAI_API_KEY='offline-only'), patch.object(ex.subprocess, 'Popen', launch):
+            with self.assertRaisesRegex(ex.ProtocolError, 'offline_done'):
+                adapter.invoke_live(request)
+            self.assertEqual(journal.inspect(require_closed=True)['closure']['reason'], 'returned')
+
+    def test_setup_consumes_original_communication_grant(self):
+        from test_attempt_lifecycle_dispatch import synthetic_journal
+        from test_openai_adapter_skeleton import _openai_adapter, _isolated_environ
+        from test_live_contract import make_request
+        from model_council import openai_adapter
+        real_validate = openai_adapter.validate_openai_runtime_credential
+        real_popen = subprocess.Popen
+        real_collect = ex._collect_openai_worker
+        observed = []
+        def validate(value):
+            time.sleep(0.08)
+            return real_validate(value)
+        def launch(args, **kwargs):
+            return real_popen([sys.executable, '-B', '-c', 'import time;time.sleep(60)'], **kwargs)
+        def collect(process, **kwargs):
+            observed.append(time.monotonic() >= kwargs['deadline'])
+            return real_collect(process, **kwargs)
+        request = make_request(attempt_timeout_seconds=0.02)
+        adapter = _openai_adapter()
+        with synthetic_journal(request, adapter) as journal, _isolated_environ(OPENAI_API_KEY='offline-only'), patch.object(openai_adapter, 'validate_openai_runtime_credential', validate), patch.object(ex.subprocess, 'Popen', launch), patch.object(ex, '_collect_openai_worker', collect):
+            with self.assertRaises(ex.StageTimeout):
+                adapter.invoke_live(request)
+            self.assertEqual(journal.inspect(require_closed=True)['closure']['reason'], 'timeout')
+        self.assertEqual(observed, [True])
+
+
+class ActiveLaunchMapping(unittest.TestCase):
+    """Run the production launch wrapper and real collector over controlled I/O."""
+    def launch(self, sim, *, deadline=101.0, reaping=None):
+        real_collect = ex._collect_openai_worker
+        def collect(process, **kwargs):
+            return real_collect(process, monotonic=sim.clock, **kwargs)
+        state = reaping if reaping is not None else ex._WorkerReaping()
+        owned = {'read': 13, 'write': 14}
+        try:
+            with sim.installed(), patch.object(ex.subprocess, 'Popen', return_value=sim), patch.object(ex, '_collect_openai_worker', collect):
+                return ex._run_openai_worker(['offline'], input=b'{}', deadline=deadline,
+                                             protocol_fds=owned, reaping=state)
+        finally:
+            self.assertEqual(owned, {})
+            self.assertEqual(sorted(sim.closes), [10, 11, 12, 13, 14])
+            self.assertTrue(sim.selector_closed)
+
+    def test_bound_and_deadline_mapping_preserves_closure_eligibility(self):
+        cases = (
+            ('protocol_limit', dict(protocol=b'x'*8000001), ex.ProtocolError, 104),
+            ('stdout_limit', dict(output=b'x'*65537), ex.InfrastructureError, 101),
+            ('stderr_limit', dict(error=b'x'*65537), ex.InfrastructureError, 101),
+            ('diagnostic_limit', dict(output=b'x'*49153, error=b'x'*49152), ex.InfrastructureError, 101),
+            ('deadline', {}, subprocess.TimeoutExpired, 100),
+        )
+        for reason, streams, error, deadline in cases:
+            with self.subTest(reason=reason):
+                sim = Simulation(exit_at=100, **streams)
+                state = ex._WorkerReaping()
+                with self.assertRaises(error) as caught:
+                    self.launch(sim, deadline=deadline, reaping=state)
+                self.assertTrue(state.may_attest())
+                if reason != 'deadline':
+                    self.assertIn(reason, str(caught.exception))
+
+    def test_missing_eof_and_io_failure_cannot_attest_even_after_wait(self):
+        for mode in ('held', 'close', 'io'):
+            with self.subTest(mode=mode):
+                sim = Simulation(exit_at=100, held=mode == 'held', close_error=11 if mode == 'close' else None)
+                if mode == 'io':
+                    sim.read = lambda fd, size: (_ for _ in ()).throw(OSError('PRIVATE_IO_SENTINEL'))
+                state = ex._WorkerReaping()
+                with self.assertRaises(ex._WorkerExitUncertain) as caught:
+                    self.launch(sim, reaping=state)
+                self.assertFalse(state.may_attest())
+                self.assertFalse('PRIVATE_' in str(caught.exception), 'private error data escaped')
+                if mode == 'io':
+                    self.assertIn('io_error', str(caught.exception))
+
+    def test_bound_remains_distinct_when_cleanup_is_uncertain(self):
+        sim = Simulation(protocol=b'x'*8000001, held=True, exit_at=100)
+        with self.assertRaises(ex._WorkerExitUncertain) as caught:
+            self.launch(sim, deadline=104)
+        self.assertIn('protocol_limit', str(caught.exception))
+        self.assertNotIn('deadline', str(caught.exception))
+
+    def test_cleanup_does_not_reclassify_timely_communication(self):
+        sim = Simulation(exit_at=100)
+        close = sim.close
+        def slow_close():
+            close()
+            sim.clock.now += 2
+        sim.close = slow_close
+        result = self.launch(sim)
+        self.assertEqual(result.protocol, b'{}')
+        self.assertGreater(sim.clock(), 101)
+
+    def test_cleanup_crossing_allowance_does_not_become_timeout(self):
+        sim = Simulation(exit_at=100)
+        close = sim.close
+        def late_close():
+            close()
+            sim.clock.now += 6
+        sim.close = late_close
+        with self.assertRaises(ex._WorkerExitUncertain) as caught:
+            self.launch(sim)
+        self.assertIn('communication_reason=none', str(caught.exception))
+
+    def test_interrupt_signal_propagates_without_false_reaping(self):
+        for signal in (KeyboardInterrupt, SystemExit):
+            with self.subTest(signal=signal.__name__):
+                sim = Simulation(exit_at=100)
+                close = sim.close
+                def interrupted_close():
+                    close()
+                    raise signal('PRIVATE_INTERRUPT_SENTINEL')
+                sim.close = interrupted_close
+                state = ex._WorkerReaping()
+                with self.assertRaises(signal) as caught:
+                    self.launch(sim, reaping=state)
+                self.assertFalse(state.may_attest())
+                self.assertTrue(str(caught.exception) == '', 'interruption retained private data')
+
 
 if __name__ == '__main__':
     unittest.main()
