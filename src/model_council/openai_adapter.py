@@ -41,6 +41,10 @@ from .live_contract import (
     validate_closed_schema,
 )
 from .security import canonical_json, digest_json, normalize_provider_treatment_config
+from .openai_response_guard import (
+    _OpenAIResponseBoundaryError,
+    _build_bounded_openai_http_client,
+)
 
 HOST_OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
 CHILD_OPENAI_API_KEY_ENV = "MCL_OPENAI_API_KEY"
@@ -995,12 +999,128 @@ def translate_openai_responses_result(request: Any, provider_response: Any):
         return _openai_error_outcome(request, owned, _malformed_protocol())
 
 
+class _OwnedOpenAIClient:
+    """Single-use private ownership transfer for a production SDK client."""
+
+    __slots__ = ("_client", "_consumed")
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+        self._consumed = False
+
+    def __repr__(self) -> str:
+        return "_OwnedOpenAIClient(REDACTED)"
+
+    def _take(self) -> Any:
+        if self._consumed:
+            raise InfrastructureError("openai client ownership is invalid")
+        client = self._client
+        self._client = None
+        self._consumed = True
+        if client is None:
+            raise InfrastructureError("openai client ownership is invalid")
+        return client
+
+
+def _close_openai_client_once(client: Any) -> str:
+    """Close one detached owned client and retain only a fixed status."""
+    target = client
+    client = None
+    status = "success"
+    try:
+        target.close()
+    except KeyboardInterrupt:
+        status = "keyboard_interrupt"
+    except SystemExit:
+        status = "system_exit"
+    except BaseException:
+        status = "failure"
+    finally:
+        target = None
+    return status
+
+
+def _raise_fresh_control_or_initialization(status: str) -> None:
+    if status == "keyboard_interrupt":
+        raise KeyboardInterrupt() from None
+    if status == "system_exit":
+        raise SystemExit(1) from None
+    raise InfrastructureError(OPENAI_CLIENT_INIT_FAILURE) from None
+
+
 def _default_openai_client_factory(*, api_key: str, max_retries: int) -> Any:
     if type(max_retries) is not int or max_retries != 0:
         raise InfrastructureError(OPENAI_CLIENT_INIT_FAILURE)
-    from openai import OpenAI
 
-    return OpenAI(api_key=api_key, max_retries=0)
+    http_client = None
+    sdk_client = None
+    carrier = None
+    status = None
+    openai_constructor = None
+    try:
+        try:
+            from openai import OpenAI as openai_constructor
+        except KeyboardInterrupt:
+            status = "keyboard_interrupt"
+        except SystemExit:
+            status = "system_exit"
+        except BaseException:
+            status = "failure"
+
+        if status is None:
+            try:
+                http_client = _build_bounded_openai_http_client()
+            except KeyboardInterrupt:
+                status = "keyboard_interrupt"
+            except SystemExit:
+                status = "system_exit"
+            except BaseException:
+                status = "failure"
+
+        if status is None:
+            try:
+                sdk_client = openai_constructor(
+                    api_key=api_key,
+                    max_retries=0,
+                    http_client=http_client,
+                )
+            except KeyboardInterrupt:
+                status = "keyboard_interrupt"
+            except SystemExit:
+                status = "system_exit"
+            except BaseException:
+                status = "failure"
+            else:
+                # A successful SDK construction transfers HTTP cleanup to the
+                # SDK client.  The factory must not close it separately again.
+                http_client = None
+
+        if status is None:
+            try:
+                carrier = _OwnedOpenAIClient(sdk_client)
+            except KeyboardInterrupt:
+                status = "keyboard_interrupt"
+            except SystemExit:
+                status = "system_exit"
+            except BaseException:
+                status = "failure"
+            else:
+                sdk_client = None
+                return carrier
+
+        cleanup_target = sdk_client if sdk_client is not None else http_client
+        sdk_client = None
+        http_client = None
+        if cleanup_target is not None:
+            _close_openai_client_once(cleanup_target)
+        cleanup_target = None
+    finally:
+        api_key = None
+        carrier = None
+        http_client = None
+        sdk_client = None
+        openai_constructor = None
+    _raise_fresh_control_or_initialization(status or "failure")
 
 
 def build_openai_client(
@@ -1637,6 +1757,15 @@ def _classify_openai_429(
 
 
 def _normalize_openai_sdk_exception(exc: BaseException) -> _OpenAITransportFailure:
+    guard_rejection = type(exc) is _OpenAIResponseBoundaryError
+    if not guard_rejection:
+        try:
+            guard_rejection = type(exc.__cause__) is _OpenAIResponseBoundaryError
+        except BaseException:
+            guard_rejection = False
+    if guard_rejection:
+        exc = None
+        return _malformed_transport_failure()
     failure = None
     try:
         http_status = _safe_http_status(_sdk_field(exc, "status_code"))
@@ -1814,13 +1943,22 @@ def _perform_openai_responses_transport(
     owned_translated_request = None
     residual_timeout = None
     client = None
+    owned_client = None
     raw_response = None
+    pending_result = None
+    cleanup_status = "success"
     try:
         owned_translated_request = _validate_openai_transport_request(translated_request)
         residual_timeout = _validate_openai_residual_timeout(residual_timeout_seconds)
         client = build_openai_client(
             runtime_credential, client_factory=client_factory
         )
+        if type(client) is _OwnedOpenAIClient:
+            carrier = client
+            client = None
+            client = carrier._take()
+            carrier = None
+            owned_client = client
         if lifecycle is None:
             raise ProtocolError("OpenAI SDK dispatch requires attempt lifecycle authorization")
         lifecycle.append("sdk_call_boundary", {"wire_request_digest": digest_json(owned_translated_request)})
@@ -1836,23 +1974,42 @@ def _perform_openai_responses_transport(
             except BaseException:
                 failure = _closed_unknown_transport_failure()
             caught = None
-            return failure
-        lifecycle.append("sdk_return_observed")
-        try:
-            extracted = _extract_openai_sdk_response(raw_response)
-        except _OpenAITranslationReject:
-            return _malformed_transport_failure()
-        except Exception:
-            return _malformed_transport_failure()
-        return _OpenAITransportSuccess(response=extracted)
+            pending_result = failure
+        else:
+            lifecycle.append("sdk_return_observed")
+            try:
+                extracted = _extract_openai_sdk_response(raw_response)
+            except _OpenAITranslationReject:
+                pending_result = _malformed_transport_failure()
+            except Exception:
+                pending_result = _malformed_transport_failure()
+            else:
+                pending_result = _OpenAITransportSuccess(response=extracted)
+    except BaseException:
+        raise
     finally:
         raw_response = None
         client = None
+        cleanup_target = owned_client
+        owned_client = None
+        if cleanup_target is not None:
+            cleanup_status = _close_openai_client_once(cleanup_target)
+        cleanup_target = None
         runtime_credential = None
         client_factory = None
         owned_translated_request = None
         residual_timeout = None
         translated_request = None
+    if cleanup_status == "failure":
+        pending_result = None
+        raise InfrastructureError("openai client cleanup failed") from None
+    if cleanup_status == "keyboard_interrupt":
+        pending_result = None
+        raise KeyboardInterrupt() from None
+    if cleanup_status == "system_exit":
+        pending_result = None
+        raise SystemExit(1) from None
+    return pending_result
 
 
 _OPENAI_TRANSPORT_FAILURE_PAIRS = frozenset(
