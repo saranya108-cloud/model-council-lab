@@ -1,4 +1,4 @@
-"""F6b Checkpoint 1: bounded OpenAI response bodies and owned-client cleanup.
+"""F6b: bounded OpenAI response bodies and owned-client cleanup evidence.
 
 All HTTP and worker integration is offline.  SDK cases use OpenAI 2.54.0,
 HTTPX 0.28.1, synthetic credentials, and MockTransport without real sockets.
@@ -13,9 +13,11 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 import types
 import unittest
 import weakref
+from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -1145,7 +1147,15 @@ def _read_markers(path):
 
 
 class TestRealWorkerOfflineIntegration(unittest.TestCase):
-    def _run(self, mode, close, *, timeout=2.0):
+    def _run(
+        self,
+        mode,
+        close,
+        *,
+        timeout=2.0,
+        deadline_after_close=False,
+        hold_protocol_writer=False,
+    ):
         root_context = TemporaryDirectory()
         self.addCleanup(root_context.cleanup)
         root = Path(root_context.name)
@@ -1160,22 +1170,108 @@ class TestRealWorkerOfflineIntegration(unittest.TestCase):
             adapter, ExternalEvaluator(EvaluationConfig()), runs_root=runs
         )
         run_id = "f6b-" + mode.replace("_", "-") + "-" + close
-        with _isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}):
-            result = runner.execute(
-                make_spec(run_id, "A", max_stage_retries=0, stage_timeout_seconds=timeout),
-                make_task(),
-            )
+        from model_council import executor
+
+        real_collect = executor._collect_openai_worker
+        real_popen = executor.subprocess.Popen
+        collections = []
+        held_protocol_writers = []
+        deadline_marker_reached = False
+
+        def collect(process, **kwargs):
+            nonlocal deadline_marker_reached
+            if deadline_after_close:
+                started = time.monotonic()
+                deadline = kwargs["deadline"]
+                expired_at = None
+
+                def clock():
+                    nonlocal deadline_marker_reached, expired_at
+                    now = time.monotonic()
+                    deadline_marker_reached = any(
+                        "owned_client_close_entered" in item
+                        for item in _read_markers(markers)
+                    )
+                    if expired_at is None and (
+                        deadline_marker_reached or now - started >= 10.0
+                    ):
+                        expired_at = now
+                    return (
+                        deadline - 1.0
+                        if expired_at is None
+                        else deadline + now - expired_at
+                    )
+
+                collection = real_collect(process, monotonic=clock, **kwargs)
+            else:
+                collection = real_collect(process, **kwargs)
+            collections.append(collection)
+            return collection
+
+        def launch(args, **kwargs):
+            if hold_protocol_writer and "model_council.worker" in args:
+                held_protocol_writers.append(os.dup(kwargs["pass_fds"][0]))
+            return real_popen(args, **kwargs)
+
+        try:
+            with ExitStack() as stack:
+                stack.enter_context(_isolated_environ(**{_HOST_KEY: _FAKE_CREDENTIAL}))
+                stack.enter_context(patch.object(executor, "_collect_openai_worker", collect))
+                if hold_protocol_writer:
+                    stack.enter_context(patch.object(executor.subprocess, "Popen", launch))
+                result = runner.execute(
+                    make_spec(run_id, "A", max_stage_retries=0, stage_timeout_seconds=timeout),
+                    make_task(),
+                )
+        finally:
+            for fd in held_protocol_writers:
+                os.close(fd)
+        if deadline_after_close and not deadline_marker_reached:
+            self.fail("offline worker did not reach the owned-client close marker")
+        self.assertEqual(len(collections), 1)
         journal_path = runs / run_id / "attempt-lifecycle/solver/attempt-0001/journal.jsonl"
         from model_council.attempt_lifecycle import AttemptJournal
 
-        snapshot = AttemptJournal(journal_path).inspect(require_closed=True)
-        report = ArtifactStore.verify_terminal_run(runs, run_id)
-        return result, snapshot, report, _read_markers(markers), runs / run_id
+        journal = AttemptJournal(journal_path)
+        snapshot = journal.inspect()
+        return result, journal, snapshot, collections[0], _read_markers(markers), runs / run_id
+
+    def _invocation(self, run):
+        return json.loads(
+            (run / "invocations/solver/attempt-0001/invocation.json").read_text()
+        )
+
+    def _assert_suppressed(self, result, snapshot, markers, run):
+        invocation = self._invocation(run)
+        self.assertIsNone(invocation["adapter_evidence"]["provider_call_outcome"])
+        self.assertIsNone(snapshot["outcome"])
+        self.assertFalse((run / "seals/solver.json").exists())
+        self.assertFalse((run / "invocations/verifier").exists())
+        self.assertFalse((run / "evaluation.json").exists())
+        self.assertIsNone(result.final_candidate_ref)
+        self.assertEqual(
+            sorted(run.glob("invocations/*/*/invocation.json")),
+            [run / "invocations/solver/attempt-0001/invocation.json"],
+        )
+        self.assertEqual(
+            sorted(run.glob("attempt-lifecycle/*/attempt-*")),
+            [run / "attempt-lifecycle/solver/attempt-0001"],
+        )
+        self.assertEqual(sum("http_attempt" in item for item in markers), 1)
+        self.assertEqual(invocation["retry_decision"], "stop")
+        self.assertEqual(invocation["attempt_lifecycle"]["retry_safety"], "indeterminate")
+        return invocation
+
+    def _persisted_bytes(self, run):
+        return b"".join(path.read_bytes() for path in run.rglob("*") if path.is_file())
 
     def test_body_overflow_and_encoding_publish_malformed_only_after_close(self):
         for mode in ("overflow", "encoding"):
             with self.subTest(mode=mode):
-                result, snapshot, report, markers, run = self._run(mode, "success")
+                result, journal, snapshot, collection, markers, run = self._run(mode, "success")
+                del collection
+                snapshot = journal.inspect(require_closed=True)
+                report = ArtifactStore.verify_terminal_run(run.parent, run.name)
                 self.assertEqual(result.status, "infrastructure_failure")
                 self.assertEqual(report["terminal_status"], "infrastructure_failure")
                 self.assertTrue(report["terminal_verified"])
@@ -1214,7 +1310,10 @@ class TestRealWorkerOfflineIntegration(unittest.TestCase):
         }
         for mode in ("success", "sdk_exception"):
             with self.subTest(mode=mode):
-                result, snapshot, report, markers, run = self._run(mode, "failure")
+                result, journal, snapshot, collection, markers, run = self._run(mode, "failure")
+                del collection
+                snapshot = journal.inspect(require_closed=True)
+                report = ArtifactStore.verify_terminal_run(run.parent, run.name)
                 self.assertEqual(result.status, "infrastructure_failure")
                 self.assertEqual(report["terminal_status"], "infrastructure_failure")
                 self.assertEqual(snapshot["closure"]["reason"], "returned")
@@ -1226,18 +1325,118 @@ class TestRealWorkerOfflineIntegration(unittest.TestCase):
                 self.assertFalse((run / "seals/solver.json").exists())
                 self.assertFalse((run / "evaluation.json").exists())
 
-    def test_blocking_close_is_terminated_by_existing_parent_deadline(self):
-        result, snapshot, report, markers, run = self._run("success", "block", timeout=2.0)
-        self.assertIn(result.status, {"infrastructure_failure", "retry_exhausted"})
-        self.assertEqual(report["terminal_status"], result.status)
-        self.assertTrue(report["terminal_verified"])
-        self.assertEqual(snapshot["events"][-1]["event"], "sdk_return_observed")
-        self.assertIsNone(snapshot["outcome"])
+    def test_guard_rejection_and_owned_client_close_failure_suppress_outcome(self):
+        expected_events = [
+            "attempt_prepared",
+            "dispatch_permitted",
+            "sdk_call_boundary",
+            "sdk_exception_observed",
+        ]
+        for mode in ("overflow", "encoding"):
+            with self.subTest(mode=mode):
+                result, journal, snapshot, collection, markers, run = self._run(
+                    mode, "failure"
+                )
+                del collection
+                snapshot = journal.inspect(require_closed=True)
+                report = ArtifactStore.verify_terminal_run(run.parent, run.name)
+                invocation = self._assert_suppressed(result, snapshot, markers, run)
+                self.assertEqual(
+                    [event["event"] for event in snapshot["events"]], expected_events
+                )
+                self.assertTrue(snapshot["closed"])
+                self.assertEqual(snapshot["closure"]["reason"], "returned")
+                self.assertEqual(result.status, "infrastructure_failure")
+                self.assertEqual(invocation["failure_class"], "infrastructure")
+                self.assertEqual(invocation["retry_rationale"], "infrastructure_failure")
+                self.assertEqual(snapshot["retry_safety"], "indeterminate")
+                self.assertEqual(
+                    result.metadata["error"],
+                    "InfrastructureError: openai client cleanup failed",
+                )
+                self.assertTrue(report["terminal_verified"])
+                self.assertEqual(report["terminal_status"], "infrastructure_failure")
+                self.assertEqual(
+                    sum("owned_client_close_entered" in item for item in markers), 1
+                )
+                self.assertFalse(
+                    any("owned_client_close_returned" in item for item in markers)
+                )
+                chunks = [
+                    item["stream_chunk"] for item in markers if "stream_chunk" in item
+                ]
+                self.assertEqual(chunks, [0, 1] if mode == "overflow" else [])
+                persisted = self._persisted_bytes(run)
+                self.assertNotIn(_FAKE_CREDENTIAL.encode(), persisted)
+                self.assertNotIn(b"cleanup-secret-sentinel", persisted)
+                self.assertNotIn(b"sentinel", persisted)
+
+    def test_blocking_close_deadline_with_confirmed_parent_cleanup_closes_timeout(self):
+        result, journal, snapshot, collection, markers, run = self._run(
+            "success", "block", deadline_after_close=True
+        )
+        snapshot = journal.inspect(require_closed=True)
+        report = ArtifactStore.verify_terminal_run(run.parent, run.name)
+        invocation = self._assert_suppressed(result, snapshot, markers, run)
+        self.assertEqual(
+            [event["event"] for event in snapshot["events"]],
+            [
+                "attempt_prepared",
+                "dispatch_permitted",
+                "sdk_call_boundary",
+                "sdk_return_observed",
+            ],
+        )
+        self.assertTrue(snapshot["closed"])
+        self.assertEqual(snapshot["closure"]["reason"], "timeout")
+        self.assertEqual(result.status, "retry_exhausted")
+        self.assertEqual(invocation["failure_class"], "timeout")
+        self.assertEqual(invocation["retry_rationale"], "retry_budget_exhausted")
         self.assertEqual(snapshot["retry_safety"], "indeterminate")
+        self.assertEqual(collection.abort_reason, "deadline")
+        self.assertEqual(collection.failure, "deadline")
+        self.assertTrue(collection.reaped)
+        self.assertTrue(collection.pipes_eof)
+        self.assertTrue(collection.cleanup_complete)
+        self.assertTrue(report["terminal_verified"])
         self.assertEqual(sum("owned_client_close_entered" in item for item in markers), 1)
         self.assertFalse(any("owned_client_close_returned" in item for item in markers))
-        self.assertFalse((run / "seals/solver.json").exists())
-        self.assertFalse((run / "evaluation.json").exists())
+
+    def test_blocking_close_deadline_with_missing_protocol_eof_stays_open(self):
+        from model_council.types import IntegrityViolation
+
+        result, journal, snapshot, collection, markers, run = self._run(
+            "success",
+            "block",
+            deadline_after_close=True,
+            hold_protocol_writer=True,
+        )
+        invocation = self._assert_suppressed(result, snapshot, markers, run)
+        self.assertEqual(
+            [event["event"] for event in snapshot["events"]],
+            [
+                "attempt_prepared",
+                "dispatch_permitted",
+                "sdk_call_boundary",
+                "sdk_return_observed",
+            ],
+        )
+        self.assertFalse(snapshot["closed"])
+        self.assertIsNone(snapshot["closure"])
+        self.assertFalse((journal.path.with_name("closed.json")).exists())
+        self.assertEqual(result.status, "infrastructure_failure")
+        self.assertEqual(invocation["failure_class"], "infrastructure")
+        self.assertEqual(invocation["retry_rationale"], "infrastructure_failure")
+        self.assertEqual(snapshot["retry_safety"], "indeterminate")
+        self.assertEqual(collection.abort_reason, "deadline")
+        self.assertEqual(collection.failure, "cleanup_uncertain")
+        self.assertTrue(collection.reaped)
+        self.assertFalse(collection.pipes_eof)
+        self.assertFalse(collection.cleanup_complete)
+        self.assertEqual(sum("owned_client_close_entered" in item for item in markers), 1)
+        self.assertFalse(any("owned_client_close_returned" in item for item in markers))
+        with self.assertRaises(IntegrityViolation):
+            ArtifactStore.verify_terminal_run(run.parent, run.name)
 
 
 if __name__ == "__main__":
