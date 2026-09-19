@@ -2,11 +2,11 @@
 
 ## 1. Status
 
-**Proposed for Human Chair acceptance**
+**Accepted by Human Chair**
 
-Decision 0009 has not been accepted by the Human Chair. Creating and committing
-this proposal preserves the architecture for review; it does not open Tranche B,
-admit a provider, authorize implementation, or authorize execution.
+Amy, as Human Chair, accepted Decision 0009. This acceptance records the
+architecture decision; it does not open Tranche B, admit a provider, authorize
+implementation, or authorize execution.
 
 Canonical MCL baseline for this proposal:
 
@@ -22,7 +22,7 @@ cleanup, historical-compatibility, or independent-verification requirements.
 
 Current gate disposition:
 
-> **TRANCHE A — STOP FOR ARCHITECTURE REVIEW**
+> **TRANCHE A — ARCHITECTURE ACCEPTED**
 
 > **TRANCHE B REMAINS CLOSED**
 
