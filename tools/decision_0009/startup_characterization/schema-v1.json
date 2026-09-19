@@ -1,0 +1,3498 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:decision-0009-startup:v1",
+  "description": "Attempt records end in ATTEMPT_COMPLETE. Only a complete, cross-checked campaign can emit a final campaign EVIDENCE_SEALED record. Raw journals retain rejected observations.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/manifest"
+    },
+    {
+      "$ref": "#/$defs/event"
+    },
+    {
+      "$ref": "#/$defs/sample"
+    },
+    {
+      "$ref": "#/$defs/trial"
+    },
+    {
+      "$ref": "#/$defs/campaign_seal"
+    }
+  ],
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$(?![\\s\\S])"
+    },
+    "unavailable": {
+      "type": "object",
+      "required": [
+        "available",
+        "reason"
+      ],
+      "properties": {
+        "available": {
+          "const": false
+        },
+        "reason": {
+          "enum": [
+            "NOT_APPLICABLE",
+            "NOT_OBSERVED",
+            "UNSUPPORTED",
+            "QUERY_FAILED",
+            "TIMEOUT",
+            "IDENTITY_MISMATCH"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "measurement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "available",
+            "value"
+          ],
+          "properties": {
+            "available": {
+              "const": true
+            },
+            "value": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/unavailable"
+        }
+      ]
+    },
+    "identity": {
+      "type": "object",
+      "required": [
+        "boot_id",
+        "pid",
+        "process_start_ticks",
+        "pid_namespace_inode",
+        "executable_path",
+        "executable_inode",
+        "cgroup_path",
+        "cgroup_inode",
+        "gpu_uuid"
+      ],
+      "properties": {
+        "boot_id": {
+          "$ref": "#/$defs/token"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "process_start_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pid_namespace_inode": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "executable_path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "executable_inode": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cgroup_path": {
+          "type": "string",
+          "pattern": "^/[^/]+"
+        },
+        "cgroup_inode": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "gpu_uuid": {
+          "const": "GPU-beba5a2f-9130-d279-5639-9ffda0d4e464"
+        }
+      },
+      "additionalProperties": false
+    },
+    "library": {
+      "type": "object",
+      "required": [
+        "path",
+        "soname",
+        "package_version",
+        "elf_build_id",
+        "device",
+        "inode",
+        "size_bytes",
+        "mtime_ns",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "soname": {
+          "type": "string",
+          "minLength": 1
+        },
+        "package_version": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "$ref": "#/$defs/unavailable"
+            }
+          ]
+        },
+        "elf_build_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "device": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inode": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "mtime_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "$ref": "#/$defs/hash"
+        }
+      },
+      "additionalProperties": false
+    },
+    "counter": {
+      "type": "object",
+      "required": [
+        "low",
+        "high",
+        "max",
+        "oom",
+        "oom_kill"
+      ],
+      "properties": {
+        "low": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "high": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "oom": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "oom_kill": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "host": {
+      "type": "object",
+      "required": [
+        "hostname",
+        "os",
+        "kernel",
+        "architecture",
+        "gpu_model"
+      ],
+      "properties": {
+        "hostname": {
+          "const": "gn100-26db"
+        },
+        "os": {
+          "const": "Ubuntu 24.04.5 LTS"
+        },
+        "kernel": {
+          "const": "7.0.0-1019-nvidia"
+        },
+        "architecture": {
+          "const": "aarch64"
+        },
+        "gpu_model": {
+          "const": "NVIDIA GB10"
+        }
+      },
+      "additionalProperties": false
+    },
+    "software": {
+      "type": "object",
+      "required": [
+        "driver",
+        "cuda_toolkit",
+        "cuda_runtime",
+        "cublas",
+        "cublasLt"
+      ],
+      "properties": {
+        "driver": {
+          "const": "580.173.02"
+        },
+        "cuda_toolkit": {
+          "const": "13.0.3"
+        },
+        "cuda_runtime": {
+          "const": "13.0.96"
+        },
+        "cublas": {
+          "const": "13.1.1.3"
+        },
+        "cublasLt": {
+          "const": "13.1.1.3"
+        }
+      },
+      "additionalProperties": false
+    },
+    "thresholds": {
+      "type": "object",
+      "required": [
+        "worker_memory_max_bytes",
+        "worker_swap_max_bytes",
+        "worker_delta_max_bytes",
+        "gpu_process_max_bytes",
+        "gpu_caution_bytes",
+        "observer_max_bytes",
+        "unattributed_max_bytes",
+        "baseline_gpu_drift_bytes",
+        "baseline_ns",
+        "sample_period_ns",
+        "max_sample_gap_ns",
+        "pre_release_age_ns",
+        "identity_age_ns",
+        "library_stat_age_ns",
+        "dwell_ns",
+        "dwell_tolerance_ns",
+        "dwell_max_ns",
+        "min_dwell_samples",
+        "residual_clear_ns",
+        "residual_clear_samples",
+        "host_reserve_floor_bytes",
+        "host_reserve_divisor",
+        "device_reserve_floor_bytes",
+        "device_reserve_divisor"
+      ],
+      "properties": {
+        "worker_memory_max_bytes": {
+          "type": "integer",
+          "const": 2147483648
+        },
+        "worker_swap_max_bytes": {
+          "type": "integer",
+          "const": 0
+        },
+        "worker_delta_max_bytes": {
+          "type": "integer",
+          "const": 1073741824
+        },
+        "gpu_process_max_bytes": {
+          "type": "integer",
+          "const": 1073741824
+        },
+        "gpu_caution_bytes": {
+          "type": "integer",
+          "const": 536870912
+        },
+        "observer_max_bytes": {
+          "type": "integer",
+          "const": 536870912
+        },
+        "unattributed_max_bytes": {
+          "type": "integer",
+          "const": 268435456
+        },
+        "baseline_gpu_drift_bytes": {
+          "type": "integer",
+          "const": 268435456
+        },
+        "baseline_ns": {
+          "type": "integer",
+          "const": 60000000000
+        },
+        "sample_period_ns": {
+          "type": "integer",
+          "const": 100000000
+        },
+        "max_sample_gap_ns": {
+          "type": "integer",
+          "const": 250000000
+        },
+        "pre_release_age_ns": {
+          "type": "integer",
+          "const": 150000000
+        },
+        "identity_age_ns": {
+          "type": "integer",
+          "const": 100000000
+        },
+        "library_stat_age_ns": {
+          "type": "integer",
+          "const": 60000000000
+        },
+        "dwell_ns": {
+          "type": "integer",
+          "const": 2000000000
+        },
+        "dwell_tolerance_ns": {
+          "type": "integer",
+          "const": 100000000
+        },
+        "dwell_max_ns": {
+          "type": "integer",
+          "const": 3000000000
+        },
+        "min_dwell_samples": {
+          "type": "integer",
+          "const": 10
+        },
+        "residual_clear_ns": {
+          "type": "integer",
+          "const": 2000000000
+        },
+        "residual_clear_samples": {
+          "type": "integer",
+          "const": 3
+        },
+        "host_reserve_floor_bytes": {
+          "type": "integer",
+          "const": 17179869184
+        },
+        "host_reserve_divisor": {
+          "type": "integer",
+          "const": 8
+        },
+        "device_reserve_floor_bytes": {
+          "type": "integer",
+          "const": 8589934592
+        },
+        "device_reserve_divisor": {
+          "type": "integer",
+          "const": 16
+        }
+      },
+      "additionalProperties": false
+    },
+    "timeouts": {
+      "type": "object",
+      "required": [
+        "mapping_ns",
+        "mapping_total_ns",
+        "device_ns",
+        "create_ns",
+        "destroy_ns",
+        "worker_ns",
+        "cooperative_ns",
+        "term_ns",
+        "kill_ns"
+      ],
+      "properties": {
+        "mapping_ns": {
+          "type": "integer",
+          "const": 5000000000
+        },
+        "mapping_total_ns": {
+          "type": "integer",
+          "const": 10000000000
+        },
+        "device_ns": {
+          "type": "integer",
+          "const": 10000000000
+        },
+        "create_ns": {
+          "type": "integer",
+          "const": 10000000000
+        },
+        "destroy_ns": {
+          "type": "integer",
+          "const": 5000000000
+        },
+        "worker_ns": {
+          "type": "integer",
+          "const": 45000000000
+        },
+        "cooperative_ns": {
+          "type": "integer",
+          "const": 5000000000
+        },
+        "term_ns": {
+          "type": "integer",
+          "const": 5000000000
+        },
+        "kill_ns": {
+          "type": "integer",
+          "const": 5000000000
+        }
+      },
+      "additionalProperties": false
+    },
+    "manifest": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "run_id",
+        "decision_id",
+        "tranche",
+        "canonical_branch",
+        "canonical_head",
+        "tranche_a_digest",
+        "tranche_b_authorized",
+        "host_identity",
+        "expected_gpu_uuid",
+        "software_identity",
+        "library_manifest",
+        "source_artifact_hashes",
+        "authorization_reference",
+        "thresholds",
+        "timeout_policy",
+        "matrix",
+        "created_utc",
+        "expansion_policy",
+        "expansion_authorization_reference"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "decision-0009-startup/v1"
+        },
+        "run_id": {
+          "$ref": "#/$defs/token"
+        },
+        "decision_id": {
+          "const": "0009"
+        },
+        "tranche": {
+          "const": "startup-characterization"
+        },
+        "canonical_branch": {
+          "const": "m1-live-adapter-dev"
+        },
+        "canonical_head": {
+          "const": "724700217f8d7183757768fb2a856872b64a3cf3"
+        },
+        "tranche_a_digest": {
+          "const": "726cfbf2107f542465169e4ca8704aabc98a9588ef577744c45fff05e45e4c16"
+        },
+        "tranche_b_authorized": {
+          "const": false
+        },
+        "host_identity": {
+          "$ref": "#/$defs/host"
+        },
+        "expected_gpu_uuid": {
+          "const": "GPU-beba5a2f-9130-d279-5639-9ffda0d4e464"
+        },
+        "software_identity": {
+          "$ref": "#/$defs/software"
+        },
+        "library_manifest": {
+          "$ref": "#/$defs/libraries"
+        },
+        "source_artifact_hashes": {
+          "type": "object",
+          "required": [
+            "README.md",
+            "controller.py",
+            "observer.py",
+            "policy.py",
+            "schema-v1.json",
+            "worker.py",
+            "test_startup_characterization_protocol.py",
+            "test_startup_characterization_schema.py"
+          ],
+          "properties": {
+            "README.md": {
+              "$ref": "#/$defs/hash"
+            },
+            "controller.py": {
+              "$ref": "#/$defs/hash"
+            },
+            "observer.py": {
+              "$ref": "#/$defs/hash"
+            },
+            "policy.py": {
+              "$ref": "#/$defs/hash"
+            },
+            "schema-v1.json": {
+              "$ref": "#/$defs/hash"
+            },
+            "worker.py": {
+              "$ref": "#/$defs/hash"
+            },
+            "test_startup_characterization_protocol.py": {
+              "$ref": "#/$defs/hash"
+            },
+            "test_startup_characterization_schema.py": {
+              "$ref": "#/$defs/hash"
+            }
+          },
+          "additionalProperties": false
+        },
+        "authorization_reference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "thresholds": {
+          "$ref": "#/$defs/thresholds"
+        },
+        "timeout_policy": {
+          "$ref": "#/$defs/timeouts"
+        },
+        "matrix": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "boot",
+              "ordinal",
+              "handle_order",
+              "state"
+            ],
+            "properties": {
+              "boot": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "ordinal": {
+                "enum": [
+                  1,
+                  2,
+                  3
+                ]
+              },
+              "handle_order": {
+                "enum": [
+                  "BL",
+                  "LB"
+                ]
+              },
+              "state": {
+                "enum": [
+                  "boot-cold",
+                  "same-boot-warm"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 12
+        },
+        "created_utc": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expansion_policy": {
+          "type": "object",
+          "required": [
+            "gpu_caution_bytes",
+            "spread_percent",
+            "median_difference_percent",
+            "duration_difference_ns",
+            "memory_difference_bytes",
+            "baseline_difference_bytes",
+            "baseline_difference_percent",
+            "ledger_disagreement_bytes"
+          ],
+          "properties": {
+            "gpu_caution_bytes": {
+              "type": "integer",
+              "const": 536870912
+            },
+            "spread_percent": {
+              "type": "integer",
+              "const": 25
+            },
+            "median_difference_percent": {
+              "type": "integer",
+              "const": 20
+            },
+            "duration_difference_ns": {
+              "type": "integer",
+              "const": 25000000
+            },
+            "memory_difference_bytes": {
+              "type": "integer",
+              "const": 33554432
+            },
+            "baseline_difference_bytes": {
+              "type": "integer",
+              "const": 536870912
+            },
+            "baseline_difference_percent": {
+              "type": "integer",
+              "const": 5
+            },
+            "ledger_disagreement_bytes": {
+              "type": "integer",
+              "const": 268435456
+            }
+          },
+          "additionalProperties": false
+        },
+        "expansion_authorization_reference": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/token"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "event": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "run_id",
+        "boot_id",
+        "trial_id",
+        "sequence",
+        "event_type",
+        "phase",
+        "monotonic_raw_ns",
+        "pid",
+        "process_start_ticks",
+        "cgroup_path",
+        "cgroup_inode",
+        "gpu_uuid",
+        "call_name",
+        "raw_result",
+        "duration_ns",
+        "failure_reason"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "decision-0009-startup/v1"
+        },
+        "run_id": {
+          "$ref": "#/$defs/token"
+        },
+        "boot_id": {
+          "$ref": "#/$defs/token"
+        },
+        "trial_id": {
+          "$ref": "#/$defs/token"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "event_type": {
+          "enum": [
+            "BOOT_BASELINE_VALID",
+            "OBSERVER_ARMED",
+            "WORKER_READY",
+            "RELEASE",
+            "STARTUP_COMPLETE",
+            "DWELL_COMPLETE",
+            "CLEANUP_RELEASE",
+            "CLEANUP_COMPLETE",
+            "PROCESS_REAPED",
+            "RESIDUAL_CLEAR",
+            "CALL_START",
+            "CALL_END",
+            "ABORT",
+            "ESCALATION",
+            "ATTEMPT_COMPLETE"
+          ]
+        },
+        "phase": {
+          "type": "string",
+          "minLength": 1
+        },
+        "monotonic_raw_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "process_start_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cgroup_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cgroup_inode": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "gpu_uuid": {
+          "const": "GPU-beba5a2f-9130-d279-5639-9ffda0d4e464"
+        },
+        "call_name": {
+          "oneOf": [
+            {
+              "enum": [
+                "libcudart",
+                "libcublasLt",
+                "libcublas",
+                "cudaSetDevice",
+                "cublasCreate_v2",
+                "cublasDestroy_v2",
+                "cublasLtCreate",
+                "cublasLtDestroy"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "raw_result": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "duration_ns": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "failure_reason": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "sample": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "run_id",
+            "boot_id",
+            "trial_id",
+            "sequence",
+            "sample_start_monotonic_raw_ns",
+            "sample_end_monotonic_raw_ns",
+            "previous_gap_ns",
+            "observer_pid",
+            "observer_start_ticks",
+            "observer_cgroup",
+            "worker_identity",
+            "stream",
+            "metrics",
+            "available",
+            "unavailable_reason"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "decision-0009-startup/v1"
+            },
+            "run_id": {
+              "$ref": "#/$defs/token"
+            },
+            "boot_id": {
+              "$ref": "#/$defs/token"
+            },
+            "trial_id": {
+              "$ref": "#/$defs/token"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sample_start_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_end_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "previous_gap_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_start_ticks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_cgroup": {
+              "type": "string",
+              "minLength": 1
+            },
+            "worker_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "stream": {
+              "const": "worker_cgroup"
+            },
+            "metrics": {
+              "type": "object",
+              "required": [
+                "memory_current_bytes",
+                "memory_swap_current_bytes",
+                "memory_events",
+                "memory_events_local",
+                "populated",
+                "pids",
+                "memory_peak_bytes",
+                "memory_max_bytes",
+                "swap_max_bytes",
+                "cgroup_events",
+                "membership_exact"
+              ],
+              "properties": {
+                "memory_current_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "memory_swap_current_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "memory_events": {
+                  "$ref": "#/$defs/counter"
+                },
+                "memory_events_local": {
+                  "$ref": "#/$defs/counter"
+                },
+                "populated": {
+                  "type": "boolean"
+                },
+                "pids": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "memory_peak_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "memory_max_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "swap_max_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "cgroup_events": {
+                  "type": "object",
+                  "required": [
+                    "populated",
+                    "frozen"
+                  ],
+                  "properties": {
+                    "populated": {
+                      "type": "integer",
+                      "enum": [
+                        0,
+                        1
+                      ]
+                    },
+                    "frozen": {
+                      "type": "integer",
+                      "enum": [
+                        0,
+                        1
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "membership_exact": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "available": {
+              "const": true
+            },
+            "unavailable_reason": {
+              "type": "null"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "run_id",
+            "boot_id",
+            "trial_id",
+            "sequence",
+            "sample_start_monotonic_raw_ns",
+            "sample_end_monotonic_raw_ns",
+            "previous_gap_ns",
+            "observer_pid",
+            "observer_start_ticks",
+            "observer_cgroup",
+            "worker_identity",
+            "stream",
+            "metrics",
+            "available",
+            "unavailable_reason"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "decision-0009-startup/v1"
+            },
+            "run_id": {
+              "$ref": "#/$defs/token"
+            },
+            "boot_id": {
+              "$ref": "#/$defs/token"
+            },
+            "trial_id": {
+              "$ref": "#/$defs/token"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sample_start_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_end_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "previous_gap_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_start_ticks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_cgroup": {
+              "type": "string",
+              "minLength": 1
+            },
+            "worker_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "stream": {
+              "const": "worker_cgroup"
+            },
+            "metrics": {
+              "type": "null"
+            },
+            "available": {
+              "const": false
+            },
+            "unavailable_reason": {
+              "enum": [
+                "NOT_APPLICABLE",
+                "NOT_OBSERVED",
+                "UNSUPPORTED",
+                "QUERY_FAILED",
+                "TIMEOUT",
+                "IDENTITY_MISMATCH"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "run_id",
+            "boot_id",
+            "trial_id",
+            "sequence",
+            "sample_start_monotonic_raw_ns",
+            "sample_end_monotonic_raw_ns",
+            "previous_gap_ns",
+            "observer_pid",
+            "observer_start_ticks",
+            "observer_cgroup",
+            "worker_identity",
+            "stream",
+            "metrics",
+            "available",
+            "unavailable_reason"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "decision-0009-startup/v1"
+            },
+            "run_id": {
+              "$ref": "#/$defs/token"
+            },
+            "boot_id": {
+              "$ref": "#/$defs/token"
+            },
+            "trial_id": {
+              "$ref": "#/$defs/token"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sample_start_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_end_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "previous_gap_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_start_ticks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_cgroup": {
+              "type": "string",
+              "minLength": 1
+            },
+            "worker_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "stream": {
+              "const": "worker_process"
+            },
+            "metrics": {
+              "type": "object",
+              "required": [
+                "alive"
+              ],
+              "properties": {
+                "alive": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "available": {
+              "const": true
+            },
+            "unavailable_reason": {
+              "type": "null"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "run_id",
+            "boot_id",
+            "trial_id",
+            "sequence",
+            "sample_start_monotonic_raw_ns",
+            "sample_end_monotonic_raw_ns",
+            "previous_gap_ns",
+            "observer_pid",
+            "observer_start_ticks",
+            "observer_cgroup",
+            "worker_identity",
+            "stream",
+            "metrics",
+            "available",
+            "unavailable_reason"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "decision-0009-startup/v1"
+            },
+            "run_id": {
+              "$ref": "#/$defs/token"
+            },
+            "boot_id": {
+              "$ref": "#/$defs/token"
+            },
+            "trial_id": {
+              "$ref": "#/$defs/token"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sample_start_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_end_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "previous_gap_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_start_ticks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_cgroup": {
+              "type": "string",
+              "minLength": 1
+            },
+            "worker_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "stream": {
+              "const": "worker_process"
+            },
+            "metrics": {
+              "type": "null"
+            },
+            "available": {
+              "const": false
+            },
+            "unavailable_reason": {
+              "enum": [
+                "NOT_APPLICABLE",
+                "NOT_OBSERVED",
+                "UNSUPPORTED",
+                "QUERY_FAILED",
+                "TIMEOUT",
+                "IDENTITY_MISMATCH"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "run_id",
+            "boot_id",
+            "trial_id",
+            "sequence",
+            "sample_start_monotonic_raw_ns",
+            "sample_end_monotonic_raw_ns",
+            "previous_gap_ns",
+            "observer_pid",
+            "observer_start_ticks",
+            "observer_cgroup",
+            "worker_identity",
+            "stream",
+            "metrics",
+            "available",
+            "unavailable_reason"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "decision-0009-startup/v1"
+            },
+            "run_id": {
+              "$ref": "#/$defs/token"
+            },
+            "boot_id": {
+              "$ref": "#/$defs/token"
+            },
+            "trial_id": {
+              "$ref": "#/$defs/token"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sample_start_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_end_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "previous_gap_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_start_ticks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_cgroup": {
+              "type": "string",
+              "minLength": 1
+            },
+            "worker_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "stream": {
+              "const": "gpu_device"
+            },
+            "metrics": {
+              "type": "object",
+              "required": [
+                "total_bytes",
+                "free_bytes",
+                "used_bytes"
+              ],
+              "properties": {
+                "total_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "free_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "used_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            },
+            "available": {
+              "const": true
+            },
+            "unavailable_reason": {
+              "type": "null"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "run_id",
+            "boot_id",
+            "trial_id",
+            "sequence",
+            "sample_start_monotonic_raw_ns",
+            "sample_end_monotonic_raw_ns",
+            "previous_gap_ns",
+            "observer_pid",
+            "observer_start_ticks",
+            "observer_cgroup",
+            "worker_identity",
+            "stream",
+            "metrics",
+            "available",
+            "unavailable_reason"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "decision-0009-startup/v1"
+            },
+            "run_id": {
+              "$ref": "#/$defs/token"
+            },
+            "boot_id": {
+              "$ref": "#/$defs/token"
+            },
+            "trial_id": {
+              "$ref": "#/$defs/token"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sample_start_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_end_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "previous_gap_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_start_ticks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_cgroup": {
+              "type": "string",
+              "minLength": 1
+            },
+            "worker_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "stream": {
+              "const": "gpu_device"
+            },
+            "metrics": {
+              "type": "null"
+            },
+            "available": {
+              "const": false
+            },
+            "unavailable_reason": {
+              "enum": [
+                "NOT_APPLICABLE",
+                "NOT_OBSERVED",
+                "UNSUPPORTED",
+                "QUERY_FAILED",
+                "TIMEOUT",
+                "IDENTITY_MISMATCH"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "run_id",
+            "boot_id",
+            "trial_id",
+            "sequence",
+            "sample_start_monotonic_raw_ns",
+            "sample_end_monotonic_raw_ns",
+            "previous_gap_ns",
+            "observer_pid",
+            "observer_start_ticks",
+            "observer_cgroup",
+            "worker_identity",
+            "stream",
+            "metrics",
+            "available",
+            "unavailable_reason"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "decision-0009-startup/v1"
+            },
+            "run_id": {
+              "$ref": "#/$defs/token"
+            },
+            "boot_id": {
+              "$ref": "#/$defs/token"
+            },
+            "trial_id": {
+              "$ref": "#/$defs/token"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sample_start_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_end_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "previous_gap_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_start_ticks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_cgroup": {
+              "type": "string",
+              "minLength": 1
+            },
+            "worker_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "stream": {
+              "const": "gpu_process"
+            },
+            "metrics": {
+              "type": "object",
+              "required": [
+                "present",
+                "used_bytes"
+              ],
+              "properties": {
+                "present": {
+                  "type": "boolean"
+                },
+                "used_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            },
+            "available": {
+              "const": true
+            },
+            "unavailable_reason": {
+              "type": "null"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "run_id",
+            "boot_id",
+            "trial_id",
+            "sequence",
+            "sample_start_monotonic_raw_ns",
+            "sample_end_monotonic_raw_ns",
+            "previous_gap_ns",
+            "observer_pid",
+            "observer_start_ticks",
+            "observer_cgroup",
+            "worker_identity",
+            "stream",
+            "metrics",
+            "available",
+            "unavailable_reason"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "decision-0009-startup/v1"
+            },
+            "run_id": {
+              "$ref": "#/$defs/token"
+            },
+            "boot_id": {
+              "$ref": "#/$defs/token"
+            },
+            "trial_id": {
+              "$ref": "#/$defs/token"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sample_start_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_end_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "previous_gap_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_start_ticks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_cgroup": {
+              "type": "string",
+              "minLength": 1
+            },
+            "worker_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "stream": {
+              "const": "gpu_process"
+            },
+            "metrics": {
+              "type": "null"
+            },
+            "available": {
+              "const": false
+            },
+            "unavailable_reason": {
+              "enum": [
+                "NOT_APPLICABLE",
+                "NOT_OBSERVED",
+                "UNSUPPORTED",
+                "QUERY_FAILED",
+                "TIMEOUT",
+                "IDENTITY_MISMATCH"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "run_id",
+            "boot_id",
+            "trial_id",
+            "sequence",
+            "sample_start_monotonic_raw_ns",
+            "sample_end_monotonic_raw_ns",
+            "previous_gap_ns",
+            "observer_pid",
+            "observer_start_ticks",
+            "observer_cgroup",
+            "worker_identity",
+            "stream",
+            "metrics",
+            "available",
+            "unavailable_reason"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "decision-0009-startup/v1"
+            },
+            "run_id": {
+              "$ref": "#/$defs/token"
+            },
+            "boot_id": {
+              "$ref": "#/$defs/token"
+            },
+            "trial_id": {
+              "$ref": "#/$defs/token"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sample_start_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_end_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "previous_gap_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_start_ticks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_cgroup": {
+              "type": "string",
+              "minLength": 1
+            },
+            "worker_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "stream": {
+              "const": "machine_reserve"
+            },
+            "metrics": {
+              "type": "object",
+              "required": [
+                "mem_total_bytes",
+                "mem_available_bytes",
+                "swap_in_pages",
+                "swap_out_pages",
+                "psi_full_total_us",
+                "oom_kill_count"
+              ],
+              "properties": {
+                "mem_total_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "mem_available_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "swap_in_pages": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "swap_out_pages": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "psi_full_total_us": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "oom_kill_count": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            },
+            "available": {
+              "const": true
+            },
+            "unavailable_reason": {
+              "type": "null"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "run_id",
+            "boot_id",
+            "trial_id",
+            "sequence",
+            "sample_start_monotonic_raw_ns",
+            "sample_end_monotonic_raw_ns",
+            "previous_gap_ns",
+            "observer_pid",
+            "observer_start_ticks",
+            "observer_cgroup",
+            "worker_identity",
+            "stream",
+            "metrics",
+            "available",
+            "unavailable_reason"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "decision-0009-startup/v1"
+            },
+            "run_id": {
+              "$ref": "#/$defs/token"
+            },
+            "boot_id": {
+              "$ref": "#/$defs/token"
+            },
+            "trial_id": {
+              "$ref": "#/$defs/token"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sample_start_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_end_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "previous_gap_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_start_ticks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_cgroup": {
+              "type": "string",
+              "minLength": 1
+            },
+            "worker_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "stream": {
+              "const": "machine_reserve"
+            },
+            "metrics": {
+              "type": "null"
+            },
+            "available": {
+              "const": false
+            },
+            "unavailable_reason": {
+              "enum": [
+                "NOT_APPLICABLE",
+                "NOT_OBSERVED",
+                "UNSUPPORTED",
+                "QUERY_FAILED",
+                "TIMEOUT",
+                "IDENTITY_MISMATCH"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "run_id",
+            "boot_id",
+            "trial_id",
+            "sequence",
+            "sample_start_monotonic_raw_ns",
+            "sample_end_monotonic_raw_ns",
+            "previous_gap_ns",
+            "observer_pid",
+            "observer_start_ticks",
+            "observer_cgroup",
+            "worker_identity",
+            "stream",
+            "metrics",
+            "available",
+            "unavailable_reason"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "decision-0009-startup/v1"
+            },
+            "run_id": {
+              "$ref": "#/$defs/token"
+            },
+            "boot_id": {
+              "$ref": "#/$defs/token"
+            },
+            "trial_id": {
+              "$ref": "#/$defs/token"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sample_start_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_end_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "previous_gap_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_start_ticks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_cgroup": {
+              "type": "string",
+              "minLength": 1
+            },
+            "worker_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "stream": {
+              "const": "observer_cgroup"
+            },
+            "metrics": {
+              "type": "object",
+              "required": [
+                "memory_current_bytes",
+                "query_latency_ns"
+              ],
+              "properties": {
+                "memory_current_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "query_latency_ns": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            },
+            "available": {
+              "const": true
+            },
+            "unavailable_reason": {
+              "type": "null"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "run_id",
+            "boot_id",
+            "trial_id",
+            "sequence",
+            "sample_start_monotonic_raw_ns",
+            "sample_end_monotonic_raw_ns",
+            "previous_gap_ns",
+            "observer_pid",
+            "observer_start_ticks",
+            "observer_cgroup",
+            "worker_identity",
+            "stream",
+            "metrics",
+            "available",
+            "unavailable_reason"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "decision-0009-startup/v1"
+            },
+            "run_id": {
+              "$ref": "#/$defs/token"
+            },
+            "boot_id": {
+              "$ref": "#/$defs/token"
+            },
+            "trial_id": {
+              "$ref": "#/$defs/token"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "sample_start_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_end_monotonic_raw_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "previous_gap_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_start_ticks": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "observer_cgroup": {
+              "type": "string",
+              "minLength": 1
+            },
+            "worker_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "stream": {
+              "const": "observer_cgroup"
+            },
+            "metrics": {
+              "type": "null"
+            },
+            "available": {
+              "const": false
+            },
+            "unavailable_reason": {
+              "enum": [
+                "NOT_APPLICABLE",
+                "NOT_OBSERVED",
+                "UNSUPPORTED",
+                "QUERY_FAILED",
+                "TIMEOUT",
+                "IDENTITY_MISMATCH"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "trial": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "run_id",
+        "trial_id",
+        "boot_id",
+        "ordinal",
+        "state",
+        "handle_order",
+        "mapping_order",
+        "identity_binding",
+        "preconditions",
+        "events_first_sequence",
+        "events_last_sequence",
+        "samples_first_sequence",
+        "samples_last_sequence",
+        "call_results",
+        "startup_duration_ns",
+        "phase_durations_ns",
+        "baseline_metrics",
+        "peak_metrics",
+        "delta_metrics",
+        "maximum_sample_gap_ns",
+        "tripwire_results",
+        "cleanup_result",
+        "residual_result",
+        "verdict",
+        "reason_codes",
+        "minimum_metrics",
+        "boot",
+        "custody",
+        "evidence",
+        "admitted_ns",
+        "replay_validation_error"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "decision-0009-startup/v1"
+        },
+        "run_id": {
+          "$ref": "#/$defs/token"
+        },
+        "trial_id": {
+          "$ref": "#/$defs/token"
+        },
+        "boot_id": {
+          "$ref": "#/$defs/token"
+        },
+        "ordinal": {
+          "type": "integer",
+          "enum": [
+            1,
+            2,
+            3
+          ]
+        },
+        "state": {
+          "enum": [
+            "boot-cold",
+            "same-boot-warm"
+          ]
+        },
+        "handle_order": {
+          "enum": [
+            "BL",
+            "LB"
+          ]
+        },
+        "mapping_order": {
+          "const": [
+            "libcudart",
+            "libcublasLt",
+            "libcublas"
+          ]
+        },
+        "identity_binding": {
+          "$ref": "#/$defs/identity"
+        },
+        "preconditions": {
+          "type": "object",
+          "required": [
+            "cold_or_warm_proven",
+            "persistence_unchanged",
+            "desktop_stable",
+            "no_unexpected_compute",
+            "target_libraries_absent",
+            "pidfd_or_start_guard",
+            "source_hashes_verified",
+            "environment_clean",
+            "library_stats_match"
+          ],
+          "properties": {
+            "cold_or_warm_proven": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "available",
+                    "passed"
+                  ],
+                  "properties": {
+                    "available": {
+                      "const": true
+                    },
+                    "passed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "$ref": "#/$defs/unavailable"
+                }
+              ]
+            },
+            "persistence_unchanged": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "available",
+                    "passed"
+                  ],
+                  "properties": {
+                    "available": {
+                      "const": true
+                    },
+                    "passed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "$ref": "#/$defs/unavailable"
+                }
+              ]
+            },
+            "desktop_stable": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "available",
+                    "passed"
+                  ],
+                  "properties": {
+                    "available": {
+                      "const": true
+                    },
+                    "passed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "$ref": "#/$defs/unavailable"
+                }
+              ]
+            },
+            "no_unexpected_compute": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "available",
+                    "passed"
+                  ],
+                  "properties": {
+                    "available": {
+                      "const": true
+                    },
+                    "passed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "$ref": "#/$defs/unavailable"
+                }
+              ]
+            },
+            "target_libraries_absent": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "available",
+                    "passed"
+                  ],
+                  "properties": {
+                    "available": {
+                      "const": true
+                    },
+                    "passed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "$ref": "#/$defs/unavailable"
+                }
+              ]
+            },
+            "pidfd_or_start_guard": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "available",
+                    "passed"
+                  ],
+                  "properties": {
+                    "available": {
+                      "const": true
+                    },
+                    "passed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "$ref": "#/$defs/unavailable"
+                }
+              ]
+            },
+            "source_hashes_verified": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "available",
+                    "passed"
+                  ],
+                  "properties": {
+                    "available": {
+                      "const": true
+                    },
+                    "passed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "$ref": "#/$defs/unavailable"
+                }
+              ]
+            },
+            "environment_clean": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "available",
+                    "passed"
+                  ],
+                  "properties": {
+                    "available": {
+                      "const": true
+                    },
+                    "passed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "$ref": "#/$defs/unavailable"
+                }
+              ]
+            },
+            "library_stats_match": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "available",
+                    "passed"
+                  ],
+                  "properties": {
+                    "available": {
+                      "const": true
+                    },
+                    "passed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "$ref": "#/$defs/unavailable"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "events_first_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "events_last_sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "samples_first_sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "samples_last_sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "call_results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "call_name",
+              "raw_result"
+            ],
+            "properties": {
+              "call_name": {
+                "oneOf": [
+                  {
+                    "enum": [
+                      "libcudart",
+                      "libcublasLt",
+                      "libcublas",
+                      "cudaSetDevice",
+                      "cublasCreate_v2",
+                      "cublasDestroy_v2",
+                      "cublasLtCreate",
+                      "cublasLtDestroy"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "raw_result": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "startup_duration_ns": {
+          "$ref": "#/$defs/measurement"
+        },
+        "phase_durations_ns": {
+          "type": "object",
+          "required": [
+            "libcudart",
+            "libcublasLt",
+            "libcublas",
+            "cudaSetDevice",
+            "cublasCreate_v2",
+            "cublasLtCreate",
+            "cublasDestroy_v2",
+            "cublasLtDestroy",
+            "dwell"
+          ],
+          "properties": {
+            "libcudart": {
+              "$ref": "#/$defs/measurement"
+            },
+            "libcublasLt": {
+              "$ref": "#/$defs/measurement"
+            },
+            "libcublas": {
+              "$ref": "#/$defs/measurement"
+            },
+            "cudaSetDevice": {
+              "$ref": "#/$defs/measurement"
+            },
+            "cublasCreate_v2": {
+              "$ref": "#/$defs/measurement"
+            },
+            "cublasLtCreate": {
+              "$ref": "#/$defs/measurement"
+            },
+            "cublasDestroy_v2": {
+              "$ref": "#/$defs/measurement"
+            },
+            "cublasLtDestroy": {
+              "$ref": "#/$defs/measurement"
+            },
+            "dwell": {
+              "$ref": "#/$defs/measurement"
+            }
+          },
+          "additionalProperties": false
+        },
+        "baseline_metrics": {
+          "type": "object",
+          "required": [
+            "worker_cgroup.memory_current_bytes",
+            "worker_cgroup.memory_peak_bytes",
+            "worker_cgroup.memory_swap_current_bytes",
+            "worker_cgroup.memory_max_bytes",
+            "worker_cgroup.swap_max_bytes",
+            "worker_cgroup.memory_events.low",
+            "worker_cgroup.memory_events.high",
+            "worker_cgroup.memory_events.max",
+            "worker_cgroup.memory_events.oom",
+            "worker_cgroup.memory_events.oom_kill",
+            "worker_cgroup.memory_events_local.low",
+            "worker_cgroup.memory_events_local.high",
+            "worker_cgroup.memory_events_local.max",
+            "worker_cgroup.memory_events_local.oom",
+            "worker_cgroup.memory_events_local.oom_kill",
+            "gpu_device.total_bytes",
+            "gpu_device.free_bytes",
+            "gpu_device.used_bytes",
+            "gpu_process.used_bytes",
+            "machine_reserve.mem_total_bytes",
+            "machine_reserve.mem_available_bytes",
+            "machine_reserve.swap_in_pages",
+            "machine_reserve.swap_out_pages",
+            "machine_reserve.psi_full_total_us",
+            "machine_reserve.oom_kill_count",
+            "observer_cgroup.memory_current_bytes",
+            "observer_cgroup.query_latency_ns"
+          ],
+          "properties": {
+            "worker_cgroup.memory_current_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_peak_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_swap_current_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_max_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.swap_max_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.low": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.high": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.max": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.oom": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.oom_kill": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.low": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.high": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.max": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.oom": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.oom_kill": {
+              "$ref": "#/$defs/measurement"
+            },
+            "gpu_device.total_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "gpu_device.free_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "gpu_device.used_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "gpu_process.used_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.mem_total_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.mem_available_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.swap_in_pages": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.swap_out_pages": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.psi_full_total_us": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.oom_kill_count": {
+              "$ref": "#/$defs/measurement"
+            },
+            "observer_cgroup.memory_current_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "observer_cgroup.query_latency_ns": {
+              "$ref": "#/$defs/measurement"
+            }
+          },
+          "additionalProperties": false
+        },
+        "peak_metrics": {
+          "type": "object",
+          "required": [
+            "worker_cgroup.memory_current_bytes",
+            "worker_cgroup.memory_peak_bytes",
+            "worker_cgroup.memory_swap_current_bytes",
+            "worker_cgroup.memory_max_bytes",
+            "worker_cgroup.swap_max_bytes",
+            "worker_cgroup.memory_events.low",
+            "worker_cgroup.memory_events.high",
+            "worker_cgroup.memory_events.max",
+            "worker_cgroup.memory_events.oom",
+            "worker_cgroup.memory_events.oom_kill",
+            "worker_cgroup.memory_events_local.low",
+            "worker_cgroup.memory_events_local.high",
+            "worker_cgroup.memory_events_local.max",
+            "worker_cgroup.memory_events_local.oom",
+            "worker_cgroup.memory_events_local.oom_kill",
+            "gpu_device.total_bytes",
+            "gpu_device.free_bytes",
+            "gpu_device.used_bytes",
+            "gpu_process.used_bytes",
+            "machine_reserve.mem_total_bytes",
+            "machine_reserve.mem_available_bytes",
+            "machine_reserve.swap_in_pages",
+            "machine_reserve.swap_out_pages",
+            "machine_reserve.psi_full_total_us",
+            "machine_reserve.oom_kill_count",
+            "observer_cgroup.memory_current_bytes",
+            "observer_cgroup.query_latency_ns"
+          ],
+          "properties": {
+            "worker_cgroup.memory_current_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_peak_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_swap_current_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_max_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.swap_max_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.low": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.high": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.max": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.oom": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.oom_kill": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.low": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.high": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.max": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.oom": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.oom_kill": {
+              "$ref": "#/$defs/measurement"
+            },
+            "gpu_device.total_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "gpu_device.free_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "gpu_device.used_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "gpu_process.used_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.mem_total_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.mem_available_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.swap_in_pages": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.swap_out_pages": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.psi_full_total_us": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.oom_kill_count": {
+              "$ref": "#/$defs/measurement"
+            },
+            "observer_cgroup.memory_current_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "observer_cgroup.query_latency_ns": {
+              "$ref": "#/$defs/measurement"
+            }
+          },
+          "additionalProperties": false
+        },
+        "delta_metrics": {
+          "type": "object",
+          "required": [
+            "worker_cgroup.memory_current_bytes",
+            "worker_cgroup.memory_peak_bytes",
+            "worker_cgroup.memory_swap_current_bytes",
+            "worker_cgroup.memory_max_bytes",
+            "worker_cgroup.swap_max_bytes",
+            "worker_cgroup.memory_events.low",
+            "worker_cgroup.memory_events.high",
+            "worker_cgroup.memory_events.max",
+            "worker_cgroup.memory_events.oom",
+            "worker_cgroup.memory_events.oom_kill",
+            "worker_cgroup.memory_events_local.low",
+            "worker_cgroup.memory_events_local.high",
+            "worker_cgroup.memory_events_local.max",
+            "worker_cgroup.memory_events_local.oom",
+            "worker_cgroup.memory_events_local.oom_kill",
+            "gpu_device.total_bytes",
+            "gpu_device.free_bytes",
+            "gpu_device.used_bytes",
+            "gpu_process.used_bytes",
+            "machine_reserve.mem_total_bytes",
+            "machine_reserve.mem_available_bytes",
+            "machine_reserve.swap_in_pages",
+            "machine_reserve.swap_out_pages",
+            "machine_reserve.psi_full_total_us",
+            "machine_reserve.oom_kill_count",
+            "observer_cgroup.memory_current_bytes",
+            "observer_cgroup.query_latency_ns"
+          ],
+          "properties": {
+            "worker_cgroup.memory_current_bytes": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_peak_bytes": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_swap_current_bytes": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_max_bytes": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.swap_max_bytes": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_events.low": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_events.high": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_events.max": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_events.oom": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_events.oom_kill": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_events_local.low": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_events_local.high": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_events_local.max": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_events_local.oom": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "worker_cgroup.memory_events_local.oom_kill": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "gpu_device.total_bytes": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "gpu_device.free_bytes": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "gpu_device.used_bytes": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "gpu_process.used_bytes": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "machine_reserve.mem_total_bytes": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "machine_reserve.mem_available_bytes": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "machine_reserve.swap_in_pages": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "machine_reserve.swap_out_pages": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "machine_reserve.psi_full_total_us": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "machine_reserve.oom_kill_count": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "observer_cgroup.memory_current_bytes": {
+              "$ref": "#/$defs/signed_measurement"
+            },
+            "observer_cgroup.query_latency_ns": {
+              "$ref": "#/$defs/signed_measurement"
+            }
+          },
+          "additionalProperties": false
+        },
+        "maximum_sample_gap_ns": {
+          "$ref": "#/$defs/measurement"
+        },
+        "tripwire_results": {
+          "type": "object",
+          "required": [
+            "WORKER_DELTA",
+            "WORKER_LIMIT_OR_SWAP",
+            "WORKER_MEMORY_EVENT",
+            "GPU_PROCESS",
+            "UNATTRIBUTED_DEVICE",
+            "OBSERVER_MEMORY",
+            "HOST_RESERVE",
+            "DEVICE_RESERVE",
+            "MACHINE_PRESSURE",
+            "WORKER_LOST"
+          ],
+          "properties": {
+            "WORKER_DELTA": {
+              "enum": [
+                "PASS",
+                "FAIL",
+                "UNKNOWN"
+              ]
+            },
+            "WORKER_LIMIT_OR_SWAP": {
+              "enum": [
+                "PASS",
+                "FAIL",
+                "UNKNOWN"
+              ]
+            },
+            "WORKER_MEMORY_EVENT": {
+              "enum": [
+                "PASS",
+                "FAIL",
+                "UNKNOWN"
+              ]
+            },
+            "GPU_PROCESS": {
+              "enum": [
+                "PASS",
+                "FAIL",
+                "UNKNOWN"
+              ]
+            },
+            "UNATTRIBUTED_DEVICE": {
+              "enum": [
+                "PASS",
+                "FAIL",
+                "UNKNOWN"
+              ]
+            },
+            "OBSERVER_MEMORY": {
+              "enum": [
+                "PASS",
+                "FAIL",
+                "UNKNOWN"
+              ]
+            },
+            "HOST_RESERVE": {
+              "enum": [
+                "PASS",
+                "FAIL",
+                "UNKNOWN"
+              ]
+            },
+            "DEVICE_RESERVE": {
+              "enum": [
+                "PASS",
+                "FAIL",
+                "UNKNOWN"
+              ]
+            },
+            "MACHINE_PRESSURE": {
+              "enum": [
+                "PASS",
+                "FAIL",
+                "UNKNOWN"
+              ]
+            },
+            "WORKER_LOST": {
+              "enum": [
+                "PASS",
+                "FAIL",
+                "UNKNOWN"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "cleanup_result": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "UNKNOWN"
+          ]
+        },
+        "residual_result": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "UNKNOWN"
+          ]
+        },
+        "verdict": {
+          "enum": [
+            "valid",
+            "invalid",
+            "aborted"
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "minimum_metrics": {
+          "type": "object",
+          "required": [
+            "worker_cgroup.memory_current_bytes",
+            "worker_cgroup.memory_peak_bytes",
+            "worker_cgroup.memory_swap_current_bytes",
+            "worker_cgroup.memory_max_bytes",
+            "worker_cgroup.swap_max_bytes",
+            "worker_cgroup.memory_events.low",
+            "worker_cgroup.memory_events.high",
+            "worker_cgroup.memory_events.max",
+            "worker_cgroup.memory_events.oom",
+            "worker_cgroup.memory_events.oom_kill",
+            "worker_cgroup.memory_events_local.low",
+            "worker_cgroup.memory_events_local.high",
+            "worker_cgroup.memory_events_local.max",
+            "worker_cgroup.memory_events_local.oom",
+            "worker_cgroup.memory_events_local.oom_kill",
+            "gpu_device.total_bytes",
+            "gpu_device.free_bytes",
+            "gpu_device.used_bytes",
+            "gpu_process.used_bytes",
+            "machine_reserve.mem_total_bytes",
+            "machine_reserve.mem_available_bytes",
+            "machine_reserve.swap_in_pages",
+            "machine_reserve.swap_out_pages",
+            "machine_reserve.psi_full_total_us",
+            "machine_reserve.oom_kill_count",
+            "observer_cgroup.memory_current_bytes",
+            "observer_cgroup.query_latency_ns"
+          ],
+          "properties": {
+            "worker_cgroup.memory_current_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_peak_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_swap_current_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_max_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.swap_max_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.low": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.high": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.max": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.oom": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events.oom_kill": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.low": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.high": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.max": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.oom": {
+              "$ref": "#/$defs/measurement"
+            },
+            "worker_cgroup.memory_events_local.oom_kill": {
+              "$ref": "#/$defs/measurement"
+            },
+            "gpu_device.total_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "gpu_device.free_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "gpu_device.used_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "gpu_process.used_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.mem_total_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.mem_available_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.swap_in_pages": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.swap_out_pages": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.psi_full_total_us": {
+              "$ref": "#/$defs/measurement"
+            },
+            "machine_reserve.oom_kill_count": {
+              "$ref": "#/$defs/measurement"
+            },
+            "observer_cgroup.memory_current_bytes": {
+              "$ref": "#/$defs/measurement"
+            },
+            "observer_cgroup.query_latency_ns": {
+              "$ref": "#/$defs/measurement"
+            }
+          },
+          "additionalProperties": false
+        },
+        "boot": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "custody": {
+          "$ref": "#/$defs/custody"
+        },
+        "evidence": {
+          "type": "object",
+          "required": [
+            "events",
+            "samples",
+            "worker_raw",
+            "observation_raw",
+            "identity_records",
+            "mapping_records",
+            "proof",
+            "limit_readback",
+            "baseline_frames",
+            "sampler_started_ns",
+            "observer_identity",
+            "library_manifest",
+            "identity_raw"
+          ],
+          "properties": {
+            "events": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/event"
+              }
+            },
+            "samples": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/sample"
+              }
+            },
+            "worker_raw": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/raw"
+              }
+            },
+            "observation_raw": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/raw"
+              }
+            },
+            "identity_records": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "identity",
+                  "observed_ns",
+                  "members",
+                  "received_ns"
+                ],
+                "properties": {
+                  "identity": {
+                    "$ref": "#/$defs/identity"
+                  },
+                  "observed_ns": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "members": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "received_ns": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "mapping_records": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "stage",
+                  "observed_ns",
+                  "mapped",
+                  "received_ns"
+                ],
+                "properties": {
+                  "stage": {
+                    "enum": [
+                      "post_mapping",
+                      "terminal"
+                    ]
+                  },
+                  "observed_ns": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "mapped": {
+                    "type": "object",
+                    "required": [
+                      "libcudart",
+                      "libcublasLt",
+                      "libcublas",
+                      "libcuda"
+                    ],
+                    "properties": {
+                      "libcudart": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/$defs/library"
+                        }
+                      },
+                      "libcublasLt": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/$defs/library"
+                        }
+                      },
+                      "libcublas": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/$defs/library"
+                        }
+                      },
+                      "libcuda": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/$defs/library"
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "received_ns": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "proof": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "cold_or_warm_proven",
+                    "persistence_unchanged",
+                    "desktop_stable",
+                    "no_unexpected_compute",
+                    "target_libraries_absent",
+                    "pidfd_or_start_guard",
+                    "source_hashes_verified",
+                    "environment_clean",
+                    "library_stats_match",
+                    "library_stat_ns"
+                  ],
+                  "properties": {
+                    "cold_or_warm_proven": {
+                      "type": "boolean"
+                    },
+                    "persistence_unchanged": {
+                      "type": "boolean"
+                    },
+                    "desktop_stable": {
+                      "type": "boolean"
+                    },
+                    "no_unexpected_compute": {
+                      "type": "boolean"
+                    },
+                    "target_libraries_absent": {
+                      "type": "boolean"
+                    },
+                    "pidfd_or_start_guard": {
+                      "type": "boolean"
+                    },
+                    "source_hashes_verified": {
+                      "type": "boolean"
+                    },
+                    "environment_clean": {
+                      "type": "boolean"
+                    },
+                    "library_stats_match": {
+                      "type": "boolean"
+                    },
+                    "library_stat_ns": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "limit_readback": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "memory_max_bytes",
+                    "swap_max_bytes",
+                    "members"
+                  ],
+                  "properties": {
+                    "memory_max_bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "swap_max_bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "members": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 1
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "baseline_frames": {
+              "type": "array",
+              "items": {
+                "type": "array"
+              }
+            },
+            "sampler_started_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observer_identity": {
+              "$ref": "#/$defs/identity"
+            },
+            "library_manifest": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/libraries"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "identity_raw": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/raw"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "admitted_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "replay_validation_error": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "exception_type",
+                "message"
+              ],
+              "properties": {
+                "exception_type": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "token": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$(?![\\s\\S])"
+    },
+    "libraries": {
+      "type": "object",
+      "required": [
+        "libcudart",
+        "libcublasLt",
+        "libcublas",
+        "libcuda"
+      ],
+      "properties": {
+        "libcudart": {
+          "$ref": "#/$defs/library"
+        },
+        "libcublasLt": {
+          "$ref": "#/$defs/library"
+        },
+        "libcublas": {
+          "$ref": "#/$defs/library"
+        },
+        "libcuda": {
+          "$ref": "#/$defs/library"
+        }
+      },
+      "additionalProperties": false
+    },
+    "signed_measurement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "available",
+            "value"
+          ],
+          "properties": {
+            "available": {
+              "const": true
+            },
+            "value": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/unavailable"
+        }
+      ]
+    },
+    "raw": {
+      "type": "object",
+      "required": [
+        "sequence",
+        "received_ns",
+        "raw",
+        "eligible",
+        "rejection"
+      ],
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "received_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "raw": {},
+        "eligible": {
+          "type": "boolean"
+        },
+        "rejection": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "custody": {
+      "type": "object",
+      "required": [
+        "boot",
+        "ordinal",
+        "state",
+        "boot_id",
+        "observed_ns",
+        "no_prior_experiment",
+        "previous_trial_id"
+      ],
+      "properties": {
+        "boot": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ordinal": {
+          "type": "integer",
+          "enum": [
+            1,
+            2,
+            3
+          ]
+        },
+        "state": {
+          "enum": [
+            "boot-cold",
+            "same-boot-warm"
+          ]
+        },
+        "boot_id": {
+          "$ref": "#/$defs/token"
+        },
+        "observed_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "no_prior_experiment": {
+          "type": "boolean"
+        },
+        "previous_trial_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/token"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "sample_common": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "run_id",
+        "boot_id",
+        "trial_id",
+        "sequence",
+        "sample_start_monotonic_raw_ns",
+        "sample_end_monotonic_raw_ns",
+        "previous_gap_ns",
+        "observer_pid",
+        "observer_start_ticks",
+        "observer_cgroup",
+        "worker_identity"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "decision-0009-startup/v1"
+        },
+        "run_id": {
+          "$ref": "#/$defs/token"
+        },
+        "boot_id": {
+          "$ref": "#/$defs/token"
+        },
+        "trial_id": {
+          "$ref": "#/$defs/token"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sample_start_monotonic_raw_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sample_end_monotonic_raw_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "previous_gap_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "observer_pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "observer_start_ticks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "observer_cgroup": {
+          "type": "string",
+          "minLength": 1
+        },
+        "worker_identity": {
+          "$ref": "#/$defs/identity"
+        }
+      },
+      "additionalProperties": false
+    },
+    "campaign_seal": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "run_id",
+        "event_type",
+        "trial_ids",
+        "attempt_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "decision-0009-startup/v1"
+        },
+        "run_id": {
+          "$ref": "#/$defs/token"
+        },
+        "event_type": {
+          "const": "EVIDENCE_SEALED"
+        },
+        "trial_ids": {
+          "type": "array",
+          "minItems": 12,
+          "items": {
+            "$ref": "#/$defs/token"
+          }
+        },
+        "attempt_sha256": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/hash"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
