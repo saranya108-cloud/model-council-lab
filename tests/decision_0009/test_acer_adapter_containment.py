@@ -164,7 +164,11 @@ class ContainmentTests(unittest.TestCase):
             )
         self.assertTrue(supervisor.store.execution_revoked)
         self.assertTrue(supervisor.store.publication_prohibited)
-        self.assertIn("publication-authority-failure", supervisor.store.taint)
+        # Unknown witness status is not an irreversible positive-fact trigger.
+        self.assertIsNone(supervisor.store.witness.denial(supervisor._actor))
+        supervisor.store.witness.available = True
+        with self.assertRaises(EvidenceError):
+            publisher.write(intent, b'value')
 
 
 # ---------------------------------------------------------------------------

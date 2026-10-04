@@ -1,7 +1,15 @@
 # Decision 0009 Acer adapter — offline tranche
 
-This directory implements the accepted Revision 4 contracts as deterministic
-offline models. It grants no Acer, CUDA, NVML, process, cgroup, filesystem
+**U-04 Checkpoint A implementation candidate — independent review pending.**
+Tasks 1–6 are integrated and the implementation completion gate passes.
+The nine original behavioral characterization triggers and uninterrupted
+controls pass on the final source. The fixed review package supplies the exact
+diff, source bytes, inventories and executed evidence for independent
+ACCEPT/BLOCK review. Independent acceptance and live admission have not occurred.
+
+This directory implements the accepted Revision 4 behavioral contracts and
+Revision 6 Checkpoint A foundation as deterministic offline models. It grants
+no Acer, CUDA, NVML, process, cgroup, filesystem
 publication, reboot, model, GGUF, tokenizer, inference, provider, or Tranche B
 authority. Importing these modules performs no host action and loads no vendor
 library. Production ports are deliberately absent.
@@ -18,6 +26,9 @@ the exact adapter manifest, and policy/schema digests.
   the Revision 4 state domains, authorization, activation, artifact, fencing,
   capability, custody, identity, attribution, reap/residual, evidence,
   publication, and closure contracts.
+- `authorization.py` verifies exact canonical v2 approvals and boot activations
+  against immutable offline enrollment supplied by trusted bootstrap. It issues
+  authentication results, not execution capabilities.
 - `custody.py` models an independent custodian, durable token registry,
   blocked fake workers, at-most-one creation, watchdog containment, actual
   simulated wait/reap receipts, custodian death, and a separately identified
@@ -64,13 +75,18 @@ authorization, clear taint, or grant an effect by itself.
 `authorize_and_dispatch(...)` makes one logical authorization decision across
 fresh artifact verification, current fence/session validation, transition CAS,
 single-use effect-capability consumption, continuity revalidation, and dispatch
-binding. Creation additionally requires a short-lived store-active first-dispatch
-grant bound to the current supervisor generation. The target must accept the
-exact store-registered capability while the authorization lock still protects
+binding. Creation additionally requires the original acknowledged, witnessed
+first-dispatch intent in the current incarnation. The target must accept the
+exact journal-issued capability while the authorization lock still protects
 the fence, and the capability must match the witnessed durable event, session,
 target, operation, generation, and lifecycle predecessor. CAS or verification
 failure yields no capability. A committed intent with a missing result remains
-unresolved; it is not refunded or redispatched. A known result replays only in
+unresolved; it is not refunded or redispatched. The effect order is intent,
+witnessed `EFFECT_ACCEPTED`, durable acknowledgement, independent currentness
+and artifact checks, independent initiation/observation, then versioned durable
+result. Control and publication results use the closed `EFFECT_PORT_RECEIPT`
+with original producer, acceptance, target, immutable observation and independent
+port attestation. A known result replays only in
 its current generation, while older generations have a separate read-only
 historical receipt lookup.
 Artifact substitution after verification and before dispatch records sticky
@@ -142,6 +158,8 @@ The only spawn order is:
 ```text
 SLOT_SPAWN_ELIGIBLE
 → SPAWN_INTENT_PERSISTED (durable and witnessed)
+→ EFFECT_ACCEPTED (durable, independently read back and witnessed)
+→ durable acknowledgement and independent captured-incarnation checks
 → custodian.create_once(...)
 → WORKER_CREATION_IN_PROGRESS
 ```
@@ -273,8 +291,11 @@ restoring execution rights or consumed identities.
 
 A new supervisor replays witnessed durable history to recover boot/campaign and
 attempt state, consumed slots, activation and boot identities, exact finalized
-closure candidates, validated completions, authoritative measurement window and
-epoch, taint/custody prohibitions, and unresolved spawn/release intents.
+closure candidates, validated completions, historical measurement window and
+epoch, taint/custody prohibitions, and unresolved spawn/release intents. It never
+registers historical sessions as live or resumes execution/publication/window
+authority. Complete pre-loss ORIGIN shutdown permits non-executing waiting;
+planned admission is a separate store-owned transaction protocol.
 Completion replay revalidates every retained raw, normalized, core, reap, and
 residual object before adding it to the completion index. A witnessed spawn
 intent without a resolved child remains possibly live after restart. Malformed
@@ -286,3 +307,112 @@ Production durable storage, witness independence, Chair authentication,
 custodian/survivor mechanisms, process and cgroup integration, NVML/CUDA
 attribution, immutable publication, Acer compatibility, deployment, reboot,
 model work, active characterization, and Tranche B remain outside this tranche.
+
+## U-04 Checkpoint A implementation status
+
+The governing architecture is accepted Revision 6, SHA-256
+`07247b2b053fc5dbc98f01e3388cd1f79e90b4adaf0984afb49a6ceb810bef39`.
+The authorized baseline is `m1-live-adapter-dev` at
+`8178aeb9692883caaa5e86dece5599c8ca228410`. The source of Astra's implementation
+design is planning session `01a1030d-0153-7e10-838e-5f4416b2d528`.
+
+| Task | Integrated foundation |
+|---|---|
+| 1: deterministic characterization | Original nine triggers pass; uninterrupted controls and missing-evidence negatives retained |
+| 2: v2 / OCAV | Pinned canonical authorization and activation verification integrated into fresh INIT and planned ADMIT; policy/permission and substitution negatives |
+| 3: persistence kernel | ENTRY, INIT, EXEC, RESULT, SHUTDOWN, ADMIT, HISTORY and DENY use witnessed transactions; closed writer cross-product and independently retained-byte confirmation |
+| 4: identity/reset/entry | Opaque captured actors and reconciliation bindings, exhaustive reset, historical reconstruction, evidence-derived non-live entry and eight positive-evidence denial predicates |
+| 5: durable effects | Durable acceptance, independent acknowledgement/currentness checks, independent worker/control/publication observations and closed versioned result writes; unknown outcomes never replace execution |
+| 6: Option B | Shutdown-only handoff, independent quiescence, ORIGIN logical exit, waiting proof and separate consumed activation reservation/admission with all-lower-fence acknowledgement |
+
+Final validation under Python 3.14.7 passes 250/250 full adapter tests,
+138/138 focused tests, 17/17 lower-port checks and 95/95 unchanged startup
+characterization tests. Every final run has zero failures, errors and skips,
+with matching before/after/current Python source hashes. The startup source
+and tests also match HEAD bytes. The full run includes all 119 supervisor tests.
+
+`authorization.py` performs offline trusted-enrollment verification only. It
+implements no cryptographic Chair identity, signing, or protected provisioning.
+Passing OCAV or parsing an `EFFECT_RESULT` is never an execution capability.
+The store rejects legacy append/session registration as an operational route.
+Constructors never expose execution; only complete acknowledged INIT or ADMIT
+does. Recovery publication remains unavailable. Each lower effect port checks
+the captured actor and the independent witness acknowledgement immediately
+before initiating an effect.
+
+The original 44 store fields and ten added fields are classified by
+`STORE_FIELD_DOMAINS` and `STORE_FIELD_CLASSIFICATION`. The new fields are `_current_actor`, `_entry_mode`,
+`_health`, `_pending_reset`, `_authentication_service`, and
+`_historical_producers`, `_acceptance_acks`, `_activation_authentication_service`,
+`_artifact_verifier`, and `_current_reconciler`.
+Store acknowledgement/session dictionaries are derived views. The current
+opaque session and acknowledgement registrations belong to W and are revoked
+at loss/logical exit. The root itself remains external immutable I
+configuration; `_authentication_service` is a pinned B reference to that service.
+The actual artifact-verification primitive and independent custodian are pinned
+for lower-port continuity and observation checks. Legacy identity/acceptance
+ports cannot mint execution authority. Reconciliation holds a distinct opaque
+current binding that loss/reset immediately invalidates.
+The verifier's own identity, authorization and artifact-reader references are
+pinned too. Every lower control/worker continuity check independently compares
+all four artifact digests and the verifier's complete authorization with the
+original witnessed admitted approval; a supplied old digest cannot substitute
+new execution policy bytes.
+
+Quarantine is a deny-only local diagnostic retained conservatively across reset;
+reset re-derives health from actual D/W and never repairs quarantined bytes.
+That diagnostic cannot confer permission or establish the independent permanent
+campaign-denial latch. Store field inventory records this exact reset treatment.
+
+The configured `offline-local-reader` inspector repeats verification through the
+pinned OCAV service and exposes independently verified prefix frames separately
+from untrusted raw bytes. It has no actor, generation allocation, execution or
+writer rights. Its binding models trusted local offline setup, not remote reader
+authentication. Original survivor-transfer containment validates its witnessed
+HISTORY frame and independent custodian record; a session cache has no role in
+that proof. The fuller recovery-containment interface remains Checkpoint B work.
+
+The original 85 constructor/restart sites remain individually tracked. Evidence
+and containment tests and supervisor tests have been migrated with historical
+reads, denial and uninterrupted controls. There are 92 current syntactic sites:
+84 retained originals plus eight new sites. The second legacy restart in
+`SupervisorTakeoverTests._operation_first` was consolidated into its retained
+final historical recheck; both original ordering/history purposes remain.
+All 85 original dispositions, exact old/current source and assertions, and new
+sites are recorded in the authenticated review inventory with their passing
+final-source test IDs. The supplementary independent fault-world fixture
+factory is separately recorded; it is not a runtime restart route.
+
+Fault tests cover eight commit stages across all eight transaction types, plus
+reconciliation interruption for every transaction type, retained-history
+corruption for every type, and revocation before initiation. Additional tests
+cover post-initiation loss, result acknowledgement loss, exact non-executing
+result reconciliation, independent registry loss, all eight positive latch
+triggers, unavailable evidence without latching, and failed denial mirroring.
+The focused and full runs record all 128 common cases (64 commit stages, 32 interrupted
+exact reconciliations and 32 retained-history corruption cases), with no missing
+cells. Acknowledgement/initiation/result stages are separately traced where
+effects exist; ENTRY/INIT/SHUTDOWN/ADMIT have commit and exposure stages, not
+worker creation. Every recorded subcase in the final full run passes.
+
+The serialization memo caches only a pure calculation keyed by every immutable
+envelope input; fresh retained D bytes and W receipts remain independently
+compared. Historical evidence verification uses ephemeral read-only views with
+no session, actor, grant, writer or dispatcher. Retained validated-completion
+and closure dictionaries cannot grant authority independently of D/W evidence.
+
+Recovery publication remains unavailable. Checkpoint B's remaining recovery,
+containment, and closed-writer integration and Checkpoint C's recovery-publication
+ports/continuation matrix have not begun. No live storage, Acer, model/provider,
+CUDA/NVML, process/cgroup, reboot, deployment, or Git mutation is part of this work.
+
+Temporary continuation evidence is under `/private/tmp/u04-checkpoint-a.pvjk78/`.
+The fixed independent-review package is
+`/private/tmp/u04-checkpoint-a.pvjk78/checkpoint-a-opus-review-20261003/`: exact
+accepted Revision 6 bytes/hash, Chair authorization, Astra design, complete
+tracked diff and all 13 source files, baseline red-to-green evidence, final
+commands/results, authenticated field/site inventories, A01–A18 source/test
+mapping, deterministic fault cases, and remaining B/C work. Package checksums
+bind its contents. This is an implementation candidate package, not an Opus
+acceptance. It has not been sent to Opus; staging, commit, push and B/C remain
+outside this stop boundary.

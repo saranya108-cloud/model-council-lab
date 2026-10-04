@@ -4,7 +4,7 @@ This module contains data and validation only.  It has no host, process, CUDA,
 NVML, filesystem-publication, network, or model-loading implementation.
 """
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import hashlib
 import json
 import re
@@ -14,6 +14,7 @@ from typing import Mapping, Optional, Tuple
 CORE_EXECUTION_COMMIT = "de04b26c14f7e7d60173f463e9d79f9b7134a700"
 PROVENANCE_CANONICAL_HEAD = "724700217f8d7183757768fb2a856872b64a3cf3"
 AUTHORIZATION_SCHEMA = "decision-0009-acer-authorization/v1"
+AUTHORIZATION_V2_SCHEMA = "decision-0009-acer-authorization/v2"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
@@ -150,9 +151,18 @@ class Authorization:
     expansion_authorized: bool
     tranche_b_authorized: bool
     slots: Tuple[SlotSpec, ...]
+    # None is solely the historical v1 absence marker. Every v2 field is
+    # mandatory and checked below; no v2 permissions are inferred from v1.
+    evidence_operations: Optional[tuple] = None
+    exact_byte_recovery_authorized: Optional[bool] = None
+    evidence_source_ids: Optional[tuple] = None
+    recovery_publisher_ids: Optional[tuple] = None
+    destination_rules: Optional[tuple] = None
+    object_rules: Optional[tuple] = None
+    supplement_rules: Optional[tuple] = None
 
     def __post_init__(self):
-        if self.schema_version != AUTHORIZATION_SCHEMA:
+        if self.schema_version not in (AUTHORIZATION_SCHEMA, AUTHORIZATION_V2_SCHEMA):
             raise ContractError("authorization schema")
         for name in ("authorization_id", "campaign_id", "nonce", "chair_identity",
                      "trust_domain"):
@@ -165,7 +175,8 @@ class Authorization:
         for name in ("authenticated", "offline_only", "retry_authorized",
                      "reboot_authorized", "expansion_authorized", "tranche_b_authorized"):
             _boolean(name, getattr(self, name))
-        if not self.authenticated or not self.offline_only:
+        if (not self.offline_only or
+                (self.schema_version == AUTHORIZATION_SCHEMA and not self.authenticated)):
             raise ContractError("offline authorization authentication/domain")
         if any((self.retry_authorized, self.reboot_authorized,
                 self.expansion_authorized, self.tranche_b_authorized)):
@@ -189,6 +200,424 @@ class Authorization:
                        for slot in self.slots)
         if actual != expected:
             raise ContractError("unsupported ordered matrix")
+        if self.schema_version == AUTHORIZATION_V2_SCHEMA:
+            validate_authorization_policy(self)
+        elif any(getattr(self, name) is not None for name in AUTHORIZATION_V2_FIELDS):
+            raise ContractError("v1 cannot carry v2 policy")
+
+
+AUTHORIZATION_V2_FIELDS = (
+    "evidence_operations", "exact_byte_recovery_authorized", "evidence_source_ids",
+    "recovery_publisher_ids", "destination_rules", "object_rules", "supplement_rules",
+)
+EVIDENCE_PERMISSIONS = frozenset((
+    "WRITE_EXACT", "ESTABLISH_DURABILITY", "VERIFY_EXACT", "PUBLISH_RECOVERY_SUPPLEMENT",
+))
+EVIDENCE_KINDS = frozenset((
+    "ATTEMPT_EVIDENCE", "BOOT_CLOSURE_EVIDENCE", "CAMPAIGN_EVIDENCE", "FAILURE_EVIDENCE",
+))
+SUPPLEMENT_KINDS = frozenset((
+    "VERIFIED_EFFECT_RESULT", "CONTAINMENT_EVIDENCE", "REAP_EVIDENCE",
+    "FAILURE_ENVELOPE", "PUBLICATION_READBACK",
+))
+
+
+def _logical_key(value):
+    if (type(value) is not str or not value or
+            any(ch in value for ch in ("\\", "%", "\x00", "?", "#")) or
+            any(segment in ("", ".", "..") for segment in value.split("/"))):
+        raise ContractError("noncanonical logical key")
+    return value
+
+
+@dataclass(frozen=True)
+class DestinationRule:
+    rule_id: str
+    destination_id: str
+    port_identity: str
+    namespace_prefix: str
+    durability_policy: str
+    fencing_policy: str
+
+    def __post_init__(self):
+        for name in ("rule_id", "destination_id", "port_identity"):
+            _string(name, getattr(self, name))
+        _logical_key(self.namespace_prefix)
+        if (self.durability_policy != "OBJECT_AND_NAMESPACE" or
+                self.fencing_policy != "ALL_LOWER_WRITERS"):
+            raise ContractError("destination policy")
+
+
+@dataclass(frozen=True)
+class ObjectRule:
+    rule_id: str
+    subject_id: str
+    evidence_kind: str
+    destination_id: str
+    object_key: str
+
+    def __post_init__(self):
+        for name in ("rule_id", "subject_id", "destination_id"):
+            _string(name, getattr(self, name))
+        _logical_key(self.object_key)
+        if self.evidence_kind not in EVIDENCE_KINDS:
+            raise ContractError("evidence kind")
+
+
+@dataclass(frozen=True)
+class SupplementRule:
+    rule_id: str
+    destination_id: str
+    namespace_prefix: str
+    parent_evidence_kinds: tuple
+    supplement_kinds: tuple
+    key_policy: str
+
+    def __post_init__(self):
+        _string("rule_id", self.rule_id)
+        _string("destination_id", self.destination_id)
+        _logical_key(self.namespace_prefix)
+        _closed_unique_tuple("parent kinds", self.parent_evidence_kinds, EVIDENCE_KINDS)
+        _closed_unique_tuple("supplement kinds", self.supplement_kinds, SUPPLEMENT_KINDS)
+        if self.key_policy != "RECOVERY_SUPPLEMENT_V1":
+            raise ContractError("supplement key policy")
+
+
+def _closed_unique_tuple(name, value, allowed=None):
+    _tuple(name, value)
+    if any(type(item) is not str or not TOKEN_RE.fullmatch(item) for item in value):
+        raise ContractError(name + " identities")
+    if len(set(value)) != len(value) or (allowed is not None and not set(value) <= allowed):
+        raise ContractError(name + " duplicates or unknown values")
+
+
+def validate_authorization_policy(authorization):
+    if authorization.schema_version != AUTHORIZATION_V2_SCHEMA:
+        raise ContractError("v2 policy required")
+    _closed_unique_tuple("evidence operations", authorization.evidence_operations,
+                         EVIDENCE_PERMISSIONS)
+    _boolean("exact_byte_recovery_authorized", authorization.exact_byte_recovery_authorized)
+    _closed_unique_tuple("evidence sources", authorization.evidence_source_ids)
+    _closed_unique_tuple("recovery publishers", authorization.recovery_publisher_ids)
+    all_rules = []
+    for name, expected in (("destination_rules", DestinationRule),
+                           ("object_rules", ObjectRule), ("supplement_rules", SupplementRule)):
+        rules = _tuple(name, getattr(authorization, name))
+        if any(type(rule) is not expected for rule in rules):
+            raise ContractError(name + " closed rules required")
+        all_rules.extend(rules)
+    if len({rule.rule_id for rule in all_rules}) != len(all_rules):
+        raise ContractError("duplicate policy rule ID")
+    destinations = {rule.destination_id: rule for rule in authorization.destination_rules}
+    if len(destinations) != len(authorization.destination_rules):
+        raise ContractError("ambiguous destination mapping")
+    ports = [rule.port_identity for rule in authorization.destination_rules]
+    if len(set(ports)) != len(ports):
+        raise ContractError("destination port alias")
+    keys = set()
+    subjects = {authorization.campaign_id}
+    subjects.update(slot.slot_id for slot in authorization.slots)
+    subjects.update(slot.attempt_id for slot in authorization.slots)
+    subjects.update("boot-%d" % i for i in (1, 2, 3, 4))
+    for rule in authorization.object_rules:
+        destination = destinations.get(rule.destination_id)
+        if (destination is None or rule.subject_id not in subjects or
+                not rule.object_key.startswith(destination.namespace_prefix + "/")):
+            raise ContractError("object target/subject/prefix binding")
+        pair = (rule.destination_id, rule.object_key)
+        if pair in keys:
+            raise ContractError("ambiguous object mapping")
+        keys.add(pair)
+    prefixes = []
+    for rule in authorization.supplement_rules:
+        destination = destinations.get(rule.destination_id)
+        if (destination is None or not (
+                rule.namespace_prefix == destination.namespace_prefix or
+                rule.namespace_prefix.startswith(destination.namespace_prefix + "/"))):
+            raise ContractError("supplement destination binding")
+        for dest, prefix in prefixes:
+            if dest == rule.destination_id and (prefix == rule.namespace_prefix or
+                    prefix.startswith(rule.namespace_prefix + "/") or
+                    rule.namespace_prefix.startswith(prefix + "/")):
+                raise ContractError("ambiguous supplement mapping")
+        prefixes.append((rule.destination_id, rule.namespace_prefix))
+    for dest, key in keys:
+        if any(dest == sd and key.startswith(prefix + "/recovery/")
+               for sd, prefix in prefixes):
+            raise ContractError("object/supplement key overlap")
+
+
+def canonical_authorization_bytes(authorization):
+    if type(authorization) is not Authorization or authorization.schema_version != AUTHORIZATION_V2_SCHEMA:
+        raise ContractError("canonical authorization requires v2")
+    validate_authorization_policy(authorization)
+    value = asdict(authorization)
+    value.pop("authorization_digest")
+    # The closed dataclasses above contain only str/bool/int/tuple. This walk
+    # also rejects unexpected numeric forms independently of json.dumps.
+    def validate(item):
+        if type(item) in (str, bool, int) or item is None:
+            return
+        if type(item) in (tuple, list):
+            for child in item:
+                validate(child)
+            return
+        if type(item) is dict and all(type(key) is str for key in item):
+            for child in item.values():
+                validate(child)
+            return
+        raise ContractError("noncanonical authorization value")
+    validate(value)
+    return (json.dumps(value, sort_keys=True, separators=(",", ":"),
+                       ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
+
+
+def authorization_digest(authorization):
+    return hashlib.sha256(canonical_authorization_bytes(authorization)).hexdigest()
+
+
+RECOVERY_PERMISSION_MAP = {
+    "ENSURE_EXACT_OBJECT": "WRITE_EXACT",
+    "CONTINUE_RESERVED_EXACT": "WRITE_EXACT",
+    "ESTABLISH_DURABILITY": "ESTABLISH_DURABILITY",
+    "VERIFY_EXACT_OBJECT": "VERIFY_EXACT",
+    "QUERY": "VERIFY_EXACT",
+}
+
+
+def require_recovery_permission(authorization, operation, *, supplement=False):
+    validate_authorization_policy(authorization)
+    permission = RECOVERY_PERMISSION_MAP.get(operation)
+    if (permission is None or not authorization.exact_byte_recovery_authorized or
+            permission not in authorization.evidence_operations or
+            (supplement and "PUBLISH_RECOVERY_SUPPLEMENT" not in authorization.evidence_operations)):
+        raise ContractError("recovery permission unavailable")
+    # Pure policy validation. No operational RP capability is issued here.
+
+
+@dataclass(frozen=True)
+class OfflineChairApproval:
+    chair_identity: str
+    trust_domain: str
+    store_identity: str
+    campaign_id: str
+    authorization_id: str
+    authorization_schema: str
+    canonical_authorization_bytes: bytes
+    authorization_digest: str
+
+    def __post_init__(self):
+        for name in ("chair_identity", "trust_domain", "store_identity", "campaign_id",
+                     "authorization_id"):
+            _string(name, getattr(self, name))
+        if self.authorization_schema != AUTHORIZATION_V2_SCHEMA:
+            raise ContractError("only fresh v2 enrollment")
+        raw = self.canonical_authorization_bytes
+        if type(raw) is not bytes:
+            raise ContractError("exact enrolled bytes required")
+        _string("authorization_digest", self.authorization_digest, digest=True)
+        try:
+            value = json.loads(raw)
+            # Parse the complete carrier under its actual closed schema.
+            payload = authorization_from_record(dict(value, authorization_digest=self.authorization_digest))
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ContractError("malformed enrolled authorization") from exc
+        if (canonical_authorization_bytes(payload) != raw or
+                authorization_digest(payload) != self.authorization_digest or
+                any(getattr(payload, name) != getattr(self, name)
+                    for name in ("chair_identity", "trust_domain", "campaign_id", "authorization_id"))):
+            raise ContractError("enrollment identity/bytes/digest mismatch")
+
+
+@dataclass(frozen=True)
+class OfflineChairTrustRoot:
+    root_id: str
+    root_version: int
+    trust_domain: str
+    trusted_chair_ids: tuple
+    approvals: tuple
+
+    def __post_init__(self):
+        _string("root_id", self.root_id)
+        _integer("root_version", self.root_version, minimum=1)
+        if self.trust_domain != "offline-test":
+            raise ContractError("offline trust domain")
+        _closed_unique_tuple("trusted Chairs", self.trusted_chair_ids)
+        _tuple("approvals", self.approvals)
+        identities = set()
+        for approval in self.approvals:
+            if (type(approval) is not OfflineChairApproval or
+                    approval.chair_identity not in self.trusted_chair_ids or
+                    approval.trust_domain != self.trust_domain):
+                raise ContractError("untrusted enrollment")
+            identity = (approval.store_identity, approval.campaign_id, approval.authorization_id)
+            if identity in identities:
+                raise ContractError("duplicate/conflicting enrollment")
+            identities.add(identity)
+
+
+def authorization_from_record(value):
+    """Explicit closed dispatch. Legacy bytes gain no v2 fields or permissions."""
+    if type(value) is not dict:
+        raise ContractError("authorization record")
+    version = value.get("schema_version")
+    base = set(Authorization.__dataclass_fields__) - set(AUTHORIZATION_V2_FIELDS)
+    required = base if version == AUTHORIZATION_SCHEMA else base | set(AUTHORIZATION_V2_FIELDS)
+    if version not in (AUTHORIZATION_SCHEMA, AUTHORIZATION_V2_SCHEMA) or set(value) != required:
+        raise ContractError("closed authorization schema fields")
+    record = dict(value)
+    try:
+        record["slots"] = tuple(SlotSpec(**slot) for slot in value["slots"])
+        if version == AUTHORIZATION_V2_SCHEMA:
+            for name in ("evidence_operations", "evidence_source_ids", "recovery_publisher_ids"):
+                record[name] = tuple(value[name])
+            record["destination_rules"] = tuple(DestinationRule(**r) for r in value["destination_rules"])
+            record["object_rules"] = tuple(ObjectRule(**r) for r in value["object_rules"])
+            record["supplement_rules"] = tuple(SupplementRule(
+                **dict(r, parent_evidence_kinds=tuple(r["parent_evidence_kinds"]),
+                       supplement_kinds=tuple(r["supplement_kinds"]))) for r in value["supplement_rules"])
+        return Authorization(**record)
+    except (TypeError, KeyError) as exc:
+        raise ContractError("closed authorization nested fields") from exc
+
+
+@dataclass(frozen=True)
+class JournalReference:
+    event_id: str
+    revision: int
+    payload_digest: str
+
+    def __post_init__(self):
+        _string("event_id", self.event_id)
+        _integer("revision", self.revision, minimum=1)
+        _string("payload_digest", self.payload_digest, digest=True)
+
+
+@dataclass(frozen=True)
+class ImmutableObjectReference:
+    object_id: str
+    sha256: str
+    length: int
+
+    def __post_init__(self):
+        _string("object_id", self.object_id)
+        _string("sha256", self.sha256, digest=True)
+        _integer("length", self.length)
+
+
+@dataclass(frozen=True)
+class EffectPortReceipt:
+    effect_id: str
+    acceptance_ref: JournalReference
+    target_id: str
+    original_generation: int
+    original_incarnation_id: str
+    original_session_id: str
+    original_fence: int
+    result_object: ImmutableObjectReference
+    port_attestation: str
+
+    def __post_init__(self):
+        for name in ('effect_id', 'target_id', 'original_incarnation_id', 'original_session_id'):
+            _string(name, getattr(self, name))
+        _integer('original_generation', self.original_generation, minimum=1)
+        _integer('original_fence', self.original_fence, minimum=1)
+        _string('port_attestation', self.port_attestation, digest=True)
+        if (type(self.acceptance_ref) is not JournalReference or
+                type(self.result_object) is not ImmutableObjectReference):
+            raise ContractError('nonnull exact independent port receipt references required')
+
+
+def parse_effect_port_receipt(raw):
+    try:
+        value = json.loads(raw)
+        if type(value) is not dict or set(value) != set(EffectPortReceipt.__dataclass_fields__):
+            raise ContractError('closed independent effect port receipt required')
+        value['acceptance_ref'] = JournalReference(**value['acceptance_ref'])
+        value['result_object'] = ImmutableObjectReference(**value['result_object'])
+        return EffectPortReceipt(**value)
+    except (ValueError, TypeError, KeyError) as exc:
+        raise ContractError('malformed independent effect port receipt') from exc
+
+
+@dataclass(frozen=True)
+class HistoricalEffectResultRecord:
+    """Exact legacy bytes only; never a RESULT writer or execution credential."""
+    raw_bytes: bytes
+    authorizes_execution: bool = False
+
+
+@dataclass(frozen=True)
+class U04EffectResultRecord:
+    schema_version: str
+    record_type: str
+    record_id: str
+    store_identity: str
+    authorization_digest: str
+    campaign_id: str
+    writer_generation: int
+    writer_incarnation_id: str
+    writer_session_id: str
+    writer_fence: int
+    authority_class: str
+    authorizes_execution: bool
+    acceptance_ref: JournalReference
+    effect_id: str
+    original_producer_ref: JournalReference
+    result: ImmutableObjectReference
+    result_kind: str
+    verifier_id: str
+
+    def __post_init__(self):
+        if (self.schema_version != "u04-record/v1" or self.record_type != "EFFECT_RESULT" or
+                self.authority_class != "EVIDENCE" or self.authorizes_execution is not False or
+                self.result_kind not in ("CUSTODIAN_RECEIPT", "EFFECT_PORT_RECEIPT")):
+            raise ContractError("closed U-04 result kind/schema/class")
+        for name in ("record_id", "store_identity", "campaign_id", "writer_incarnation_id",
+                     "writer_session_id", "effect_id", "verifier_id"):
+            _string(name, getattr(self, name))
+        _string("authorization_digest", self.authorization_digest, digest=True)
+        _integer("writer_generation", self.writer_generation, minimum=1)
+        _integer("writer_fence", self.writer_fence, minimum=1)
+        if (type(self.acceptance_ref) is not JournalReference or
+                type(self.original_producer_ref) is not JournalReference or
+                type(self.result) is not ImmutableObjectReference):
+            raise ContractError("nonnull exact result references required")
+
+
+def parse_effect_result_record(raw):
+    """Schema parsing alone never validates a receipt or enables a writer."""
+    if type(raw) is not bytes:
+        raise ContractError("exact result bytes required")
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ContractError("duplicate result key")
+            result[key] = value
+        return result
+    try:
+        value = json.loads(raw, object_pairs_hook=pairs,
+                           parse_constant=lambda _: (_ for _ in ()).throw(ContractError("nonfinite result")))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise ContractError("malformed result bytes") from exc
+    if type(value) is not dict or value.get("record_type") != "EFFECT_RESULT":
+        raise ContractError("not an effect result")
+    version = value.get("schema_version")
+    if version is None and "schema_version" not in value:
+        if any(name in value for name in ("acceptance_ref", "original_producer_ref",
+                                         "result_kind", "writer_incarnation_id")):
+            raise ContractError("mixed legacy/U-04 result")
+        return HistoricalEffectResultRecord(raw)
+    if version != "u04-record/v1" or set(value) != set(U04EffectResultRecord.__dataclass_fields__):
+        raise ContractError("closed explicit U-04 result schema required")
+    try:
+        return U04EffectResultRecord(**dict(value,
+            acceptance_ref=JournalReference(**value["acceptance_ref"]),
+            original_producer_ref=JournalReference(**value["original_producer_ref"]),
+            result=ImmutableObjectReference(**value["result"])))
+    except (KeyError, TypeError) as exc:
+        raise ContractError("closed exact nested result references required") from exc
 
 
 @dataclass(frozen=True)

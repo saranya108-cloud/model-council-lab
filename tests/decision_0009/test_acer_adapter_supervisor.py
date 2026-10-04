@@ -1,18 +1,397 @@
 from dataclasses import replace
+import json
 import threading
 import unittest
 
 from tools.decision_0009.acer_adapter.contracts import ContractError, CustodyError, REMOVED_STATES
 from tools.decision_0009.acer_adapter.supervisor import (
-    AuthorizationDenied, DispatchUncertain, PersistentSupervisor,
+    AuthorizationDenied, DispatchUncertain, PersistentSupervisor, Quarantined,
     _canonical, _sha, authorize_and_dispatch,
 )
 from tools.decision_0009.startup_characterization import policy as core_policy
 from acer_adapter_fakes import (
     RecordingDispatch, activation, complete_boot, core_attempt_bytes, digest,
     local_attempt_evidence, make_supervisor, record_all_local_attempts,
-    residual_observations, session,
+    residual_observations, session, u04_authorization, offline_chair_service, offline_activation_service, inject_untrusted_record,
 )
+
+
+class U04BaselineCharacterizationTests(unittest.TestCase):
+    """Revision 6 oracles exercised through the original public seams.
+
+    Keep these triggers when migrating fixtures: a constructor, crash callback,
+    or historical label must never manufacture authority.
+    """
+
+    def test_u04_unplanned_restart_cannot_create_worker(self):
+        original, _, custodian = make_supervisor()
+        original.store.crash()
+        restarted = _restart(original)
+        self.assertEqual(original.store.witness.denial(restarted._actor)[0], 'UNFINISHED_BOOT_LOSS')
+        with self.assertRaises(AuthorizationDenied):
+            restarted.make_slot_eligible("slot-1-1")
+        self.assertEqual(custodian.underlying_create_count_for_all(), 0)
+
+    def test_u04_history_never_registers_live_sessions(self):
+        original, _, _ = make_supervisor()
+        original.store.crash()
+        restarted = _restart(original)
+        self.assertFalse(any(item.execution_live
+                             for item in restarted.store._sessions.values()))
+
+    def test_u04_effect_acceptance_requires_committed_frame(self):
+        original, _, custodian = make_supervisor()
+        original.make_slot_eligible("slot-1-1")
+        observed = []
+        accept = original.store.accept_effect
+
+        def inspect_acceptance(capability):
+            result = accept(capability)
+            if capability.operation == "blocked-create":
+                observed.append(any(
+                    event.get("record_type") == "EFFECT_ACCEPTED" and
+                    event.get("effect_id") == capability.effect_id
+                    for event in original.store.events))
+            return result
+
+        original.store.accept_effect = inspect_acceptance
+        original.spawn_worker("slot-1-1", digest("launch"))
+        self.assertEqual(custodian.underlying_create_count_for_all(), 1)
+        self.assertEqual(observed, [True])
+
+    def test_u04_handoff_loss_cannot_activate_next_boot(self):
+        original, _, custodian = make_supervisor()
+        complete_boot(original)
+        predecessor = original.predecessor_closure_digest
+        original.begin_boot_handoff(2)
+        original.store.crash()
+        restarted = _restart(original)
+        with self.assertRaises(AuthorizationDenied):
+            restarted.activate_next_boot(activation(2, "boot-2", predecessor))
+        self.assertEqual(original.store.witness.denial(restarted._actor)[0], 'UNPLANNED_HANDOFF_LOSS')
+        self.assertEqual(custodian.underlying_create_count_for_all(), 3)
+
+    def test_u04_restart_cannot_issue_normal_publication_grants(self):
+        from tools.decision_0009.acer_adapter.evidence import ImmutablePublication
+        original, _, _ = make_supervisor()
+        original.store.crash()
+        restarted = _restart(original)
+        publisher = ImmutablePublication(restarted)
+        with self.assertRaises(AuthorizationDenied):
+            publisher.intent("offline-destination", "evidence", b"exact evidence\n")
+
+    def test_u04_restart_cannot_restore_window_authority(self):
+        original, _, _ = make_supervisor()
+        original.set_measurement_window("DWELL")
+        original.set_measurement_window("OUTSIDE_MEASURED_WINDOWS")
+        original.store.crash()
+        restarted = _restart(original)
+        self.assertTrue(restarted.store.publication_prohibited)
+        with self.assertRaises(AuthorizationDenied):
+            restarted.set_measurement_window("DWELL")
+
+    def test_u04_same_thread_crash_revokes_interrupted_stack(self):
+        original, _, custodian = make_supervisor()
+        original.make_slot_eligible("slot-1-1")
+        with self.assertRaises(AuthorizationDenied):
+            original.spawn_worker("slot-1-1", digest("launch"),
+                                  interlock=original.store.crash)
+        self.assertEqual(custodian.underlying_create_count_for_all(), 0)
+
+    def test_u04_uninterrupted_worker_and_publication_positive_control(self):
+        from tools.decision_0009.acer_adapter.evidence import ImmutablePublication
+        original, _, custodian = make_supervisor()
+        original.make_slot_eligible("slot-1-1")
+        self.assertEqual(original.spawn_worker("slot-1-1", digest("launch")).status,
+                         "BLOCKED")
+        publisher = ImmutablePublication(original)
+        payload = b"exact evidence\n"
+        intent = publisher.intent("offline-destination", "evidence", payload)
+        publisher.exclusive_create(intent)
+        publisher.write_durable(intent, payload)
+        self.assertIsNotNone(publisher.verify(intent))
+        self.assertEqual(custodian.underlying_create_count_for_all(), 1)
+
+
+class U04ShutdownAdmissionFaultMatrixTests(unittest.TestCase):
+    def test_admission_input_negatives_leave_original_waiting_unconsumed(self):
+        from dataclasses import replace
+        from acer_adapter_fakes import independent_fault_world
+        from tools.decision_0009.acer_adapter.supervisor import StoreError
+        seed, _, _ = make_supervisor()
+        complete_boot(seed)
+        predecessor = seed.predecessor_closure_digest
+        seed.begin_boot_handoff(2)
+        seed.commit_planned_shutdown()
+        genuine = activation(2, 'boot-2', predecessor)
+        changes = {
+            'ordinal': {'boot_ordinal': 3}, 'reused-boot': {'observed_boot_id': 'boot-1'},
+            'chair': {'chair_identity': 'untrusted-chair'}, 'authorization': {'authorization_digest': 'f' * 64},
+            'predecessor': {'predecessor_closure_digest': 'e' * 64},
+            'activation-replay': {'activation_id': 'activation-1'},
+            'unenrolled-activation': {'activation_id': 'unenrolled-activation'},
+            'unenrolled-boot': {'observed_boot_id': 'unenrolled-boot'},
+        }
+        for condition, mutation in changes.items():
+            with self.subTest(condition=condition):
+                world = independent_fault_world(seed)
+                store, witness = world.store, world.store.witness
+                before = (store.revision, witness.high_generation, witness.high_fence)
+                with self.assertRaises((StoreError, ContractError)):
+                    store.admit_next_boot(world.authorization, replace(genuine, **mutation), 'new-controller')
+                self.assertEqual((store.revision, witness.high_generation, witness.high_fence), before)
+                self.assertFalse(store.is_consumed('boot_activation', genuine.activation_id))
+                self.assertIsNone(witness.denial(world._actor))
+                self.assertEqual(store.waiting_shutdown(world.authorization)['event']['next_ordinal'], 2)
+                self.assertEqual(world.custodian.underlying_create_count_for_all(), 3)
+        for unavailable in ('witness', 'custodian'):
+            with self.subTest(unavailable=unavailable):
+                world = independent_fault_world(seed)
+                target = world.store.witness if unavailable == 'witness' else world.custodian
+                attribute = 'available' if unavailable == 'witness' else 'alive'
+                setattr(target, attribute, False)
+                with self.assertRaises((StoreError, ContractError)):
+                    world.store.admit_next_boot(world.authorization, genuine, 'new-controller')
+                self.assertIsNone(world.store.witness.denial(world._actor))
+                setattr(target, attribute, True)
+                self.assertEqual(world.store.waiting_shutdown(world.authorization)['event']['next_ordinal'], 2)
+        positive = independent_fault_world(seed)
+        actor, session = positive.store.admit_next_boot(positive.authorization, genuine, 'new-controller')
+        self.assertEqual(actor.mode, 'LIVE')
+        self.assertIs(positive.store.actor_for_session(session), actor)
+        self.assertTrue(positive.store.is_consumed('boot_activation', genuine.activation_id))
+        self.assertEqual(positive.custodian._revoked_through, session.fence_epoch - 1)
+        self.assertEqual(positive.custodian.underlying_create_count_for_all(), 3)
+
+    def test_failure_after_activation_reservation_denies_before_any_repair_or_restart(self):
+        from dataclasses import replace
+        from tools.decision_0009.acer_adapter.supervisor import StoreError
+        supervisor, _, custodian = make_supervisor()
+        complete_boot(supervisor)
+        predecessor = supervisor.predecessor_closure_digest
+        supervisor.begin_boot_handoff(2)
+        supervisor.commit_planned_shutdown()
+        store = supervisor.store
+        revoke = custodian.revoke_all_lower_fences
+        def incomplete_lower_ack(actor):
+            return replace(revoke(actor), revoked_fences=())
+        custodian.revoke_all_lower_fences = incomplete_lower_ack
+        with self.assertRaises((StoreError, CustodyError)):
+            supervisor.activate_next_boot(activation(2, 'boot-2', predecessor))
+        self.assertTrue(any(e.get('record_type') == 'ACTIVATION_RESERVED' for e in store.events))
+        self.assertFalse(any(e.get('record_type') == 'ACTIVATION_ADMITTED' for e in store.events))
+        self.assertIsNone(store._current_actor)
+        self.assertEqual(next(iter(store.witness._denials.values()))[0], 'INTERRUPTED_ADMISSION')
+        self.assertEqual(custodian.underlying_create_count_for_all(), 3)
+        with self.assertRaises((StoreError, CustodyError)):
+            store.waiting_shutdown(supervisor.authorization)
+
+    def test_shutdown_and_activation_commit_windows(self):
+        from acer_adapter_fakes import independent_fault_world
+        from test_acer_adapter_custody import U04_COMMIT_STAGES
+        from tools.decision_0009.acer_adapter.supervisor import StoreError
+        seed, _, _ = make_supervisor()
+        complete_boot(seed)
+        predecessor = seed.predecessor_closure_digest
+        seed.begin_boot_handoff(2)
+        shutdown_seed = independent_fault_world(seed)
+        shutdown_seed.commit_planned_shutdown()
+        for transaction in ('shutdown', 'reservation', 'admission'):
+            for stage in U04_COMMIT_STAGES:
+                with self.subTest(transaction=transaction, stage=stage):
+                    supervisor = independent_fault_world(seed if transaction == 'shutdown' else shutdown_seed)
+                    store = supervisor.store
+                    original_actor = store._current_actor
+                    before_count = supervisor.custodian.underlying_create_count_for_all()
+                    with self.assertRaises((StoreError, CustodyError)):
+                        if transaction == 'shutdown':
+                            supervisor.commit_planned_shutdown(fault=stage)
+                        else:
+                            store.admit_next_boot(supervisor.authorization,
+                                activation(2, 'boot-2', predecessor), 'supervisor-2', **{
+                                    ('reservation_fault' if transaction == 'reservation' else 'admission_fault'): stage})
+                    self.assertEqual(supervisor.custodian.underlying_create_count_for_all(), before_count)
+                    self.assertFalse(store._supervisor_ready and store._current_actor is not None and
+                                     store._current_actor.mode == 'LIVE')
+                    if transaction == 'shutdown' and stage == 'commit_before_ack':
+                        self.assertIsNone(store._current_actor)
+                        self.assertEqual(store.waiting_shutdown(supervisor.authorization)['event']['next_ordinal'], 2)
+                        # Exact successful logical exit remains evidence when
+                        # the original response or a subsequent read is lost.
+                        original_read = store.read_verified
+                        def unreadable(*args, **kwargs):
+                            raise StoreError('temporarily unreadable original shutdown')
+                        store.read_verified = unreadable
+                        with self.assertRaises(StoreError):
+                            store.waiting_shutdown(supervisor.authorization)
+                        self.assertIsNone(store.witness.denial(original_actor))
+                        del store.read_verified
+                        self.assertEqual(store.waiting_shutdown(supervisor.authorization)['event']['next_ordinal'], 2)
+                    elif transaction == 'reservation' and stage == 'before_reservation':
+                        # No activation reservation exists at this deterministic
+                        # pre-reservation seam. The old shutdown stays evidence;
+                        # the pending actor still exposes no execution authority.
+                        self.assertEqual(store.waiting_shutdown(supervisor.authorization)['event']['next_ordinal'], 2)
+                    else:
+                        with self.assertRaises((StoreError, CustodyError)):
+                            store.waiting_shutdown(supervisor.authorization)
+                    if stage in ('frame_before_readback', 'validated_before_commit'):
+                        frame = store._durable[-1]
+                        exact = frame['bytes']
+                        for interrupt in ('before_commit', 'lost_ack'):
+                            with self.subTest(reconciliation=interrupt), self.assertRaises(StoreError):
+                                store.reconcile_pending(store._authentication_service, supervisor.authorization,
+                                                        fault=interrupt)
+                        store.reconcile_pending(store._authentication_service, supervisor.authorization)
+                        self.assertEqual(frame['bytes'], exact)
+                        self.assertEqual(store.witness.query_transaction(frame['event_id'])[1].completion_mode,
+                                         'RECOVERY_RECONCILE')
+                        self.assertEqual(next(iter(store.witness._denials.values()))[0],
+                            'SHUTDOWN_PENDING_AT_LOSS' if transaction == 'shutdown' else 'INTERRUPTED_ADMISSION')
+                        with self.assertRaises((StoreError, CustodyError)):
+                            store.waiting_shutdown(supervisor.authorization)
+                    if transaction == 'shutdown' and stage == 'commit_before_ack':
+                        store.reset_volatile()
+                        self.assertEqual(store.waiting_shutdown(supervisor.authorization)['event']['next_ordinal'], 2)
+                    with self.assertRaises((StoreError, CustodyError)):
+                        store.require_actor(original_actor)
+
+
+class U04OperationalKernelTests(unittest.TestCase):
+    def test_inner_verification_root_cannot_substitute_admitted_artifact_policy(self):
+        import hashlib
+        supervisor, artifacts, custodian = make_supervisor()
+        store, verifier = supervisor.store, supervisor.verifier
+        original_authorization = supervisor.authorization
+        artifacts.substitute('policy')
+        substitute = replace(original_authorization,
+            policy_digest=hashlib.sha256(artifacts.values['policy']).hexdigest())
+        # Simulate corruption inside the pinned service independently of the
+        # public reference guard. The lower store must still bind the original
+        # admitted complete authorization, not the service's changed label.
+        verifier.__dict__['authorization'] = substitute
+        before = (store.revision, dict(custodian._control_counts))
+        with self.assertRaises(AuthorizationDenied):
+            supervisor.make_slot_eligible('slot-1-1')
+        self.assertEqual(custodian._control_counts, before[1])
+        self.assertFalse(any(e.get('state') == 'SLOT_SPAWN_ELIGIBLE' for e in store.events))
+        self.assertTrue(all(f['envelope'].boundary in ('HISTORY', 'DENY') and
+                            f['event']['authorizes_execution'] is False
+                            for f in store._durable[before[0]:]))
+        self.assertEqual(custodian.underlying_create_count_for_all(), 0)
+
+        positive, _, original_custodian = make_supervisor()
+        for field, value in (('authorization', substitute), ('identity', 'changed-verifier'),
+                             ('artifact_reader', lambda: {})):
+            with self.subTest(field=field), self.assertRaises(AuthorizationDenied):
+                setattr(positive.verifier, field, value)
+        positive.make_slot_eligible('slot-1-1')
+        positive.spawn_worker('slot-1-1', digest('launch'))
+        self.assertEqual(original_custodian.underlying_create_count_for_all(), 1)
+
+    def test_independent_lifecycle_record_rejects_caller_process_identity(self):
+        supervisor, _, custodian = make_supervisor()
+        supervisor.make_slot_eligible('slot-1-1')
+        supervisor.spawn_worker('slot-1-1', digest('launch'))
+        commit = supervisor.store._commit_u04
+        def substitute(actor, boundary, event, **kwargs):
+            if event.get('operation') == 'worker-lifecycle' and event.get('state') == 'WORKER_IDENTITY_ESTABLISHED':
+                event = dict(event, host_pid=999999)
+            return commit(actor, boundary, event, **kwargs)
+        supervisor.store._commit_u04 = substitute
+        with self.assertRaises(AuthorizationDenied):
+            supervisor.complete_worker_lifecycle('slot-1-1')
+        self.assertFalse(any(e.get('state') == 'WORKER_IDENTITY_ESTABLISHED'
+                             for e in supervisor.store.events))
+        self.assertEqual(custodian.underlying_create_count_for_all(), 1)
+
+    def test_independent_worker_record_rejects_forged_custodian_receipt(self):
+        supervisor, _, custodian = make_supervisor()
+        supervisor.make_slot_eligible('slot-1-1')
+        commit = supervisor.store._commit_u04
+        def substitute(actor, boundary, event, **kwargs):
+            if event.get('operation') == 'record-worker-creation':
+                event = dict(event, custodian_receipt='invented-receipt')
+            return commit(actor, boundary, event, **kwargs)
+        supervisor.store._commit_u04 = substitute
+        with self.assertRaises(AuthorizationDenied):
+            supervisor.spawn_worker('slot-1-1', digest('launch'))
+        self.assertEqual(custodian.underlying_create_count_for_all(), 1)
+        self.assertFalse(any(e.get('state') == 'WORKER_CREATION_IN_PROGRESS'
+                             for e in supervisor.store.events))
+
+    def test_uninterrupted_creation_ignores_poisoned_legacy_views(self):
+        supervisor, _, custodian = make_supervisor()
+        supervisor.make_slot_eligible('slot-1-1')
+        store = supervisor.store
+        create = custodian.create_once
+        def poisoned_views(token, launch_spec_digest, capability, binding, **kwargs):
+            identity = capability.effect_id
+            store._sessions.clear()
+            store._slot_grants[token.slot_id] = 'forged'
+            store._effect_capabilities[identity] = 'forged'
+            store._effect_status[identity] = 'KNOWN_RESULT'
+            store._effect_results[identity] = 'forged'
+            store._active_creation_grants.clear()
+            store._accepted_effects.add(identity)
+            store._acceptance_acks[identity] = 'forged'
+            return create(token, launch_spec_digest, capability, binding, **kwargs)
+        custodian.create_once = poisoned_views
+        receipt = supervisor.spawn_worker('slot-1-1', digest('launch'))
+        self.assertEqual(receipt.status, 'BLOCKED')
+        self.assertEqual(custodian.underlying_create_count_for_all(), 1)
+        self.assertEqual(store.effect_acceptance_count('spawn-intent-slot-1-1'), 1)
+        self.assertEqual(store.effect_result('spawn-intent-slot-1-1').receipt, receipt)
+
+    def test_option_b_shutdown_is_required_before_separate_admission(self):
+        supervisor, _, custodian = make_supervisor()
+        complete_boot(supervisor)
+        predecessor = supervisor.predecessor_closure_digest
+        supervisor.begin_boot_handoff(2)
+        with self.assertRaises(AuthorizationDenied):
+            supervisor.activate_next_boot(activation(2, 'boot-2', predecessor))
+        self.assertTrue(hasattr(supervisor, 'commit_planned_shutdown'))
+        supervisor.commit_planned_shutdown()
+        old = supervisor._actor
+        supervisor.activate_next_boot(activation(2, 'boot-2', predecessor))
+        self.assertEqual(supervisor.current_boot_ordinal, 2)
+        self.assertTrue(supervisor.session.execution_live)
+        self.assertIsNot(supervisor._actor, old)
+        self.assertEqual(custodian.underlying_create_count_for_all(), 3)
+
+    def test_fresh_v2_admission_is_witnessed_and_constructor_is_nonexecuting(self):
+        from acer_adapter_fakes import MutableArtifacts, offline_chair_service, offline_activation_service, u04_authorization
+        from tools.decision_0009.acer_adapter.custody import OfflineCustodian
+        from tools.decision_0009.acer_adapter.supervisor import (
+            ArtifactVerificationPrimitive, OfflineDurableStore, OfflineWitness)
+        artifacts = MutableArtifacts()
+        auth = u04_authorization(artifacts)
+        store = OfflineDurableStore('store-1', OfflineWitness('witness-1'),
+                                    chair_verifier=offline_chair_service(auth),
+                                    activation_verifier=offline_activation_service(auth))
+        supervisor = PersistentSupervisor(store, ArtifactVerificationPrimitive(
+            'offline-root', auth, artifacts.read), OfflineCustodian('custodian-1'),
+            auth, session())
+        self.assertFalse(supervisor.session.execution_live)
+        supervisor.admit_campaign(replace(activation(), authorization_digest=auth.authorization_digest))
+        self.assertTrue(supervisor.session.execution_live)
+        self.assertEqual(store._current_actor.mode, 'LIVE')
+        self.assertTrue(all('envelope' in frame for frame in store._durable))
+        self.assertEqual(store.witness.high_revision, store.revision)
+
+    def test_poisoned_legacy_acceptance_and_session_views_cannot_create(self):
+        supervisor, _, custodian = make_supervisor()
+        supervisor.make_slot_eligible('slot-1-1')
+        supervisor.spawn_worker('slot-1-1', digest('launch'), fault=None)
+        supervisor.store.crash()
+        supervisor.store._supervisor_ready = True
+        supervisor.store._execution_revoked = False
+        supervisor.store.containment_only = False
+        supervisor.store._sessions[supervisor.session.session_id] = supervisor.session
+        with self.assertRaises(AuthorizationDenied):
+            supervisor.store.effect_intent(supervisor.store.effect_capability('spawn-intent-slot-1-1'))
+        self.assertEqual(custodian.underlying_create_count_for_all(), 1)
+
 
 
 class SupervisorTests(unittest.TestCase):
@@ -75,6 +454,8 @@ class SupervisorTests(unittest.TestCase):
         restarted = PersistentSupervisor(
             supervisor.store, supervisor.verifier, custodian,
             supervisor.authorization, supervisor.session)
+        # Construction records a non-executing ENTRY and may mirror proven loss.
+        before_revision = supervisor.store.revision
         with self.assertRaises(CustodyError):
             custodian.create_once(token, token.launch_spec_digest, capability,
                                   capability.artifact_binding)
@@ -132,6 +513,7 @@ class SupervisorTests(unittest.TestCase):
         for next_boot in (2, 3, 4):
             closure = complete_boot(supervisor)
             supervisor.begin_boot_handoff(next_boot)
+            supervisor.commit_planned_shutdown()
             activation_record = activation(
                 next_boot, "boot-%d" % next_boot, closure,
                 activation_id="fresh-activation-%d" % next_boot)
@@ -156,6 +538,7 @@ class SupervisorTests(unittest.TestCase):
             boot_digests.append(complete_boot(supervisor))
             if boot < 4:
                 supervisor.begin_boot_handoff(boot + 1)
+                supervisor.commit_planned_shutdown()
                 supervisor.activate_next_boot(activation(
                     boot + 1, "boot-%d" % (boot + 1), boot_digests[-1],
                     activation_id="campaign-activation-%d" % (boot + 1)))
@@ -191,6 +574,7 @@ class SupervisorTests(unittest.TestCase):
         closure = complete_boot(supervisor)
         prior_creates = supervisor.custodian.underlying_create_count_for_all()
         supervisor.begin_boot_handoff(2)
+        supervisor.commit_planned_shutdown()
         supervisor.activate_next_boot(activation(2, "boot-2", closure))
         supervisor.establish_boot_custody("custody-proof-2", True, True)
         supervisor.complete_boot_custody()
@@ -206,6 +590,7 @@ class SupervisorTests(unittest.TestCase):
             supervisor.admit_campaign(activation())
         closure = complete_boot(supervisor)
         supervisor.begin_boot_handoff(2)
+        supervisor.commit_planned_shutdown()
         with self.assertRaises(AuthorizationDenied):
             supervisor.activate_next_boot(activation(3, "boot-2", closure))
         supervisor.store.acquire_fence("new-owner")
@@ -227,7 +612,7 @@ class SupervisorTests(unittest.TestCase):
             supervisor.make_slot_eligible("slot-1-2")
         supervisor, _, _ = self.make_supervisor()
         record_all_local_attempts(supervisor)
-        supervisor.store.add_taint("late-contradiction")
+        supervisor.record_failure("late-contradiction", b"observed contradiction")
         with self.assertRaises(AuthorizationDenied):
             supervisor.make_slot_eligible("slot-1-2")
         supervisor, _, _ = self.make_supervisor()
@@ -272,7 +657,7 @@ class SupervisorTests(unittest.TestCase):
             supervisor, _, _ = self.make_supervisor()
             candidate_session = supervisor.session
             if mutation == "taint":
-                supervisor.store.add_taint("direct-dispatch-prohibited")
+                supervisor.record_failure("direct-dispatch-prohibited", b"explicit failure")
             else:
                 candidate_session = session(supervisor.session.fence_epoch)
                 candidate_session = replace(candidate_session, session_id="unregistered-session")
@@ -374,6 +759,7 @@ class SupervisorTests(unittest.TestCase):
         supervisor, _, _ = self.make_supervisor()
         closure = complete_boot(supervisor)
         supervisor.begin_boot_handoff(2)
+        supervisor.commit_planned_shutdown()
         with self.assertRaises(AuthorizationDenied):
             supervisor.activate_next_boot(activation(2, "boot-1", closure,
                                                       activation_id="fresh-id"))
@@ -502,7 +888,7 @@ class SupervisorTests(unittest.TestCase):
         supervisor.make_slot_eligible(slot.slot_id)
         supervisor.spawn_worker(slot.slot_id, digest("launch"))
         reap = supervisor.complete_worker_lifecycle(slot.slot_id)
-        unrelated_digest = supervisor.store.put_object("unrelated-json", b"{}")
+        unrelated_digest = supervisor.store.put_object("unrelated-json", b"{}", actor=supervisor._actor)
         forged = {
             "state": "ATTEMPT_COMPLETE", "state_domain": "attempt",
             "slot_id": slot.slot_id, "attempt_id": "attempt-unrelated",
@@ -644,6 +1030,7 @@ class SupervisorTests(unittest.TestCase):
         supervisor, _, custodian = self.make_supervisor()
         closure = complete_boot(supervisor)
         supervisor.begin_boot_handoff(2)
+        supervisor.commit_planned_shutdown()
         supervisor.activate_next_boot(activation(2, "boot-2", closure))
         supervisor.establish_boot_custody("custody-proof-2", True, True)
         supervisor.complete_boot_custody()
@@ -667,6 +1054,7 @@ class SupervisorTests(unittest.TestCase):
         closure = complete_boot(supervisor)
         boot_one_receipt = supervisor.lookup_historical_spawn_receipt("slot-1-1")
         supervisor.begin_boot_handoff(2)
+        supervisor.commit_planned_shutdown()
         supervisor.activate_next_boot(activation(2, "boot-2", closure))
         supervisor.establish_boot_custody("custody-proof-2", True, True)
         supervisor.complete_boot_custody()
@@ -738,7 +1126,7 @@ def _append_unprovenanced(store, fence_epoch, event_id, event):
     record never carries window or publication operation provenance."""
     record = dict(event)
     record["authorizes_execution"] = False
-    return store._append_control(store.revision, fence_epoch, event_id, record)
+    return inject_untrusted_record(store, fence_epoch, event_id, record)
 
 
 def _generic(supervisor, state, suffix, event=None, dispatcher=None, sess=None):
@@ -772,8 +1160,7 @@ def _plant(supervisor, state, suffix, extra=None, operation="append-transition",
         "dispatch_resolved": False,
         "consumption": {"kind": "effect", "identity": suffix},
     })
-    return supervisor.store._append_control(
-        supervisor.store.revision, sess.fence_epoch, "event-" + suffix, event)
+    return inject_untrusted_record(supervisor.store, sess.fence_epoch, 'event-' + suffix, event)
 
 
 def _restart(supervisor):
@@ -865,11 +1252,13 @@ class ReviewBlockerRegressionTests(unittest.TestCase):
                 self.assertTrue(restarted.store.publication_prohibited)
                 with self.assertRaises(AuthorizationDenied):
                     restarted.begin_boot_handoff(2)
-                with self.assertRaises(AuthorizationDenied):
+                    restarted.commit_planned_shutdown()
+                with self.assertRaises(Quarantined):
                     restarted.activate_next_boot(activation(
                         2, "boot-2", receipt.event_digest,
                         activation_id="forged-activation-2"))
-                self.assertEqual(restarted.current_boot_ordinal, 1)
+                self.assertEqual(restarted.store.health, "QUARANTINED")
+                self.assertFalse(restarted.session.execution_live)
                 self.assertNotIn("forged-activation-2", restarted.activation_ids)
 
     def test_generic_dispatcher_cannot_forge_campaign_closure_or_completion(self):
@@ -941,7 +1330,9 @@ class ReviewBlockerRegressionTests(unittest.TestCase):
         _generic(supervisor, "WORKER_IDENTITY_ESTABLISHED", "observed-identity",
                  {"slot_id": "slot-1-1", "spawn_token": token.token_id,
                   "host_pid": 10001, "start_ticks": 50001})
-        stored = supervisor.store.events[-1]
+        stored = next(event for event in supervisor.store.events
+                      if event.get('effect_id') == 'observed-identity' and
+                      event.get('state') == 'WORKER_IDENTITY_ESTABLISHED')
         self.assertEqual(stored["state"], "WORKER_IDENTITY_ESTABLISHED")
         self.assertEqual(stored["operation"], "append-transition")
         self.assertNotIn("record_type", stored)
@@ -1002,9 +1393,8 @@ class ReviewBlockerRegressionTests(unittest.TestCase):
             _plant(supervisor, "WORKER_IDENTITY_ESTABLISHED", "window-smuggle", smuggle)
         restarted = _restart(supervisor)
         self.assertNotEqual(restarted.current_window, "OUTSIDE_MEASURED_WINDOWS")
-        reopened = ImmutablePublication(restarted)
         with self.assertRaises(EvidenceError):
-            reopened.exclusive_create(intent)
+            ImmutablePublication(restarted).exclusive_create(intent)
 
     def test_smuggled_boot_activation_history_is_not_consumed_on_restart(self):
         supervisor, _, _ = make_supervisor()
@@ -1021,8 +1411,8 @@ class ReviewBlockerRegressionTests(unittest.TestCase):
             _plant(supervisor, "WORKER_IDENTITY_ESTABLISHED", "activation-smuggle",
                    smuggle)
         restarted = _restart(supervisor)
-        self.assertEqual(restarted.current_boot_ordinal, 1)
-        self.assertEqual(restarted.current_boot_id, "boot-1")
+        self.assertEqual(restarted.store.health, "QUARANTINED")
+        self.assertFalse(restarted.session.execution_live)
         self.assertNotIn("smuggled-activation", restarted.activation_ids)
         self.assertTrue(restarted.store.execution_revoked)
         with self.assertRaises(AuthorizationDenied):
@@ -1041,7 +1431,9 @@ class ReviewBlockerRegressionTests(unittest.TestCase):
             with self.subTest(index=index), self.assertRaises(StoreError):
                 supervisor.store.append_nonauthorizing(
                     supervisor.session.fence_epoch, "nonauth-reserved-%d" % index, event)
-        supervisor.store.append_nonauthorizing(
+        # A legacy diagnostic writer cannot mutate the single U-04 journal.
+        with self.assertRaises(AuthorizationDenied):
+            supervisor.store.append_nonauthorizing(
             supervisor.session.fence_epoch, "nonauth-lookalike",
             {"record_type": "FORENSIC_NOTE", "window": "OUTSIDE_MEASURED_WINDOWS",
              "window_epoch": 99, "activation_id": "lookalike",
@@ -1101,10 +1493,12 @@ class ReviewBlockerRegressionTests(unittest.TestCase):
                         "predecessor_slot_id": None,
                         "predecessor_completion_digest": None},
                        operation="make-slot-eligible")
-                supervisor.store.consume("slot", "slot-1-1")
+                # Poisoning an old consumption view cannot provenance the planted frame.
+                supervisor.store._consumed.add(("slot", "slot-1-1"))
                 supervisor = _restart(supervisor)
+                boot_id = "boot-1"  # immutable original identity, never inspector authority
             with self.subTest(case=case):
-                with self.assertRaises((AuthorizationDenied, CustodyError)):
+                with self.assertRaises((StoreError, CustodyError)):
                     _direct_create(supervisor, target_slot, boot_id=boot_id)
                 self.assertEqual(custodian.underlying_create_count_for_all(), 0)
                 if case == "wrong-boot":
@@ -1112,7 +1506,7 @@ class ReviewBlockerRegressionTests(unittest.TestCase):
                     supervisor.spawn_worker(target_slot, digest("launch"))
                     self.assertEqual(custodian.underlying_create_count_for_all(), 1)
                     continue
-                with self.assertRaises(AuthorizationDenied):
+                with self.assertRaises(StoreError):
                     supervisor.spawn_worker(target_slot, digest("launch"))
                 self.assertEqual(custodian.underlying_create_count_for_all(), 0)
 
@@ -1176,12 +1570,14 @@ class ReviewBlockerRegressionTests(unittest.TestCase):
         restarted = _restart(supervisor)
         self.assertTrue(restarted.store.execution_revoked)
         self.assertTrue(restarted.store.publication_prohibited)
-        self.assertEqual(restarted.current_boot_ordinal, 1)
+        self.assertEqual(restarted.store.health, "QUARANTINED")
+        self.assertFalse(restarted.session.execution_live)
 
     def test_reused_boot_id_is_rejected_before_a_new_fence_is_taken(self):
         supervisor, _, _ = make_supervisor()
         closure = complete_boot(supervisor)
         supervisor.begin_boot_handoff(2)
+        supervisor.commit_planned_shutdown()
         high_fence = supervisor.store.witness.high_fence
         with self.assertRaises(AuthorizationDenied):
             supervisor.activate_next_boot(activation(2, "boot-1", closure,
@@ -1256,9 +1652,10 @@ def _closure_values(candidate):
 
 def _supervisor_without_boot_custody():
     artifacts = MutableArtifacts()
-    auth = authorization(artifacts)
-    store = OfflineDurableStore("store-1", OfflineWitness("witness-1"))
-    fence = store.acquire_fence("supervisor-1")
+    auth = u04_authorization(artifacts)
+    store = OfflineDurableStore("store-1", OfflineWitness("witness-1"),
+        chair_verifier=offline_chair_service(auth), activation_verifier=offline_activation_service(auth))
+    fence = 1
     verifier = ArtifactVerificationPrimitive("offline-root", auth, artifacts.read)
     custodian = OfflineCustodian("custodian-1")
     supervisor = PersistentSupervisor(store, verifier, custodian, auth, session(fence))
@@ -1325,12 +1722,17 @@ class SolSixBootClosureOrderingTests(unittest.TestCase):
             supervisor.complete_boot(candidate, early)
         self.assertEqual(_states(supervisor, "BOOT_COMPLETE"), [])
         self.assertIsNone(supervisor.store.validated_boot_closure(1))
+        from acer_adapter_fakes import independent_fault_world
+        live_seed = independent_fault_world(supervisor)
         restarted = _restart(supervisor)
         self.assertNotEqual(restarted.boot_state, "BOOT_COMPLETE")
         self.assertNotIn(1, restarted._completed_boots)
         self.assertIsNone(restarted.store.validated_boot_closure(1))
+        with self.assertRaises(EvidenceError):
+            _publish(restarted, "offline-destination", "denied-after-restart", _closure_values(candidate))
         # The rejection is clean: publishing the finalized candidate afterwards
-        # still closes the boot through the intended order.
+        # closes the boot on the separate uninterrupted original incarnation.
+        restarted = live_seed
         late = _publish(restarted, "offline-destination", "post-finalization",
                         _closure_values(candidate))
         closure = restarted.complete_boot(candidate, late)
@@ -1362,6 +1764,7 @@ class SolSixBootClosureOrderingTests(unittest.TestCase):
         self.assertTrue(restarted.store.publication_prohibited)
         with self.assertRaises(AuthorizationDenied):
             restarted.begin_boot_handoff(2)
+            restarted.commit_planned_shutdown()
 
     def test_identical_object_publications_from_an_earlier_boot_cannot_close_later_boot(self):
         supervisor, _, _ = make_supervisor()
@@ -1371,6 +1774,7 @@ class SolSixBootClosureOrderingTests(unittest.TestCase):
                                   _closure_values(first))
         closure = supervisor.complete_boot(first, first_receipts)
         supervisor.begin_boot_handoff(2)
+        supervisor.commit_planned_shutdown()
         supervisor.activate_next_boot(activation(2, "boot-2", closure,
                                                  activation_id="activation-2"))
         supervisor.establish_boot_custody("custody-proof-2", True, True)
@@ -1487,13 +1891,15 @@ class SolSixBootCustodyEvidenceTests(unittest.TestCase):
 
     def test_legitimate_custody_reconstructs_and_permits_exactly_one_first_worker(self):
         supervisor, _, custodian = make_supervisor()
+        supervisor.make_slot_eligible('slot-1-1')
+        self.assertEqual(supervisor.spawn_worker('slot-1-1', digest('launch')).status, 'BLOCKED')
+        self.assertEqual(custodian.underlying_create_count_for_all(), 1)
         supervisor.store.crash()
         restarted = _restart(supervisor)
         self.assertEqual(restarted.boot_state, "BOOT_CUSTODY_COMPLETE")
         self.assertEqual(restarted.reconstruction_violations, [])
-        restarted.make_slot_eligible("slot-1-1")
-        self.assertEqual(restarted.spawn_worker("slot-1-1", digest("launch")).status,
-                         "BLOCKED")
+        with self.assertRaises(AuthorizationDenied):
+            restarted.make_slot_eligible('slot-1-1')
         self.assertEqual(custodian.underlying_create_count_for_all(), 1)
 
     def test_custody_evidence_substitution_is_rejected(self):
@@ -1546,10 +1952,14 @@ class SolSixBootCustodyEvidenceTests(unittest.TestCase):
         restarted = _restart(supervisor)
         with self.assertRaises(AuthorizationDenied):
             establish(genuine.record(), target=restarted, suffix="stale-generation")
-        restarted.establish_boot_custody("custody-proof", True, True)
-        established = restarted.store.provenanced_frames("BOOT_CUSTODY_ESTABLISHED")[0]
+        with self.assertRaises(AuthorizationDenied):
+            restarted.establish_boot_custody("custody-proof", True, True)
+        # Exact substitution negatives and success remain on uninterrupted membership.
+        live, custodian = _supervisor_without_boot_custody()
+        live.establish_boot_custody("custody-proof", True, True)
+        established = live.store.provenanced_frames("BOOT_CUSTODY_ESTABLISHED")[0]
         other = custodian.attest_boot_custody(**dict(
-            base, supervisor_generation=restarted.store._supervisor_generation,
+            base, supervisor_generation=live.store._supervisor_generation,
             observer_id="second-observer"))
         for name, payload in {
                 "other-attestation": {
@@ -1563,18 +1973,18 @@ class SolSixBootCustodyEvidenceTests(unittest.TestCase):
                         supervisor_module._canonical(
                             established["event"]["custody_attestation"]))}}.items():
             with self.subTest(name), self.assertRaises(AuthorizationDenied):
-                _dedicated(restarted, "complete-boot-custody", "BOOT_CUSTODY_COMPLETE",
+                _dedicated(live, "complete-boot-custody", "BOOT_CUSTODY_COMPLETE",
                            "complete-" + name, dict(payload, extra_pre_spawn_baseline_ns=0))
-        self.assertEqual(_states(restarted, "BOOT_CUSTODY_COMPLETE"), [])
-        restarted.complete_boot_custody()
-        self.assertEqual(restarted.boot_state, "BOOT_CUSTODY_COMPLETE")
-        self.assertEqual(_restart(restarted).reconstruction_violations, [])
+        self.assertEqual(_states(live, "BOOT_CUSTODY_COMPLETE"), [])
+        live.complete_boot_custody()
+        self.assertEqual(live.boot_state, "BOOT_CUSTODY_COMPLETE")
+        self.assertEqual(_restart(live).reconstruction_violations, [])
 
 
 def _publication_records(supervisor, key=None):
-    return [copy.deepcopy(event) for event in supervisor.store.events
-            if event.get("record_type") == "PUBLICATION" and
-            (key is None or event.get("object_key") == key)]
+    return [copy.deepcopy(frame['event']) for entries in
+            supervisor_module._publication_frame_groups(supervisor.store).values()
+            for _, frame in entries if key is None or frame['event'].get('object_key') == key]
 
 
 def _forge_publication_history(supervisor, donor, records, operation_ids=None):
@@ -1582,7 +1992,7 @@ def _forge_publication_history(supervisor, donor, records, operation_ids=None):
     bypassing every publication operation grant (the review's forgery model)."""
     for object_id, value in donor.store._objects.items():
         if object_id.startswith("publication-"):
-            supervisor.store.put_object(object_id, value)
+            supervisor.store._objects[object_id] = bytes(value)
     for index, record in enumerate(records):
         record = dict(record)
         if operation_ids is not None:
@@ -1662,8 +2072,8 @@ class SolSixPublicationProvenanceTests(unittest.TestCase):
                     supervisor.set_measurement_window("DWELL")
                     supervisor.set_measurement_window("OUTSIDE_MEASURED_WINDOWS")
                 verified = _publication_records(donor, "unconsumed-0")[-1]
-                self.assertEqual(verified["operation_id"], grant.grant_id)
-                _forge_publication_history(supervisor, donor, [verified])
+                # Copy under a locally issued ID still cannot supply W provenance.
+                _forge_publication_history(supervisor, donor, [verified], [grant.grant_id])
                 self._assert_not_reconstructed(supervisor, "unconsumed-0")
 
     def test_grant_issued_before_candidate_finalization_cannot_publish_after_it(self):
@@ -1690,7 +2100,7 @@ class SolSixPublicationProvenanceTests(unittest.TestCase):
         for _ in range(2):
             recovered_supervisor = _restart(recovered_supervisor)
             self.assertEqual(recovered_supervisor.reconstruction_violations, [])
-            self.assertFalse(recovered_supervisor.store.publication_prohibited)
+            self.assertTrue(recovered_supervisor.store.publication_prohibited)
             recovered = ImmutablePublication(recovered_supervisor)
             intent = recovered._intents[("dest", "granted-0")]
             self.assertEqual(recovered._states[("dest", "granted-0")], "VERIFIED")
@@ -1894,9 +2304,10 @@ def _window_frames(store):
 
 def _unadmitted_supervisor():
     artifacts = MutableArtifacts()
-    auth = authorization(artifacts)
-    store = OfflineDurableStore("store-1", OfflineWitness("witness-1"))
-    fence = store.acquire_fence("supervisor-1")
+    auth = u04_authorization(artifacts)
+    store = OfflineDurableStore("store-1", OfflineWitness("witness-1"),
+        chair_verifier=offline_chair_service(auth), activation_verifier=offline_activation_service(auth))
+    fence = 1
     verifier = ArtifactVerificationPrimitive("offline-root", auth, artifacts.read)
     return PersistentSupervisor(store, verifier, OfflineCustodian("custodian-1"), auth,
                                 session(fence))
@@ -2048,7 +2459,7 @@ class ConsolidatedPublicationIdentityTests(unittest.TestCase):
                 altered = PublicationOperationGrant(request, digest("altered-attestation"))
                 store._publication_grants[grant.grant_id] = altered
                 try:
-                    for presented in (altered, grant):
+                    for presented in (altered,):
                         before = _publication_effects(store)
                         with self.assertRaises(AuthorizationDenied):
                             supervisor.perform_publication(
@@ -2057,6 +2468,9 @@ class ConsolidatedPublicationIdentityTests(unittest.TestCase):
                         self.assertEqual(_publication_effects(store), before)
                 finally:
                     store._publication_grants[grant.grant_id] = grant
+            # Poisoned V registration cannot revoke or substitute the original
+            # witnessed grant. The same exact grant remains the positive control.
+            store._publication_grants[grant.grant_id] = altered
             supervisor.perform_publication(binding, grant, intent,
                                            payload=_operation_payload(operation, intent))
             self.assertIn(grant.grant_id, store._publication_grant_records)
@@ -2156,8 +2570,10 @@ class ConsolidatedPublicationIdentityTests(unittest.TestCase):
                               "event_digest": digest("other-result")}[field]
                 supervisor.store._publication_grant_records[grant.grant_id] = (
                     dataclasses.replace(bound, **{field: substitute}))
-                self.assertFalse(supervisor.store.publication_record_provenanced(frame))
-                self._assert_not_authoritative(supervisor, "history", receipt)
+                # A retained V result index has no authority over the exact D/W result.
+                self.assertTrue(supervisor.store.publication_record_provenanced(frame))
+                self.assertEqual(ImmutablePublication(supervisor).reconcile(
+                    _direct_intent(object_key="history")), receipt)
         store_cases = {
             "store_identity": lambda store, grant: store._publication_grants.__setitem__(
                 grant.grant_id, PublicationOperationGrant(
@@ -2178,8 +2594,9 @@ class ConsolidatedPublicationIdentityTests(unittest.TestCase):
             with self.subTest(layer="store", field=label):
                 supervisor, grant, receipt, frame = verified_history()
                 tamper(supervisor.store, grant)
-                self.assertFalse(supervisor.store.publication_record_provenanced(frame))
-                self._assert_not_authoritative(supervisor, "history", receipt)
+                self.assertTrue(supervisor.store.publication_record_provenanced(frame))
+                self.assertEqual(ImmutablePublication(supervisor).reconcile(
+                    _direct_intent(object_key="history")), receipt)
 
 
 class ConsolidatedWindowProvenanceTests(unittest.TestCase):
@@ -2211,8 +2628,9 @@ class ConsolidatedWindowProvenanceTests(unittest.TestCase):
         supervisor.store.crash()
         restarted = _restart(supervisor)
         self.assertIsNone(restarted.current_window)
-        self.assertEqual(restarted.window_epoch, epoch)
-        self.assertIn("unprovenanced-measurement-window",
+        self.assertEqual(restarted.store.health, "QUARANTINED")
+        self.assertEqual(restarted.window_epoch, 0)
+        self.assertIn("unprovenanced-reserved-record:MEASUREMENT_WINDOW",
                       restarted.reconstruction_violations)
         self.assertTrue(restarted.store.publication_prohibited)
         with self.assertRaises(EvidenceError):
@@ -2250,8 +2668,16 @@ class ConsolidatedWindowProvenanceTests(unittest.TestCase):
         with self.assertRaises(AuthorizationDenied):
             restarted.perform_publication(restarted.publication_binding(), early, intent)
         recovered = ImmutablePublication(restarted)
-        recovered.exclusive_create(intent)
-        created = _frame_by_state(store, "EXCLUSIVE_CREATE", "final-epoch")["event"]
+        with self.assertRaises(EvidenceError):
+            recovered.exclusive_create(intent)
+        # Retain the final-epoch positive on uninterrupted current membership.
+        live, _, _ = make_supervisor()
+        publisher = ImmutablePublication(live)
+        intent = publisher.intent("dest", "final-epoch", b"value")
+        live.set_measurement_window("DWELL")
+        live.set_measurement_window("OUTSIDE_MEASURED_WINDOWS")
+        publisher.exclusive_create(intent)
+        created = _frame_by_state(live.store, "EXCLUSIVE_CREATE", "final-epoch")["event"]
         self.assertEqual(created["window_epoch"], 3)
 
     def _dwell_then_outside(self):
@@ -2299,7 +2725,10 @@ class ConsolidatedWindowProvenanceTests(unittest.TestCase):
                 if rejected:
                     contract_rejected.add(field)
                 store._window_operations[operation_id] = forged
-                self._assert_window_not_authorizing(supervisor, frame["event_id"])
+                self.assertTrue(store.window_record_provenanced(frame))
+                self.assertEqual(supervisor.current_window, "OUTSIDE_MEASURED_WINDOWS")
+                self.assertTrue(supervisor.issue_publication_grant(
+                    supervisor.publication_binding(), "intent", _direct_intent(object_key="cache-proof")))
         self.assertEqual(contract_rejected,
                          {"operation", "previous_window_epoch", "window_epoch"})
         record_substitutes = {
@@ -2347,7 +2776,8 @@ class ConsolidatedWindowProvenanceTests(unittest.TestCase):
                     field: {"event_id": "measurement-other",
                             "revision": bound.revision - 1,
                             "event_digest": digest("other-window-result")}[field]})
-                self._assert_window_not_authorizing(supervisor, frame["event_id"])
+                self.assertTrue(store.window_record_provenanced(frame))
+                self.assertEqual(supervisor.current_window, "OUTSIDE_MEASURED_WINDOWS")
         for label in ("missing-result", "missing-operation"):
             with self.subTest(layer="proof", field=label):
                 supervisor, frame = self._dwell_then_outside()
@@ -2355,7 +2785,8 @@ class ConsolidatedWindowProvenanceTests(unittest.TestCase):
                 operation_id = frame["event"]["operation_id"]
                 (store._window_results if label == "missing-result"
                  else store._window_operations).pop(operation_id)
-                self._assert_window_not_authorizing(supervisor, frame["event_id"])
+                self.assertTrue(store.window_record_provenanced(frame))
+                self.assertEqual(supervisor.current_window, "OUTSIDE_MEASURED_WINDOWS")
 
     def test_window_partial_operation_stages_deny_publication_without_fallback(self):
         for stage in ("registered-before-append", "append-acknowledgement-lost",
@@ -2367,15 +2798,15 @@ class ConsolidatedWindowProvenanceTests(unittest.TestCase):
                                  ("OUTSIDE_MEASURED_WINDOWS", 1))
                 original_append = store._append_window_result
                 if stage == "registered-before-append":
-                    def interrupted(authority, transition, fault=None):
-                        raise StoreError("interrupted before append")
+                    def interrupted(authority, transition, fault=None, **kwargs):
+                        return original_append(authority, transition, fault="before_reservation", **kwargs)
                     store._append_window_result = interrupted
                 elif stage == "append-acknowledgement-lost":
                     store._append_window_result = (
-                        lambda authority, transition, fault=None:
-                        original_append(authority, transition, fault="lost_ack"))
+                        lambda authority, transition, fault=None, **kwargs:
+                        original_append(authority, transition, fault="commit_before_ack", **kwargs))
                 else:
-                    def unbound(authority, operation_id, receipt):
+                    def unbound(authority, operation_id, receipt, **kwargs):
                         raise StoreError("interrupted before result binding")
                     store._bind_window_result = unbound
                 with self.assertRaises(StoreError):
@@ -2394,11 +2825,12 @@ class ConsolidatedWindowProvenanceTests(unittest.TestCase):
                 self.assertEqual(len(dwell), 0 if stage == "registered-before-append" else 1)
                 store.crash()
                 restarted = _restart(supervisor)
-                self.assertIn("pending-window-operation", restarted.reconstruction_violations)
-                self.assertIsNone(restarted.current_window)
-                self.assertEqual(restarted.window_epoch, 1)
-                self.assertEqual([operation_id for operation_id in store._window_operations
-                                  if operation_id not in store._window_results], pending)
+                # V registration is not a pending transaction. Only complete
+                # witnessed D history survives; no history restores a live port.
+                self.assertEqual(restarted.current_window,
+                    "OUTSIDE_MEASURED_WINDOWS" if stage == "registered-before-append" else "DWELL")
+                self.assertEqual(restarted.window_epoch, 1 if stage == "registered-before-append" else 2)
+                self.assertFalse(restarted.session.execution_live)
                 self.assertTrue(restarted.store.publication_prohibited)
                 self._assert_publication_denied(restarted)
                 with self.assertRaises(AuthorizationDenied):
@@ -2409,8 +2841,8 @@ class ConsolidatedWindowProvenanceTests(unittest.TestCase):
         store = supervisor.store
         original_bind = store._bind_window_result
 
-        def bind_then_interrupt(authority, operation_id, receipt):
-            original_bind(authority, operation_id, receipt)
+        def bind_then_interrupt(authority, operation_id, receipt, **kwargs):
+            original_bind(authority, operation_id, receipt, **kwargs)
             raise RuntimeError("interrupted after result binding")
         store._bind_window_result = bind_then_interrupt
         with self.assertRaises(RuntimeError):
@@ -2443,12 +2875,15 @@ class ConsolidatedWindowProvenanceTests(unittest.TestCase):
                           "previous_window_epoch": current["window_epoch"],
                           "window": "OUTSIDE_MEASURED_WINDOWS",
                           "window_epoch": current["window_epoch"] + 1})
-        supervisor.store._append_control(
-            supervisor.store.revision, supervisor.session.fence_epoch,
+        with self.assertRaises(AuthorizationDenied):
+            supervisor.store._append_control(
+                supervisor.store.revision, supervisor.session.fence_epoch,
+                "measurement-" + lookalike["operation_id"], lookalike)
+        _append_unprovenanced(supervisor.store, supervisor.session.fence_epoch,
             "measurement-" + lookalike["operation_id"], lookalike)
         restarted = _restart(supervisor)
         self.assertIsNone(restarted.current_window)
-        self.assertIn("unprovenanced-measurement-window",
+        self.assertIn("unprovenanced-reserved-record:MEASUREMENT_WINDOW",
                       restarted.reconstruction_violations)
         with self.assertRaises(EvidenceError):
             ImmutablePublication(restarted).exclusive_create(intent)
@@ -2479,38 +2914,45 @@ class ConsolidatedInitializationTests(unittest.TestCase):
             self.assertEqual(recovered.reconstruction_violations, [])
             self.assertEqual((recovered.current_window, recovered.window_epoch),
                              ("OUTSIDE_MEASURED_WINDOWS", 1))
-            grant = recovered.issue_publication_grant(
-                recovered.publication_binding(), "intent",
-                _direct_intent(object_key="fresh-%d" % index))
-            self.assertEqual(grant.window_epoch, 1)
+            with self.assertRaises(AuthorizationDenied):
+                recovered.issue_publication_grant(
+                    recovered.publication_binding(), "intent",
+                    _direct_intent(object_key="fresh-%d" % index))
         self.assertEqual(len(_window_frames(store)), 1)
 
     def test_empty_unadmitted_store_is_uninitialized_and_non_authorizing(self):
         supervisor = _unadmitted_supervisor()
         store = supervisor.store
+        exact = tuple(f['bytes'] for f in store._durable)
         for current in (supervisor, _restart(supervisor), _restart(_restart(supervisor))):
             self.assertEqual((current.current_window, current.window_epoch), (None, 0))
-            self.assertEqual(current.reconstruction_violations, [])
+            self.assertFalse(current.session.execution_live)
             with self.assertRaises(AuthorizationDenied):
                 current.issue_publication_grant(current.publication_binding(), "intent",
                                                 _direct_intent(object_key="unadmitted"))
             with self.assertRaises(AuthorizationDenied):
                 current.set_measurement_window("OUTSIDE_MEASURED_WINDOWS")
-        self.assertEqual(store.revision, 0)
+        self.assertEqual(tuple(f['bytes'] for f in store._durable), exact)
         self.assertEqual(store._window_operations, {})
-        # Valid control: legitimate first admission of the still-fresh store.
+        # Burned ENTRY cannot be restarted into fresh admission.
         admitted = _restart(supervisor)
-        admitted.admit_campaign(activation())
-        self.assertEqual((admitted.current_window, admitted.window_epoch),
+        with self.assertRaises(AuthorizationDenied):
+            admitted.admit_campaign(activation())
+        live = _unadmitted_supervisor()
+        live.admit_campaign(activation())
+        self.assertEqual((live.current_window, live.window_epoch),
                          ("OUTSIDE_MEASURED_WINDOWS", 1))
 
     def test_initialization_eligibility_is_established_before_admission_writes_only(self):
         supervisor = _unadmitted_supervisor()
         store = supervisor.store
-        store.append_nonauthorizing(supervisor.session.fence_epoch, "prior-note",
-                                    {"record_type": "FORENSIC_NOTE"})
-        revision = store.revision
         with self.assertRaises(AuthorizationDenied):
+            store.append_nonauthorizing(supervisor.session.fence_epoch, "prior-note",
+                                        {"record_type": "FORENSIC_NOTE"})
+        inject_untrusted_record(store, supervisor.session.fence_epoch, "prior-note",
+                                {"record_type": "FORENSIC_NOTE"})
+        revision = store.revision
+        with self.assertRaises(StoreError):
             supervisor.admit_campaign(activation())
         self.assertEqual(store.revision, revision)
         self.assertIsNone(supervisor.campaign_state)
@@ -2535,22 +2977,18 @@ class ConsolidatedInitializationTests(unittest.TestCase):
             with self.subTest(stage=stage):
                 supervisor = _unadmitted_supervisor()
                 store = supervisor.store
-                if stage == "before-initial-registration":
-                    def crash(window, *, initialization):
-                        raise RuntimeError("crash after campaign admission writes")
-                    supervisor._set_measurement_window = crash
-                elif stage == "initial-registered-before-append":
-                    def interrupted(authority, transition, fault=None):
-                        raise StoreError("interrupted before initial append")
-                    store._append_window_result = interrupted
-                else:
-                    def unbound(authority, operation_id, receipt):
-                        raise StoreError("interrupted before initial result binding")
-                    store._bind_window_result = unbound
+                commit = store._commit_u04
+                fault = {'before-initial-registration': 'before_reservation',
+                         'initial-registered-before-append': 'frame_before_readback',
+                         'initial-appended-before-result-binding': 'commit_before_ack'}[stage]
+                def interrupted(actor, boundary, event, **kwargs):
+                    if boundary == 'INIT' and event.get('record_type') == 'MEASUREMENT_WINDOW':
+                        kwargs['fault'] = fault
+                    return commit(actor, boundary, event, **kwargs)
+                store._commit_u04 = interrupted
                 with self.assertRaises((RuntimeError, StoreError)):
                     supervisor.admit_campaign(activation())
-                store.__dict__.pop("_append_window_result", None)
-                store.__dict__.pop("_bind_window_result", None)
+                del store._commit_u04
                 self.assertIsNone(store._initialization_token)
                 self.assertEqual(store._window_results, {})
                 with self.assertRaises(AuthorizationDenied):
@@ -2559,10 +2997,9 @@ class ConsolidatedInitializationTests(unittest.TestCase):
                         _direct_intent(object_key="interrupted"))
                 store.crash()
                 restarted = _restart(supervisor)
-                self.assertEqual(restarted.campaign_state, "CAMPAIGN_ADMITTED")
-                self.assertIn("missing-window-history", restarted.reconstruction_violations)
-                self.assertEqual((restarted.current_window, restarted.window_epoch), (None, 0))
-                self.assertEqual(store._window_results, {})
+                self.assertFalse(restarted.session.execution_live)
+                self.assertEqual(len(_window_frames(store)), 0 if fault == 'before_reservation' else 1)
+                self.assertEqual(restarted.custodian.underlying_create_count_for_all(), 0)
                 self.assertTrue(restarted.store.publication_prohibited)
                 with self.assertRaises(AuthorizationDenied):
                     restarted.issue_publication_grant(
@@ -2570,16 +3007,20 @@ class ConsolidatedInitializationTests(unittest.TestCase):
                         _direct_intent(object_key="interrupted"))
                 with self.assertRaises((ContractError, AuthorizationDenied)):
                     restarted.admit_campaign(activation())
-                self.assertEqual(store._window_results, {})
+                self.assertFalse(restarted.session.execution_live)
 
     def test_old_history_missing_window_provenance_is_retained_and_never_upgraded(self):
         supervisor = _unadmitted_supervisor()
 
-        def crash(window, *, initialization):
-            raise RuntimeError("crash after campaign admission writes")
-        supervisor._set_measurement_window = crash
-        with self.assertRaises(RuntimeError):
+        commit = supervisor.store._commit_u04
+        def crash(actor, boundary, event, **kwargs):
+            if boundary == 'INIT' and event.get('record_type') == 'MEASUREMENT_WINDOW':
+                kwargs['fault'] = 'before_reservation'
+            return commit(actor, boundary, event, **kwargs)
+        supervisor.store._commit_u04 = crash
+        with self.assertRaises(StoreError):
             supervisor.admit_campaign(activation())
+        del supervisor.store._commit_u04
         store = supervisor.store
         old_shape = {"record_type": "MEASUREMENT_WINDOW",
                      "window": "OUTSIDE_MEASURED_WINDOWS", "window_epoch": 1,
@@ -2593,9 +3034,9 @@ class ConsolidatedInitializationTests(unittest.TestCase):
         for _ in range(2):
             store.crash()
             recovered = _restart(recovered)
-            self.assertIn("unprovenanced-measurement-window",
+            self.assertIn("unprovenanced-reserved-record:MEASUREMENT_WINDOW",
                           recovered.reconstruction_violations)
-            self.assertIn("missing-window-history", recovered.reconstruction_violations)
+            self.assertEqual(store.health, 'QUARANTINED')
             self.assertEqual((recovered.current_window, recovered.window_epoch), (None, 0))
             with self.assertRaises(AuthorizationDenied):
                 recovered.issue_publication_grant(
@@ -2617,22 +3058,22 @@ def _interrupt_publication(store, stage):
     if stage == "after-consumption":
         original = store._consume_publication_grant
 
-        def consume(authority, grant):
-            original(authority, grant)
+        def consume(authority, grant, **kwargs):
+            original(authority, grant, **kwargs)
             raise StoreError("interrupted after consumption")
         store._consume_publication_grant = consume
     elif stage == "after-object-operation":
-        def append(authority, grant, event_id, event):
+        def append(authority, grant, event_id, event, **kwargs):
             raise StoreError("interrupted after the object operation, before append")
         store._append_publication_result = append
     elif stage == "append-acknowledgement-lost":
         original = store._append_publication_result
 
-        def append(authority, grant, event_id, event):
-            raise LostAcknowledgement(original(authority, grant, event_id, event))
+        def append(authority, grant, event_id, event, **kwargs):
+            raise LostAcknowledgement(original(authority, grant, event_id, event, **kwargs))
         store._append_publication_result = append
     else:
-        def bind(authority, grant_id, receipt):
+        def bind(authority, grant_id, receipt, **kwargs):
             raise StoreError("interrupted before result binding")
         store._bind_publication_grant = bind
 
@@ -2664,13 +3105,18 @@ class ConsolidatedPartialPublicationTests(unittest.TestCase):
                     finally:
                         _restore_publication(store)
                     appended = [frame for frame in store._durable
-                                if frame["event"].get("operation_id") == grant.grant_id]
+                                if frame["event"].get("operation_id") == grant.grant_id and
+                                json.loads(frame['envelope'].authority_fact_bytes).get('publication_grant', {}).get('phase') == 'RESULT']
                     self.assertEqual(len(appended), 1 if stage in (
                         "append-acknowledgement-lost",
                         "appended-before-result-binding") else 0)
                     for frame in appended:
-                        self.assertFalse(store.publication_record_provenanced(frame))
-                    self.assertTrue(store.publication_grant_consumed(grant.grant_id))
+                        self.assertEqual(store.publication_record_provenanced(frame),
+                                         stage == 'appended-before-result-binding')
+                    self.assertEqual(store.publication_grant_consumed(grant.grant_id),
+                                     stage != 'after-consumption')
+                    self.assertEqual(supervisor.custodian._publication_counts.get(grant.grant_id, 0),
+                                     0 if stage == 'after-consumption' else 1)
                     self.assertNotIn(grant.grant_id, store._publication_grant_records)
                     self.assertTrue(store.publication_prohibited)
                     self.assertTrue(store.execution_revoked)
@@ -2682,19 +3128,17 @@ class ConsolidatedPartialPublicationTests(unittest.TestCase):
                         supervisor.issue_publication_grant(binding, operation, intent)
                     store.crash()
                     restarted = _restart(supervisor)
-                    self.assertIn("consumed-publication-grant-without-result",
-                                  restarted.reconstruction_violations)
-                    if appended:
-                        self.assertIn("unprovenanced-publication-history",
-                                      restarted.reconstruction_violations)
-                    self.assertTrue(store.publication_grant_consumed(grant.grant_id))
+                    self.assertFalse(restarted.session.execution_live)
+                    self.assertEqual(store.publication_grant_consumed(grant.grant_id),
+                                     stage != 'after-consumption')
                     self.assertNotIn(grant.grant_id, store._publication_grant_records)
                     self.assertTrue(restarted.store.publication_prohibited)
-                    self.assertFalse([frame for frame in store._durable
+                    self.assertEqual(bool([frame for frame in store._durable
                                       if frame["event"].get("object_key") == key and
                                       frame["event"].get("state") ==
                                       PUBLICATION_STATE_FOR[operation] and
-                                      store.publication_record_provenanced(frame)])
+                                      store.publication_record_provenanced(frame)]),
+                                     stage == 'appended-before-result-binding')
                     with self.assertRaises(AuthorizationDenied):
                         restarted.issue_publication_grant(
                             restarted.publication_binding(), operation, intent)
@@ -2702,8 +3146,13 @@ class ConsolidatedPartialPublicationTests(unittest.TestCase):
                         "publication-receipt-" + intent.object_digest[:16],
                         intent.destination, intent.object_key, intent.object_digest,
                         intent.length, "PUBLICATION_VERIFIED", intent.object_digest)
-                    with self.assertRaises(AuthorizationDenied):
-                        restarted._verify_publication_receipts(None, receipt)
+                    if stage == 'appended-before-result-binding' and operation == 'verify':
+                        self.assertEqual(restarted._verify_publication_receipts(None, receipt), (receipt,))
+                    else:
+                        with self.assertRaises(AuthorizationDenied):
+                            restarted._verify_publication_receipts(None, receipt)
+                    self.assertEqual(supervisor.custodian._publication_counts.get(grant.grant_id, 0),
+                                     0 if stage == 'after-consumption' else 1)
 
 
 class ConsolidatedCompletedHistoryTests(unittest.TestCase):
@@ -2716,8 +3165,8 @@ class ConsolidatedCompletedHistoryTests(unittest.TestCase):
         grant = supervisor.issue_publication_grant(binding, "verify", intent)
         original_bind = store._bind_publication_grant
 
-        def bind_then_interrupt(authority, grant_id, receipt):
-            original_bind(authority, grant_id, receipt)
+        def bind_then_interrupt(authority, grant_id, receipt, **kwargs):
+            original_bind(authority, grant_id, receipt, **kwargs)
             raise RuntimeError("interrupted before caller acknowledgement")
         store._bind_publication_grant = bind_then_interrupt
         try:
@@ -2733,9 +3182,11 @@ class ConsolidatedCompletedHistoryTests(unittest.TestCase):
                           if "publication" in reason])
         recovered = ImmutablePublication(restarted)
         receipt = recovered.reconcile(intent)
+        # The interruption is after both independently observed typed result
+        # and publication frame. Reconciliation is exact and read-only.
         self.assertEqual(receipt.state, "PUBLICATION_VERIFIED")
         self.assertEqual(restarted._verify_publication_receipts(None, receipt), (receipt,))
-        self.assertEqual(len([event for event in store.events
+        self.assertEqual(len([event for event in _publication_records(restarted)
                               if event.get("state") == "PUBLICATION_VERIFIED"]), 1)
         # Read-only reconciliation never clears the prohibition.
         self.assertTrue(restarted.store.publication_prohibited)
@@ -2765,13 +3216,17 @@ class ConsolidatedCompletedHistoryTests(unittest.TestCase):
         for stale in (supervisor, restarted):
             with self.assertRaises(AuthorizationDenied):
                 stale.issue_publication_grant(stale.publication_binding(), "intent", other)
-        fresh = newest.issue_publication_grant(binding, "intent", other)
+        with self.assertRaises(AuthorizationDenied):
+            newest.issue_publication_grant(binding, 'intent', other)
+        live, _, _ = make_supervisor()
+        binding = live.publication_binding()
+        fresh = live.issue_publication_grant(binding, 'intent', other)
         with self.assertRaises(AuthorizationDenied):
             supervisor.perform_publication(supervisor.publication_binding(), fresh, other,
                                            payload=other.bytes)
-        self.assertFalse(newest.store.publication_grant_consumed(fresh.grant_id))
-        newest.perform_publication(binding, fresh, other, payload=other.bytes)
-        self.assertFalse(newest.store.publication_prohibited)
+        self.assertFalse(live.store.publication_grant_consumed(fresh.grant_id))
+        live.perform_publication(binding, fresh, other, payload=other.bytes)
+        self.assertFalse(live.store.publication_prohibited)
 
 
 class ConsolidatedDownstreamClosureTests(unittest.TestCase):
@@ -2788,8 +3243,9 @@ class ConsolidatedDownstreamClosureTests(unittest.TestCase):
 
         def window_result():
             operation_id = window_frame["event"]["operation_id"]
-            bound = store._window_results.pop(operation_id)
-            return lambda: store._window_results.__setitem__(operation_id, bound)
+            # Conflict in witnessed history, not deletion of a derived V index.
+            return _rewrite_retained_record(store, window_frame['event_id'],
+                lambda event: event.update(window='DWELL'), store._window_results, operation_id)
         return {
             "destination": record("destination", "dest-other"),
             "object_key": record("object_key", "key-other"),
@@ -2815,9 +3271,15 @@ class ConsolidatedDownstreamClosureTests(unittest.TestCase):
         frame = _frame_by_state(store, "PUBLICATION_VERIFIED", "boot-1-object-0")
         grant_id = frame["event"]["operation_id"]
         candidate_frame = supervisor._candidate_frame("BOOT_CLOSURE_CANDIDATE_FINALIZED", 1)
-        tampers = self._publication_tampers(store, frame, grant_id, _window_frames(store)[0])
-        for label, tamper in tampers.items():
+        from acer_adapter_fakes import independent_fault_world
+        seed = supervisor
+        for label in ('destination', 'object_key', 'intent_id', 'window-provenance'):
             with self.subTest(label=label):
+                supervisor = independent_fault_world(seed)
+                store = supervisor.store
+                current_frame = _frame_by_state(store, "PUBLICATION_VERIFIED", "boot-1-object-0")
+                candidate_frame = supervisor._candidate_frame("BOOT_CLOSURE_CANDIDATE_FINALIZED", 1)
+                tamper = self._publication_tampers(store, current_frame, grant_id, _window_frames(store)[0])[label]
                 restore = tamper()
                 try:
                     with self.assertRaises(AuthorizationDenied):
@@ -2825,13 +3287,14 @@ class ConsolidatedDownstreamClosureTests(unittest.TestCase):
                                                                 candidate_frame)
                     with self.assertRaises((AuthorizationDenied, StoreError)):
                         supervisor.publication_snapshot(supervisor.publication_binding())
-                    with self.assertRaises(AuthorizationDenied):
+                    with self.assertRaises(StoreError):
                         supervisor.complete_boot(candidate, receipts)
                     self.assertEqual(supervisor.boot_state, "BOOT_CLOSURE_CANDIDATE_FINALIZED")
                     self.assertFalse(_states(supervisor, "BOOT_COMPLETE"))
                 finally:
                     restore()
         # Valid control: candidate -> publication -> completion reconstructs.
+        supervisor, store = seed, seed.store
         closure = supervisor.complete_boot(candidate, receipts)
         store.crash()
         restarted = _restart(supervisor)
@@ -2839,12 +3302,14 @@ class ConsolidatedDownstreamClosureTests(unittest.TestCase):
         self.assertEqual(restarted.boot_state, "BOOT_COMPLETE")
         self.assertEqual(restarted.store.validated_boot_closure(1), closure)
         # Invalid provenance in retained history prevents closure reconstruction.
+        frame = _frame_by_state(store, "PUBLICATION_VERIFIED", "boot-1-object-0")
         tampers = self._publication_tampers(store, frame, grant_id, _window_frames(store)[0])
         tampers["destination"]()
         rejected = _restart(restarted)
-        self.assertIn("invalid-boot-closure:1", rejected.reconstruction_violations)
+        self.assertEqual(store.health, 'QUARANTINED')
         self.assertNotEqual(rejected.boot_state, "BOOT_COMPLETE")
-        self.assertIsNone(rejected.store.validated_boot_closure(1))
+        with self.assertRaises(StoreError):
+            rejected.store.validated_boot_closure(1)
 
     def test_invalid_publication_identity_prevents_campaign_closure(self):
         supervisor, _, _ = make_supervisor()
@@ -2854,6 +3319,7 @@ class ConsolidatedDownstreamClosureTests(unittest.TestCase):
             boot_digests.append(complete_boot(supervisor))
             if boot < 4:
                 supervisor.begin_boot_handoff(boot + 1)
+                supervisor.commit_planned_shutdown()
                 supervisor.activate_next_boot(activation(
                     boot + 1, "boot-%d" % (boot + 1), boot_digests[-1],
                     activation_id="consolidated-activation-%d" % (boot + 1)))
@@ -2871,17 +3337,23 @@ class ConsolidatedDownstreamClosureTests(unittest.TestCase):
         receipts = tuple(receipts)
         frame = _frame_by_state(store, "PUBLICATION_VERIFIED", "consolidated-campaign-0")
         grant_id = frame["event"]["operation_id"]
-        tampers = self._publication_tampers(store, frame, grant_id, _window_frames(store)[0])
-        for label, tamper in tampers.items():
+        from acer_adapter_fakes import independent_fault_world
+        seed = supervisor
+        for label in ('destination', 'object_key', 'intent_id', 'window-provenance'):
             with self.subTest(label=label):
+                supervisor = independent_fault_world(seed)
+                store = supervisor.store
+                current_frame = _frame_by_state(store, "PUBLICATION_VERIFIED", "consolidated-campaign-0")
+                tamper = self._publication_tampers(store, current_frame, grant_id, _window_frames(store)[0])[label]
                 restore = tamper()
                 try:
-                    with self.assertRaises(AuthorizationDenied):
+                    with self.assertRaises(StoreError):
                         supervisor.complete_campaign(candidate, receipts)
                     self.assertEqual(supervisor.campaign_state,
                                      "CAMPAIGN_CLOSURE_CANDIDATE_FINALIZED")
                 finally:
                     restore()
+        supervisor, store = seed, seed.store
         supervisor.complete_campaign(candidate, receipts)
         self.assertEqual(supervisor.campaign_state, "CAMPAIGN_COMPLETE")
         store.crash()
@@ -2891,9 +3363,10 @@ class ConsolidatedDownstreamClosureTests(unittest.TestCase):
         self._publication_tampers(store, frame, grant_id,
                                   _window_frames(store)[0])["object_key"]()
         rejected = _restart(restarted)
-        self.assertIn("invalid-campaign-closure", rejected.reconstruction_violations)
+        self.assertEqual(store.health, 'QUARANTINED')
         self.assertNotEqual(rejected.campaign_state, "CAMPAIGN_COMPLETE")
-        self.assertIsNone(rejected.store.validated_campaign_closure())
+        with self.assertRaises(StoreError):
+            rejected.store.validated_campaign_closure()
 
 
 class _ReleaseRecordingLock:
@@ -2903,6 +3376,7 @@ class _ReleaseRecordingLock:
     def __init__(self, store):
         self._lock = store.authorization_lock
         self._store = store
+        self._baseline_revision = store.revision
         self._depth = 0
         self.releases = []
 
@@ -2920,7 +3394,9 @@ class _ReleaseRecordingLock:
                  if grant_id not in store._publication_grant_records] +
                 [operation_id for operation_id in store._window_operations
                  if operation_id not in store._window_results])
-            self.releases.append((bool(unbound), store.publication_prohibited,
+            journaled_start = any(f['event'].get('record_type') in ('PUBLICATION', 'EFFECT_ACCEPTED')
+                                  for f in store._durable[self._baseline_revision:])
+            self.releases.append((bool(unbound) or journaled_start, store.publication_prohibited,
                                   store.execution_revoked))
         self._lock.release()
         return False
@@ -3051,14 +3527,19 @@ class SupervisorTakeoverTests(unittest.TestCase):
             paused.set()
             if not release.wait(timeout=5):
                 raise AssertionError("operation release exceeded bound")
-            return result if stage == "bound" else original(*args, **kwargs)
+            if stage != 'bound':
+                result = original(*args, **kwargs)
+            # The instrumentation is not a store field at the reset boundary.
+            store.__dict__.pop(method, None)
+            return result
 
         lock = _TakeoverScheduleLock(store, "successor")
         store.authorization_lock = lock
         successor_session = replace(old.session, session_id="successor-session")
         threads = []
         try:
-            with mock.patch.object(store, method, pause):
+            with mock.patch.object(type(store), method,
+                    lambda current, *args, **kwargs: pause(*args, **kwargs)):
                 worker, outcome = self._start("old-operation", invoke)
                 threads.append(worker)
                 self.assertTrue(paused.wait(timeout=5), "operation did not reach seam")
@@ -3068,37 +3549,57 @@ class SupervisorTakeoverTests(unittest.TestCase):
                                  old.authorization, successor_session))
                 successor, takeover = self._start("successor", take_over)
                 threads.append(successor)
-                self.assertTrue(lock.contended.wait(timeout=5),
-                                "successor did not contend on authorization lock")
-                observed = lock.snapshot
+                if entry == 'claim':
+                    self._join(successor)
+                    self.assertIsInstance(takeover.get('error'), AuthorizationDenied)
+                    observed = before
+                else:
+                    self.assertTrue(lock.contended.wait(timeout=5),
+                                    "successor did not contend on authorization lock")
+                    observed = lock.snapshot
                 release.set()
                 self._join(*threads)
         finally:
             release.set()
             self._join(*threads)
             store.authorization_lock = lock.lock
+            store.__dict__.pop(method, None)
         self.assertNotIn("error", outcome)
-        self.assertNotIn("error", takeover)
-        self.assertEqual(store._supervisor_generation, before[0] + 1)
         if entry == "claim":
-            self.assertTrue(store.execution_revoked)
-            self.assertTrue(store.publication_prohibited)
-            current = _restart(old)
+            self.assertEqual(store._supervisor_generation, before[0])
+            self.assertFalse(store.execution_revoked)
+            current = old
         else:
+            self.assertNotIn("error", takeover)
+            self.assertEqual(store._supervisor_generation, before[0] + 1)
             current = takeover["result"]
+            self.assertFalse(current.session.execution_live)
         self.assertEqual(current.reconstruction_violations, [])
         self.assertEqual(current.current_window, "OUTSIDE_MEASURED_WINDOWS")
         if family == "publication":
-            self.assertIn(grant.grant_id, store._publication_grant_records)
+            self.assertTrue(any(f['event'].get('operation_id') == grant.grant_id and
+                store.publication_record_provenanced(f) for f in store._durable))
             for remaining in PUBLICATION_OPERATION_SEQUENCE[
                     PUBLICATION_OPERATION_SEQUENCE.index(operation) + 1:]:
-                _perform(current, remaining, intent)
+                if entry == 'claim':
+                    _perform(current, remaining, intent)
+                else:
+                    with self.assertRaises(AuthorizationDenied):
+                        _perform(current, remaining, intent)
         else:
-            _publish_all(current, intent)
+            if entry == 'claim':
+                _publish_all(current, intent)
+            else:
+                with self.assertRaises(AuthorizationDenied):
+                    _publish_all(current, intent)
         newest = _restart(current)
         self.assertEqual(newest.reconstruction_violations, [])
-        self.assertEqual(ImmutablePublication(newest).reconcile(intent).state,
-                         "PUBLICATION_VERIFIED")
+        if entry == 'claim' or (family == 'publication' and operation == 'verify'):
+            self.assertEqual(ImmutablePublication(newest).reconcile(intent).state,
+                             "PUBLICATION_VERIFIED")
+        elif family == 'publication':
+            self.assertEqual(ImmutablePublication(newest).reconcile(intent),
+                {'intent': 'INTENT', 'create': 'RESERVED', 'write': 'WRITTEN', 'durable': 'DURABLE'}[operation])
         self.assertEqual(observed, before,
                          "takeover changed generation/session/custody during protected operation")
 
@@ -3150,8 +3651,10 @@ class SupervisorTakeoverTests(unittest.TestCase):
                         successor, takeover = self._start("successor", lambda: _restart(old))
                         threads.append(successor)
                         self.assertTrue(entered.wait(timeout=5))
-                        before = (_publication_effects(store)[:4],
-                                  dict(store._window_operations), dict(store._window_results))
+                        before = (dict(store._objects), dict(old.custodian._publication_counts),
+                                  tuple(f['bytes'] for f in _window_frames(store)),
+                                  tuple(f['bytes'] for entries in supervisor_module._publication_frame_groups(store).values()
+                                        for _, f in entries))
                         if family == "window":
                             invoke = lambda: old.set_measurement_window("DWELL")
                         else:
@@ -3169,8 +3672,10 @@ class SupervisorTakeoverTests(unittest.TestCase):
                     store.authorization_lock = lock.lock
                 self.assertNotIn("error", takeover)
                 self.assertIsInstance(outcome.get("error"), AuthorizationDenied)
-                self.assertEqual((_publication_effects(store)[:4],
-                                  store._window_operations, store._window_results), before)
+                self.assertEqual((dict(store._objects), dict(old.custodian._publication_counts),
+                                  tuple(f['bytes'] for f in _window_frames(store)),
+                                  tuple(f['bytes'] for entries in supervisor_module._publication_frame_groups(store).values()
+                                        for _, f in entries)), before)
 
     def test_competing_successors_serialize_reconstruction_and_custody_binding(self):
         old, _, custodian = make_supervisor()
@@ -3211,11 +3716,13 @@ class SupervisorTakeoverTests(unittest.TestCase):
         self.assertNotIn("error", second_outcome)
         self.assertEqual(observed[0], first_generation)
         self.assertEqual(observed[2], first_callback)
-        self.assertEqual(generations, [2, 3])
+        # Reconstruction runs before a fresh non-executing ENTRY is allocated.
+        self.assertEqual(generations, [1, 2])
         self.assertEqual(custodian._loss_callback.__self__, second_outcome["result"])
         with self.assertRaises(AuthorizationDenied):
             first_outcome["result"].set_measurement_window("DWELL")
-        second_outcome["result"].set_measurement_window("DWELL")
+        with self.assertRaises(AuthorizationDenied):
+            second_outcome["result"].set_measurement_window("DWELL")
 
     def test_reconstruction_cannot_expose_authority_or_reenter_takeover(self):
         old, _, _ = make_supervisor()
@@ -3247,7 +3754,6 @@ class SupervisorTakeoverTests(unittest.TestCase):
                 lambda: current.set_measurement_window("DWELL"),
                 lambda: current.issue_publication_grant(
                     current.publication_binding(), "intent", _direct_intent()),
-                lambda: current.publication_snapshot(current.publication_binding()),
                 store.claim_supervisor,
                 lambda: _restart(current),
                 lambda: direct_transition(current),
@@ -3268,11 +3774,14 @@ class SupervisorTakeoverTests(unittest.TestCase):
 
         with mock.patch.object(PersistentSupervisor, "_reconstruct", inspect):
             current = _restart(old)
-        self.assertEqual(denials, [[True] * 7])
+        self.assertEqual(denials, [[True] * 6])
         self.assertEqual(store._supervisor_generation, 2)
-        self.assertFalse(store.execution_revoked)
-        direct_transition(current)  # The same request is valid once ready.
-        current.set_measurement_window("DWELL")
+        self.assertTrue(store.execution_revoked)
+        current.publication_snapshot(current.publication_binding())  # historical read only
+        with self.assertRaises(AuthorizationDenied):
+            direct_transition(current)
+        with self.assertRaises(AuthorizationDenied):
+            current.set_measurement_window("DWELL")
 
     def test_reentrant_takeover_is_denied_before_shared_state_changes(self):
         for entry in ("constructor", "claim"):
@@ -3333,7 +3842,7 @@ class SupervisorTakeoverTests(unittest.TestCase):
                     old, _, custodian = make_supervisor()
                     store = old.store
                     target, method = {
-                        "session": (store, "register_session"),
+                        "session": (store, "reset_volatile"),
                         "custody": (custodian, "bind_authority"),
                         "reconstruction": (PersistentSupervisor, "_reconstruct"),
                     }[stage]
@@ -3353,16 +3862,15 @@ class SupervisorTakeoverTests(unittest.TestCase):
     def test_bare_generation_claim_never_makes_authority_ready(self):
         old, _, _ = make_supervisor()
         store = old.store
-        claimed = store.claim_supervisor()
-        self.assertEqual(claimed, 2)
-        self.assertFalse(store.supervisor_is_current(claimed))
-        self.assertTrue(store.execution_revoked)
-        self.assertTrue(store.publication_prohibited)
+        before = store.witness.high_generation
         with self.assertRaises(AuthorizationDenied):
-            old.set_measurement_window("DWELL")
+            store.claim_supervisor()
+        self.assertEqual(store.witness.high_generation, before)
+        old.set_measurement_window("DWELL")  # rejected legacy call did not revoke genuine authority
         current = _restart(old)
         self.assertEqual(current.reconstruction_violations, [])
-        current.set_measurement_window("DWELL")
+        with self.assertRaises(AuthorizationDenied):
+            current.set_measurement_window("OUTSIDE_MEASURED_WINDOWS")
 
     def test_interrupted_operation_installs_prohibition_before_waiting_takeover(self):
         for family in ("window", "publication"):
@@ -3376,7 +3884,7 @@ class SupervisorTakeoverTests(unittest.TestCase):
                     method = ("_bind_window_result" if family == "window" else
                               "_bind_publication_grant")
                     original = getattr(store, method)
-                    register_session = store.register_session
+                    reconstruct = PersistentSupervisor._reconstruct
                     paused, release = threading.Event(), threading.Event()
                     latches_at_takeover = []
 
@@ -3386,20 +3894,22 @@ class SupervisorTakeoverTests(unittest.TestCase):
                         paused.set()
                         if not release.wait(timeout=5):
                             raise AssertionError("failure release exceeded bound")
+                        store.__dict__.pop(method, None)
                         raise KeyboardInterrupt("interrupted before operation return")
 
-                    def inspect_latches(new_session):
+                    def inspect_latches(current):
                         # Check the sticky flags before replay can derive them.
                         latches_at_takeover.append((store._execution_revoked,
                                                    store._publication_prohibited))
-                        return register_session(new_session)
+                        return reconstruct(current)
 
                     lock = _TakeoverScheduleLock(store, "successor")
                     store.authorization_lock = lock
                     threads = []
                     try:
-                        with mock.patch.object(store, method, interrupt), mock.patch.object(
-                                store, "register_session", inspect_latches):
+                        with mock.patch.object(type(store), method,
+                                lambda current, *args, **kwargs: interrupt(*args, **kwargs)), mock.patch.object(
+                                PersistentSupervisor, "_reconstruct", inspect_latches):
                             invoke = (lambda: old.set_measurement_window("DWELL")) if (
                                 family == "window") else lambda: old.perform_publication(
                                     binding, grant, intent, intent.bytes)
@@ -3416,18 +3926,20 @@ class SupervisorTakeoverTests(unittest.TestCase):
                         release.set()
                         self._join(*threads)
                         store.authorization_lock = lock.lock
+                        store.__dict__.pop(method, None)
                     self.assertEqual(observed_generation, old._supervisor_generation)
                     self.assertIsInstance(outcome.get("error"), KeyboardInterrupt)
                     self.assertNotIn("error", takeover)
                     self.assertEqual(latches_at_takeover, [(True, True)])
                     current = takeover["result"]
-                    expected = ("pending-window-operation" if family == "window" else
-                                "consumed-publication-grant-without-result")
-                    self.assertEqual(expected in current.reconstruction_violations, not bound)
+                    self.assertFalse(current.session.execution_live)
+                    # Result binding is V bookkeeping after a committed kernel
+                    # result. Both seams retain exact read-only D/W evidence.
+                    self.assertEqual(store.witness.pending, {})
                     if family == "publication":
                         self.assertTrue(store.publication_grant_consumed(grant.grant_id))
-                        self.assertEqual(grant.grant_id in store._publication_grant_records,
-                                         bound)
+                        self.assertTrue(any(f['event'].get('operation_id') == grant.grant_id and
+                            store.publication_record_provenanced(f) for f in store._durable))
                     for survivor in (current, _restart(current)):
                         with self.assertRaises(AuthorizationDenied):
                             survivor.set_measurement_window("OUTSIDE_MEASURED_WINDOWS")

@@ -4,8 +4,9 @@ Everything in this module is an in-memory failure model.  No default live-effect
 implementation exists.  Callers must inject offline dispatch functions.
 """
 
-from dataclasses import dataclass, replace
-from contextlib import contextmanager
+from dataclasses import asdict, dataclass, replace
+from contextlib import contextmanager, nullcontext
+from functools import lru_cache
 import copy
 import hashlib
 import json
@@ -19,6 +20,8 @@ from .contracts import (
     CustodianReceipt, MEASUREMENT_WINDOWS, OUTSIDE_MEASURED_WINDOWS,
     PUBLICATION_OPERATIONS, WINDOW_OPERATION,
     parse_state,
+    AUTHORIZATION_V2_SCHEMA, JournalReference, ImmutableObjectReference,
+    U04EffectResultRecord, parse_effect_result_record,
 )
 
 
@@ -42,7 +45,7 @@ class Quarantined(StoreError):
     pass
 
 
-class AuthorizationDenied(ContractError):
+class AuthorizationDenied(ContractError, StoreError):
     pass
 
 
@@ -307,7 +310,7 @@ def _validated_window_history(store, authorization):
         if not store.window_record_provenanced(frame):
             violations.append("unprovenanced-measurement-window")
             continue
-        transition = store._window_operations[event["operation_id"]]
+        transition = MeasurementWindowTransition.from_record(store.identity, frame['event_id'], event)
         if (transition.authorization_digest != authorization.authorization_digest or
                 transition.campaign_id != authorization.campaign_id or
                 transition.previous_window != window or
@@ -318,7 +321,7 @@ def _validated_window_history(store, authorization):
         window, epoch = transition.window, transition.window_epoch
         epoch_windows[epoch] = window
         accepted.add(frame["event_id"])
-    for operation_id in sorted(store._window_operations):
+    for operation_id in (sorted(store._window_operations) if store._authentication_service is None else ()):
         result = store._window_results.get(operation_id)
         if result is None:
             violations.append("pending-window-operation")
@@ -341,6 +344,9 @@ def _publication_frame_groups(store):
     for index, frame in enumerate(store._durable):
         event = frame["event"]
         if _is_publication_record(event):
+            envelope = frame.get('envelope')
+            if type(envelope) is JournalEnvelope and json.loads(envelope.authority_fact_bytes).get('publication_grant', {}).get('phase') != 'RESULT':
+                continue
             groups.setdefault((event.get("destination"), event.get("object_key")),
                               []).append((index, frame))
     return groups
@@ -584,6 +590,227 @@ class AppendReceipt:
     durable: bool
 
 
+_U04_BOUNDARIES = {name: object() for name in (
+    "ENTRY", "INIT", "EXEC", "RESULT", "SHUTDOWN", "ADMIT", "DENY", "HISTORY",
+)}
+_U04_MODES = frozenset(("FRESH", "LIVE_PENDING", "LIVE", "RECOVERY", "WAITING", "TERMINAL",
+                        "SHUTDOWN_ONLY", "EXITED"))
+_U04_DENIAL_CODES = frozenset((
+    "UNFINISHED_BOOT_LOSS", "UNPLANNED_HANDOFF_LOSS", "SHUTDOWN_PENDING_AT_LOSS",
+    "INTERRUPTED_ADMISSION", "EXPLICIT_ABORT_OR_FAILURE", "PUBLICATION_INTEGRITY_CONFLICT",
+    "DURABLE_HISTORY_CONTRADICTION", "CUSTODY_LOSS_PROVEN",
+))
+
+# All fourteen Revision 6 entries have one writer and one authority meaning.
+# RW/RP entries are named here only to reject them throughout Checkpoint A.
+_U04_RECORD_BOUNDARIES = {
+    'SUPERVISOR_INCARNATION': ('ENTRY', 'CONTROL', False),
+    'PLANNED_SHUTDOWN_COMMITTED': ('SHUTDOWN', 'CONTROL', False),
+    'ACTIVATION_RESERVED': ('ADMIT', 'CONTROL', False),
+    'ACTIVATION_ADMITTED': ('ADMIT', 'EXECUTION', True),
+    'EFFECT_ACCEPTED': ('EXEC', 'EXECUTION', True),
+    'EFFECT_RESULT': ('RESULT', 'EVIDENCE', False),
+    'CAMPAIGN_EXECUTION_DENIED': ('DENY', 'DENIAL', False),
+    'RECOVERY_ENTRY': ('RW', 'EVIDENCE', False),
+    'RECOVERY_OBLIGATION': ('RW', 'EVIDENCE', False),
+    'RECOVERY_SUPPLEMENT': ('RW', 'EVIDENCE', False),
+    'RECOVERY_PUBLICATION_INTENT': ('RP', 'EVIDENCE', False),
+    'RECOVERY_PUBLICATION_ACCEPTED': ('RP', 'EVIDENCE_RECOVERY', False),
+    'RECOVERY_PUBLICATION_RESULT': ('RP', 'EVIDENCE', False),
+    'RECOVERY_PUBLICATION_VERIFIED': ('RP', 'EVIDENCE', False),
+}
+
+# Every store field is explicitly classified. D bytes and W/C/I references
+# survive reset; V indexes and handles are rebuilt or discarded, never retained
+# as independent authority. B locks/service references confer no entitlement.
+STORE_FIELD_DOMAINS = {
+    "identity": "B", "witness": "B/W", "_custodian": "B/C",
+    "_lock": "B", "_authorization_lock": "B", "authorization_lock": "B",
+    "_durable": "D", "_objects": "D", "torn_tail": "D",
+    "_receipts": "V/D", "_event_bytes": "V/D", "_volatile": "V",
+    "_sessions": "V", "_effect_capabilities": "V/D", "_effect_status": "V/D",
+    "_effect_results": "V/D", "_effect_acceptance_counts": "V/D",
+    "_accepted_effects": "V/D", "_active_creation_grants": "V",
+    "_invalidated_effects": "V/D", "_taint": "V/D/W", "_consumed": "V/D",
+    "quarantined": "V", "containment_only": "V", "_execution_revoked": "V",
+    "_publication_prohibited": "V", "_supervisor_generation": "V/W",
+    "_supervisor_ready": "V", "_measurement_window": "V/D", "_window_epoch": "V/D",
+    "_publication_grants": "V/D", "_consumed_publication_grants": "V/D",
+    "_publication_grant_records": "V/D", "_publication_grant_sequence": "V/D",
+    "_window_operations": "V/D", "_window_results": "V/D",
+    "_initial_window_operations": "V/D", "_window_operation_sequence": "V/D",
+    "_initialization_token": "V", "_slot_grants": "V",
+    "_validated_completions": "V/D", "_validated_boot_closures": "V/D",
+    "_validated_campaign_closure": "V/D", "_validated_boot_custody": "V/D",
+    "_current_actor": "V", "_entry_mode": "V/D/W", "_health": "V/D/W",
+    "_pending_reset": "V", "_authentication_service": "B/I",
+    "_historical_producers": "V/D",
+    "_acceptance_acks": "V",
+    "_activation_authentication_service": "B/I",
+    "_artifact_verifier": "B",
+    "_current_reconciler": "V",
+}
+
+_STORE_AUTHORITY_GROUPS = {
+    'durable authority': ('_durable',),
+    'immutable provenance': ('identity', 'witness', '_custodian', '_objects',
+        '_authentication_service', '_activation_authentication_service', '_artifact_verifier'),
+    'current volatile capability': ('_current_actor', '_current_reconciler'),
+    'derived historical view': ('_receipts', '_event_bytes', '_effect_capabilities', '_effect_status',
+        '_effect_results', '_effect_acceptance_counts', '_accepted_effects', '_invalidated_effects',
+        '_taint', '_consumed', '_measurement_window', '_window_epoch', '_publication_grants',
+        '_consumed_publication_grants', '_publication_grant_records', '_window_operations',
+        '_window_results', '_initial_window_operations', '_slot_grants', '_validated_completions',
+        '_validated_boot_closures', '_validated_campaign_closure', '_validated_boot_custody',
+        '_historical_producers', '_sessions', '_acceptance_acks', '_active_creation_grants'),
+    'volatile cache': ('_supervisor_generation', '_publication_grant_sequence',
+                       '_window_operation_sequence', '_initialization_token'),
+    'non-authorizing diagnostic state': ('_lock', '_authorization_lock', 'authorization_lock',
+        'torn_tail', '_volatile', 'quarantined', 'containment_only', '_execution_revoked',
+        '_publication_prohibited', '_supervisor_ready', '_entry_mode', '_health', '_pending_reset'),
+}
+STORE_FIELD_CLASSIFICATION = {
+    name: {'domain': STORE_FIELD_DOMAINS[name], 'authority_class': category,
+           'reset': ('preserve exact D bytes or pinned B/I/W/C service reference'
+                     if name in ('identity', 'witness', '_custodian', '_objects', '_durable', 'torn_tail',
+                                 '_authentication_service', '_activation_authentication_service',
+                                 '_artifact_verifier',
+                                 '_lock', '_authorization_lock', 'authorization_lock') else
+                     'discard; rebuild only validated history, never execution membership')}
+    for category, names in _STORE_AUTHORITY_GROUPS.items() for name in names
+}
+if set(STORE_FIELD_CLASSIFICATION) != set(STORE_FIELD_DOMAINS):
+    raise RuntimeError('every store field needs explicit authority/reset classification')
+
+
+@dataclass(frozen=True, eq=False)
+class IncarnationActor:
+    """Opaque volatile registration. IDs alone cannot reproduce membership."""
+    store_identity: str
+    authorization_digest: str
+    campaign_id: str
+    generation: int
+    incarnation_id: str
+    session_id: str
+    owner_identity: str
+    fence: int
+    mode: str
+    token: object
+    execution_session: object = None
+
+    @property
+    def execution_live(self):
+        return self.mode == "LIVE"
+
+    def producer(self):
+        return {"generation": self.generation, "incarnation_id": self.incarnation_id,
+                "session_id": self.session_id, "fence": self.fence,
+                "owner_identity": self.owner_identity, "mode": self.mode}
+
+
+def _u04_canonical(value):
+    def check(item):
+        if item is None or type(item) in (str, bool, int):
+            return
+        if type(item) in (tuple, list):
+            for child in item:
+                check(child)
+            return
+        if type(item) is dict and all(type(key) is str for key in item):
+            for child in item.values():
+                check(child)
+            return
+        raise StoreError("closed canonical transaction value required")
+    check(value)
+    return _canonical(value)
+
+
+@dataclass(frozen=True)
+class JournalEnvelope:
+    schema_version: str
+    transaction_id: str
+    revision: int
+    predecessor_revision: int
+    predecessor_hash: str
+    store_identity: str
+    authorization_digest: str
+    campaign_id: str
+    producer_bytes: bytes
+    boundary: str
+    authority_class: str
+    payload_bytes: bytes
+    payload_digest: str
+    authority_fact_bytes: bytes
+
+    def record(self):
+        return {"schema_version": self.schema_version, "transaction_id": self.transaction_id,
+                "revision": self.revision, "predecessor_revision": self.predecessor_revision,
+                "predecessor_hash": self.predecessor_hash, "store_identity": self.store_identity,
+                "authorization_digest": self.authorization_digest, "campaign_id": self.campaign_id,
+                "producer": json.loads(self.producer_bytes), "boundary": self.boundary,
+                "authority_class": self.authority_class, "payload": json.loads(self.payload_bytes),
+                "payload_digest": self.payload_digest,
+                "authority_facts": json.loads(self.authority_fact_bytes)}
+
+    def canonical_bytes(self):
+        # Pure computation cache keyed by every immutable input byte/value.
+        # Revision or mutable frame identity alone is never a cache key.
+        return _journal_envelope_bytes((self.schema_version, self.transaction_id,
+            self.revision, self.predecessor_revision, self.predecessor_hash,
+            self.store_identity, self.authorization_digest, self.campaign_id,
+            self.producer_bytes, self.boundary, self.authority_class,
+            self.payload_bytes, self.payload_digest, self.authority_fact_bytes))
+
+    @property
+    def frame_digest(self):
+        return _sha(bytes.fromhex(self.predecessor_hash) + self.canonical_bytes())
+
+
+@lru_cache(maxsize=2048)
+def _journal_envelope_bytes(immutable_fields):
+    """V-domain derived computation; it contains no issuance or membership."""
+    return _u04_canonical(JournalEnvelope(*immutable_fields).record())
+
+
+@dataclass(frozen=True)
+class WitnessReservation:
+    store_identity: str
+    transaction_id: str
+    revision: int
+    frame_digest: str
+    authorization_digest: str
+    campaign_id: str
+    initiator_bytes: bytes
+    boundary: str
+
+
+@dataclass(frozen=True)
+class WitnessCommit:
+    reservation: WitnessReservation
+    completion_mode: str
+    completer_bytes: bytes
+    frozen_frontier: int
+    receipt_id: str
+
+
+@dataclass(frozen=True, eq=False)
+class ReconciliationBinding:
+    reservation: WitnessReservation
+    generation: int
+    incarnation_id: str
+    session_id: str
+    fence: int
+    frozen_frontier: int
+    token: object
+
+
+class TransactionPending(StoreError):
+    """Exact identity retained; outcome is pending/unknown, never retry permission."""
+    def __init__(self, transaction_id, stage, status="PENDING"):
+        super().__init__("%s transaction %s at %s" % (status, transaction_id, stage))
+        self.transaction_id, self.stage, self.status = transaction_id, stage, status
+
+
 class OfflineWitness:
     """Independent high-water fake; it is never reconstructed from the store."""
 
@@ -597,16 +824,484 @@ class OfflineWitness:
         self.quarantined = False
         self.available = True
         self._lock = threading.Lock()
+        self.high_generation = 0
+        self._store_identity = None
+        self._actors = {}
+        self._frontiers = {}
+        self._commits = {}
+        self._reconcilers = {}
+        self._denials = {}
+        self._custodian = None
+        self._store = None
+        self._acknowledged = {}
+
+    def allocate_generation(self, store_identity, fault=None):
+        with self._allocation_context():
+            self._check_bound_store_health()
+            with self._lock:
+                if not self.available or self.quarantined:
+                    raise Quarantined("witness generation unavailable")
+                if (self._store_identity not in (None, store_identity) or
+                        self._store is not None and store_identity != self._store.identity):
+                    raise AuthorizationDenied("witness belongs to another store")
+                self._store_identity = store_identity
+                self.high_generation += 1
+                allocated = self.high_generation
+                if fault == "lost_ack":
+                    raise TransactionPending("generation-%d" % allocated, "allocation", "UNKNOWN")
+                return allocated
+
+    def register_actor(self, actor, *, _entry=None):
+        with self._lock:
+            if (_entry is not _U04_BOUNDARIES["ENTRY"] or
+                    type(actor) is not IncarnationActor or actor.mode == "LIVE" or
+                    actor.store_identity != self._store_identity or
+                    actor.generation != self.high_generation or actor.mode not in _U04_MODES or
+                    actor.fence != self.current_fence or actor.token is None):
+                raise AuthorizationDenied("witness actor binding")
+            if actor.store_identity in self._actors:
+                raise AuthorizationDenied("outgoing actor must be fenced before registration")
+            self._actors[actor.store_identity] = actor
+
+    def authenticate(self, actor, store_identity, boundary):
+        if (not self.available or self.quarantined or type(actor) is not IncarnationActor or
+                self._store is None or self._store._current_actor is not actor or
+                self._actors.get(store_identity) is not actor or
+                actor.generation != self.high_generation or actor.fence != self.current_fence):
+            raise AuthorizationDenied("captured witness actor is not current")
+        modes = {
+            "ENTRY": {"FRESH", "LIVE_PENDING", "RECOVERY", "WAITING", "TERMINAL"},
+            "INIT": {"FRESH"}, "EXEC": {"LIVE"},
+            "RESULT": {"LIVE", "RECOVERY", "TERMINAL"},
+            "SHUTDOWN": {"SHUTDOWN_ONLY"}, "ADMIT": {"WAITING", "LIVE_PENDING"},
+            "DENY": {"LIVE", "RECOVERY", "WAITING", "TERMINAL", "FRESH", "LIVE_PENDING"},
+            "HISTORY": {"LIVE", "FRESH", "LIVE_PENDING", "RECOVERY", "WAITING", "TERMINAL"},
+        }
+        if actor.mode not in modes.get(boundary, set()):
+            raise AuthorizationDenied("witness boundary/mode mismatch")
+        if boundary in ("EXEC", "INIT", "ADMIT") and self.denial(actor) is not None:
+            raise AuthorizationDenied("irreversible campaign execution denial")
+        return actor
+
+    def freeze_actor(self, actor):
+        with self._lock:
+            if self._actors.get(actor.store_identity) is actor:
+                if not self.available:
+                    # Volatile store revocation already prevents every dependent
+                    # operation; no frontier is invented when W is unreadable.
+                    raise TransactionPending(actor.incarnation_id, "fencing", "UNKNOWN")
+                self._frontiers[(actor.store_identity, actor.generation, actor.incarnation_id)] = (
+                    self.high_revision, self.high_chain_digest)
+                del self._actors[actor.store_identity]
+                self._acknowledged = {key: value for key, value in self._acknowledged.items()
+                                      if value.store_identity != actor.store_identity}
+            return self._frontiers.get((actor.store_identity, actor.generation, actor.incarnation_id))
+
+    def reserve_frame(self, actor, envelope, boundary_token):
+        with self._lock:
+            self.authenticate(actor, envelope.store_identity, envelope.boundary)
+            if _U04_BOUNDARIES.get(envelope.boundary) is not boundary_token:
+                raise AuthorizationDenied("dedicated witness boundary required")
+            if (envelope.schema_version != "u04-transaction/v1" or
+                    type(envelope.transaction_id) is not str or not envelope.transaction_id or
+                    envelope.transaction_id in self._commits or
+                    envelope.authorization_digest != actor.authorization_digest or
+                    envelope.campaign_id != actor.campaign_id or
+                    envelope.producer_bytes != _u04_canonical(actor.producer()) or
+                    envelope.predecessor_revision != self.high_revision or
+                    envelope.predecessor_hash != self.high_chain_digest or
+                    envelope.revision != self.high_revision + 1 or self.pending):
+                raise AuthorizationDenied("exact witnessed reservation binding")
+            reservation = WitnessReservation(envelope.store_identity, envelope.transaction_id,
+                envelope.revision, envelope.frame_digest, envelope.authorization_digest,
+                envelope.campaign_id, envelope.producer_bytes, envelope.boundary)
+            self.pending[envelope.revision] = reservation
+            return reservation
+
+    def commit_frame(self, actor, envelope, reservation, boundary_token, readback_bytes):
+        with self._lock:
+            self.authenticate(actor, envelope.store_identity, envelope.boundary)
+            if (_U04_BOUNDARIES.get(envelope.boundary) is not boundary_token or
+                    self.pending.get(envelope.revision) != reservation or
+                    reservation.transaction_id != envelope.transaction_id or
+                    reservation.initiator_bytes != _u04_canonical(actor.producer()) or
+                    reservation.frame_digest != envelope.frame_digest or
+                    readback_bytes != envelope.canonical_bytes() or
+                    not self._retained_frame_matches(envelope, readback_bytes)):
+                raise AuthorizationDenied("witness commit differs from exact validated reservation")
+            result = self._commit_reserved(reservation, "ORIGIN", envelope.producer_bytes,
+                                           self.high_revision)
+            if envelope.boundary == 'SHUTDOWN':
+                # W commit is logical exit, within the same exclusion boundary.
+                self._frontiers[(actor.store_identity, actor.generation, actor.incarnation_id)] = (
+                    self.high_revision, self.high_chain_digest)
+                del self._actors[actor.store_identity]
+                self._acknowledged = {key: value for key, value in self._acknowledged.items()
+                                      if value.store_identity != actor.store_identity}
+            return result
+
+    def _retained_frame_matches(self, envelope, raw):
+        """W reads its pinned actual D source, independently of caller bytes."""
+        if self._store is None or not 1 <= envelope.revision <= len(self._store._durable):
+            return False
+        retained = self._store._durable[envelope.revision - 1]
+        return (retained.get('envelope') == envelope and retained.get('bytes') == raw and
+                self._store._u04_frame_valid(retained))
+
+    def acknowledge_frame(self, actor, receipt, *, _boundary):
+        with self._lock:
+            committed = self._commits.get(receipt.event_id)
+            if (committed is None or _U04_BOUNDARIES.get(committed.reservation.boundary) is not _boundary or
+                    self._actors.get(actor.store_identity) is not actor or
+                    receipt.witness_receipt != committed.receipt_id or receipt.revision != committed.reservation.revision or
+                    committed.completion_mode != 'ORIGIN'):
+                raise AuthorizationDenied('current original acknowledgement registration required')
+            frame = self._store._durable[receipt.revision - 1]
+            if (frame['receipt'] != receipt or not self._store._u04_frame_valid(frame) or
+                    frame['envelope'].frame_digest != committed.reservation.frame_digest or
+                    frame['envelope'].producer_bytes != _u04_canonical(actor.producer())):
+                raise AuthorizationDenied('acknowledgement must match independently retained original transaction')
+            self._acknowledged[receipt.event_id] = actor
+
+    def acknowledged_current(self, actor, event_id):
+        with self._lock:
+            return (actor is not None and self.available and not self.quarantined and self._actors.get(actor.store_identity) is actor and
+                    actor.generation == self.high_generation and actor.fence == self.current_fence and
+                    self._acknowledged.get(event_id) is actor)
+
+    def _commit_reserved(self, reservation, mode, completer_bytes, frontier):
+        receipt_id = "witness-u04-" + _sha(_u04_canonical({
+            "witness": self.identity, "transaction_id": reservation.transaction_id,
+            "revision": reservation.revision, "frame_digest": reservation.frame_digest,
+            "initiator": json.loads(reservation.initiator_bytes),
+            "completion_mode": mode, "completer": json.loads(completer_bytes),
+            "frozen_frontier": frontier}))
+        commit = WitnessCommit(reservation, mode, completer_bytes, frontier, receipt_id)
+        self._commits[reservation.transaction_id] = commit
+        self.pending.pop(reservation.revision)
+        self.high_revision = reservation.revision
+        self.high_chain_digest = reservation.frame_digest
+        return commit
+
+    def query_transaction(self, transaction_id):
+        if not self.available:
+            raise TransactionPending(transaction_id, "query", "UNKNOWN")
+        committed = self._commits.get(transaction_id)
+        if committed is not None:
+            return "COMMITTED", committed
+        matches = [r for r in self.pending.values() if isinstance(r, WitnessReservation)
+                   and r.transaction_id == transaction_id]
+        return ("PENDING", matches[0]) if len(matches) == 1 else ("ABSENT", None)
+
+    def issue_reconciler(self, envelope):
+        """One exact prior reservation; no writer or execution entitlement."""
+        with self._allocation_context():
+            if self._store is None or self._store._authentication_service is None:
+                raise AuthorizationDenied("bound authenticated reconciliation store required")
+            with self._store._lock:
+                status, _ = self._store._validate_reconciliation_frame(envelope)
+                if status != "PENDING":
+                    raise AuthorizationDenied("exact pending reconciliation tail required")
+                with self._lock:
+                    reservation = self.pending.get(envelope.revision)
+                    producer = json.loads(envelope.producer_bytes)
+                    frontier = self._frontiers.get((envelope.store_identity, producer["generation"],
+                                                   producer["incarnation_id"]))
+                    if (not self.available or self.quarantined or
+                            type(reservation) is not WitnessReservation or frontier is None or
+                            reservation.transaction_id != envelope.transaction_id or
+                            reservation.frame_digest != envelope.frame_digest or
+                            reservation.initiator_bytes != envelope.producer_bytes or
+                            envelope.predecessor_revision != self.high_revision or
+                            envelope.predecessor_hash != self.high_chain_digest):
+                        raise AuthorizationDenied("unchanged fenced reservation required")
+                    self.high_generation += 1
+                    self.high_fence += 1
+                    self.current_fence = self.high_fence
+                    generation = self.high_generation
+                    binding = ReconciliationBinding(reservation, generation,
+                        "%s-reconciliation-%d" % (envelope.store_identity, generation),
+                        "%s-reader-%d" % (envelope.store_identity, generation), self.current_fence,
+                        frontier[0], object())
+                    self._reconcilers[envelope.transaction_id] = binding
+                    return binding
+
+    def reconcile_frame(self, binding, envelope, retained_bytes):
+        with self._allocation_context():
+            if self._store is None or self._store._authentication_service is None:
+                raise AuthorizationDenied("bound authenticated reconciliation store required")
+            with self._store._lock:
+                status, _ = self._store._validate_reconciliation_frame(envelope)
+                if status != "PENDING":
+                    raise AuthorizationDenied("exact pending reconciliation tail required")
+                with self._lock:
+                    if (not self.available or self.quarantined or
+                            type(binding) is not ReconciliationBinding or
+                            self._store is None or self._store._current_reconciler is not binding or
+                            self._reconcilers.get(envelope.transaction_id) is not binding or
+                            binding.generation != self.high_generation or
+                            binding.fence != self.current_fence or
+                            self.pending.get(envelope.revision) != binding.reservation or
+                            binding.reservation.frame_digest != envelope.frame_digest or
+                            binding.reservation.initiator_bytes != envelope.producer_bytes or
+                            retained_bytes != envelope.canonical_bytes() or
+                            not self._retained_frame_matches(envelope, retained_bytes)):
+                        raise AuthorizationDenied("exact non-executing reconciliation binding required")
+                    completer = _u04_canonical({"generation": binding.generation,
+                        "incarnation_id": binding.incarnation_id, "session_id": binding.session_id,
+                        "fence": binding.fence, "mode": "RECOVERY_RECONCILE"})
+                    result = self._commit_reserved(binding.reservation, "RECOVERY_RECONCILE",
+                                                   completer, binding.frozen_frontier)
+                    del self._reconcilers[envelope.transaction_id]
+                    return result
+
+    def deny_pending_reconciliation(self, binding, envelope, prefix):
+        """A fenced exact reservation plus complete frontier proves loss."""
+        with self._lock:
+            if (not self.available or self._reconcilers.get(envelope.transaction_id) is not binding or
+                    binding.generation != self.high_generation or binding.fence != self.current_fence or
+                    self.pending.get(envelope.revision) != binding.reservation or
+                    len(prefix) != self.high_revision or envelope.predecessor_hash != self.high_chain_digest):
+                raise AuthorizationDenied('exact readable loss frontier required before reconciliation')
+            previous = '0' * 64
+            for revision, old in enumerate(prefix, 1):
+                commit = self._commits.get(old.transaction_id)
+                if (old.revision != revision or old.predecessor_hash != previous or commit is None or
+                        commit.reservation.frame_digest != old.frame_digest):
+                    raise AuthorizationDenied('complete authenticated reconciliation prefix required')
+                previous = old.frame_digest
+            if previous != self.high_chain_digest:
+                raise AuthorizationDenied('unknown loss frontier cannot establish denial')
+            if envelope.boundary == 'SHUTDOWN':
+                code = 'SHUTDOWN_PENDING_AT_LOSS'
+            elif envelope.boundary in ('ADMIT', 'INIT'):
+                code = 'INTERRUPTED_ADMISSION'
+            elif envelope.boundary in ('EXEC', 'RESULT'):
+                code = 'UNFINISHED_BOOT_LOSS'
+            else:
+                return None
+            key = (envelope.store_identity, envelope.authorization_digest, envelope.campaign_id)
+            self._denials.setdefault(key, (code, tuple([p.transaction_id for p in prefix] +
+                                                       [envelope.transaction_id])))
+            return self._denials[key]
+
+    def denial(self, actor):
+        return self._denials.get((actor.store_identity, actor.authorization_digest, actor.campaign_id))
+
+    def deny_durable_digest_conflict(self, store, *, _boundary):
+        """The pinned D readback source positively contradicts a committed W digest.
+
+        Read failures and absence do not establish this predicate. No actor,
+        generation, journal record, or execution capability is created here.
+        """
+        with self._lock:
+            if (_boundary is not _U04_BOUNDARIES['DENY'] or self._store is not store or
+                    not self.available or self.quarantined):
+                raise AuthorizationDenied('pinned readable contradiction verifier required')
+            for frame in store._durable:
+                envelope = frame.get('envelope')
+                if type(envelope) is not JournalEnvelope:
+                    continue
+                committed = self._commits.get(envelope.transaction_id)
+                if committed is None or committed.reservation.revision != envelope.revision:
+                    continue
+                try:
+                    raw = store._independent_frame_readback(envelope.revision)
+                    if type(raw) is not bytes:
+                        continue
+                    retained = json.loads(raw)
+                    observed = _sha(bytes.fromhex(retained['predecessor_hash']) + raw)
+                except (OSError, ValueError, KeyError, TypeError, IndexError):
+                    continue
+                reservation = committed.reservation
+                if observed != reservation.frame_digest:
+                    key = (reservation.store_identity, reservation.authorization_digest, reservation.campaign_id)
+                    self._denials.setdefault(key, ('DURABLE_HISTORY_CONTRADICTION', (reservation.transaction_id,)))
+                    return self._denials[key]
+            raise AuthorizationDenied('no positive independently observed committed digest conflict')
+
+    def change_mode(self, actor, mode, *, _boundary, execution_session=None):
+        """Replace current membership; historical producer bytes never change."""
+        with self._lock:
+            boundary = next((name for name, token in _U04_BOUNDARIES.items() if token is _boundary), None)
+            self.authenticate(actor, actor.store_identity, boundary)
+            permitted = {('INIT', 'FRESH', 'LIVE'),
+                         ('EXEC', 'LIVE', 'SHUTDOWN_ONLY'),
+                         ('ADMIT', 'LIVE_PENDING', 'LIVE')}
+            if (boundary, actor.mode, mode) not in permitted:
+                raise AuthorizationDenied('mode transition requires dedicated admission/exit')
+            required = {('INIT', 'LIVE'): ('MEASUREMENT_WINDOW', None),
+                        ('ADMIT', 'LIVE'): ('ACTIVATION_ADMITTED', None),
+                        ('EXEC', 'SHUTDOWN_ONLY'): (None, 'BOOT_HANDOFF_PENDING')}[(boundary, mode)]
+            frames = [f for f in self._store._durable if
+                (required[0] is None or f['event'].get('record_type') == required[0]) and
+                (required[1] is None or f['event'].get('state') == required[1]) and
+                type(f.get('envelope')) is JournalEnvelope and f['envelope'].boundary == boundary and
+                f['envelope'].producer_bytes == _u04_canonical(actor.producer())]
+            if not frames or self._acknowledged.get(frames[-1]['event_id']) is not actor:
+                raise AuthorizationDenied('mode exposure requires acknowledged original transaction in this incarnation')
+            frame = frames[-1]
+            committed = self._commits.get(frame['event_id'])
+            if (committed is None or not self._store._u04_frame_valid(frame) or
+                    frame['envelope'].frame_digest != committed.reservation.frame_digest or
+                    frame['receipt'].witness_receipt != committed.receipt_id or
+                    committed.completion_mode != 'ORIGIN'):
+                raise AuthorizationDenied('mode exposure requires the independently confirmed original frame')
+            if mode == 'LIVE':
+                ordinal = 1 if boundary == 'INIT' else frames[-1]['event']['next_boot_ordinal']
+                if execution_session != FenceSession(actor.fence, actor.session_id, actor.owner_identity, ordinal, True):
+                    raise AuthorizationDenied('admission must expose the exact fresh session')
+            changed = replace(actor, mode=mode, execution_session=execution_session)
+            self._actors[actor.store_identity] = changed
+            return changed
+
+    def deny_observed_rollback(self, store, before, *, _boundary):
+        """Verify the offline storage fault primitive's observed D rollback.
+
+        Unlike a missing tail, this supplies both the previously independently
+        verified complete stream and the exact shorter stream produced by the
+        pinned storage primitive. It creates no checkpoint or replacement bytes.
+        """
+        with self._lock:
+            if (self._store is not store or _boundary is not _U04_BOUNDARIES['DENY'] or
+                    not self.available or self.quarantined or type(before) is not tuple or
+                    len(before) != self.high_revision or len(store._durable) >= len(before)):
+                raise AuthorizationDenied('independently observed complete rollback required')
+            previous = '0' * 64
+            for revision, frame in enumerate(before, 1):
+                envelope = frame.get('envelope')
+                commit = self._commits.get(frame.get('event_id'))
+                if (type(envelope) is not JournalEnvelope or commit is None or
+                        not store._u04_frame_valid(frame) or envelope.revision != revision or
+                        envelope.predecessor_hash != previous or
+                        commit.reservation.frame_digest != envelope.frame_digest or
+                        commit.reservation.initiator_bytes != envelope.producer_bytes or
+                        frame['receipt'].witness_receipt != commit.receipt_id):
+                    raise AuthorizationDenied('rollback source lacks independently committed provenance')
+                previous = envelope.frame_digest
+            if previous != self.high_chain_digest:
+                raise AuthorizationDenied('rollback source is not the complete original frontier')
+            for revision, frame in enumerate(store._durable, 1):
+                if store._independent_frame_readback(revision) != before[revision - 1]['bytes']:
+                    raise AuthorizationDenied('rollback result differs from the observed exact prefix')
+            for frame in before[len(store._durable):]:
+                envelope = frame['envelope']
+                key = (envelope.store_identity, envelope.authorization_digest, envelope.campaign_id)
+                self._denials.setdefault(key, ('DURABLE_HISTORY_CONTRADICTION', (envelope.transaction_id,)))
+
+
+    def advance_admission_fence(self, actor, reservation, fence):
+        with self._lock:
+            committed = self._commits.get(reservation.event_id)
+            if (self._actors.get(actor.store_identity) is not actor or actor.mode != 'LIVE_PENDING' or
+                    committed is None or committed.reservation.boundary != 'ADMIT' or
+                    fence != self.current_fence or fence <= actor.fence):
+                raise AuthorizationDenied('fence advance requires exact reserved admission')
+            changed = replace(actor, fence=fence)
+            self._actors[actor.store_identity] = changed
+            return changed
+
+    def deny_campaign(self, actor, code, envelopes, *, _boundary):
+        with self._lock:
+            self.authenticate(actor, actor.store_identity, 'DENY')
+            return self._deny_from_complete_frontier(actor, code, envelopes, _boundary=_boundary)
+
+    def deny_frozen_campaign(self, store, actor, code, envelopes, *, _boundary):
+        """A negative-only verifier of the original frozen producer's loss."""
+        with self._lock:
+            key = (actor.store_identity, actor.generation, actor.incarnation_id)
+            if (self._store is not store or store._current_actor is not None or
+                    not self.available or self.quarantined or key not in self._frontiers or
+                    actor.generation != self.high_generation or actor.fence != self.current_fence or
+                    not any(all(json.loads(commit.reservation.initiator_bytes).get(name) == value
+                                for name, value in actor.producer().items() if name not in ('mode', 'fence')) and
+                            json.loads(commit.reservation.initiator_bytes)['fence'] <= actor.fence
+                            for commit in self._commits.values())):
+                raise AuthorizationDenied('independent complete frozen original producer proof required')
+            return self._deny_from_complete_frontier(actor, code, envelopes, _boundary=_boundary)
+
+    def _deny_from_complete_frontier(self, actor, code, envelopes, *, _boundary):
+        if _boundary is not _U04_BOUNDARIES['DENY'] or code not in _U04_DENIAL_CODES:
+            raise AuthorizationDenied('closed positive-evidence denial boundary')
+        previous = '0' * 64
+        for revision, envelope in enumerate(envelopes, 1):
+            committed = self._commits.get(envelope.transaction_id)
+            if (type(envelope) is not JournalEnvelope or envelope.revision != revision or
+                    envelope.predecessor_hash != previous or committed is None or
+                    committed.reservation.frame_digest != envelope.frame_digest or
+                    envelope.store_identity != actor.store_identity or
+                    envelope.authorization_digest != actor.authorization_digest):
+                raise AuthorizationDenied('complete authenticated denial frontier required')
+            previous = envelope.frame_digest
+        if len(envelopes) != self.high_revision or previous != self.high_chain_digest:
+            raise AuthorizationDenied('incomplete denial frontier')
+        events = [json.loads(e.payload_bytes) for e in envelopes]
+        # An earlier boot's valid shutdown does not excuse loss in a
+        # later admitted boot. Evaluate the latest activation segment.
+        starts = [i for i, e in enumerate(events) if e.get('state') == 'CAMPAIGN_ADMITTED' or
+                  e.get('record_type') == 'ACTIVATION_RESERVED']
+        start = starts[-1] if starts else 0
+        segment = events[start:]
+        segment_envelopes = envelopes[start:]
+        lost = [e for e in segment_envelopes if (
+            e.store_identity, json.loads(e.producer_bytes)['generation'],
+            json.loads(e.producer_bytes)['incarnation_id']) in self._frontiers]
+        shutdowns = [e for e in segment_envelopes if json.loads(e.payload_bytes).get('record_type') ==
+                     'PLANNED_SHUTDOWN_COMMITTED' and self._commits[e.transaction_id].completion_mode == 'ORIGIN']
+        complete = not self.pending
+        terminal = any(e.get('state') == 'CAMPAIGN_COMPLETE' for e in segment)
+        if code == 'UNFINISHED_BOOT_LOSS':
+            active = any(e.get('state') == 'CAMPAIGN_ADMITTED' or
+                         e.get('record_type') == 'ACTIVATION_ADMITTED' for e in segment)
+            valid = complete and bool(lost) and active and not shutdowns and not terminal and not any(
+                e.get('state') == 'BOOT_HANDOFF_PENDING' for e in segment)
+        elif code == 'UNPLANNED_HANDOFF_LOSS':
+            valid = complete and bool(lost) and not shutdowns and not terminal and any(
+                e.get('operation') == 'begin-boot-handoff' for e in segment)
+        elif code == 'INTERRUPTED_ADMISSION':
+            valid = complete and bool(lost) and not shutdowns and not terminal and any(
+                e.get('state') == 'AUTHORIZATION_ADMITTED' or
+                e.get('record_type') in ('ACTIVATION_RESERVED', 'ACTIVATION_ADMITTED') for e in segment)
+        elif code == 'SHUTDOWN_PENDING_AT_LOSS':
+            recovered = [e for e in segment_envelopes if json.loads(e.payload_bytes).get('record_type') ==
+                'PLANNED_SHUTDOWN_COMMITTED' and self._commits[e.transaction_id].completion_mode == 'RECOVERY_RECONCILE']
+            valid = complete and bool(lost) and not shutdowns and bool(recovered)
+        elif code == 'EXPLICIT_ABORT_OR_FAILURE':
+            valid = any(e.get('state') in ('ABORTED', 'TAINTED') and
+                        e.get('campaign_id') == actor.campaign_id for e in events)
+        elif code == 'CUSTODY_LOSS_PROVEN':
+            valid = complete and not shutdowns and not terminal and self._custodian is not None and any(
+                e.get('state') == 'BOOT_CUSTODY_ESTABLISHED' and
+                self._custodian.confirms_required_custody_loss(e.get('custody_attestation')) for e in segment)
+        elif code == 'PUBLICATION_INTEGRITY_CONFLICT':
+            valid = complete and self._custodian is not None and any(
+                e.get('record_type') == 'PUBLICATION' and
+                any(a.get('record_type') == 'EFFECT_ACCEPTED' and
+                    a.get('effect_id') == e.get('operation_id') for a in events) and
+                self._custodian.confirms_publication_conflict(e) for e in events)
+        else:
+            # Remaining positive predicates stay unavailable until their
+            # exact independent proof verifier is integrated.
+            valid = False
+        if not valid:
+            raise AuthorizationDenied('denial trigger lacks accepted positive evidence')
+        key = (actor.store_identity, actor.authorization_digest, actor.campaign_id)
+        self._denials.setdefault(key, (code, tuple(e.transaction_id for e in envelopes)))
+        return self._denials[key]
 
     def acquire_fence(self, owner, fail=False):
-        with self._lock:
-            self.high_fence += 1
-            epoch = self.high_fence
-            if not fail:
-                self.current_fence = epoch
-            return epoch
+        with self._allocation_context():
+            self._check_bound_store_health()
+            with self._lock:
+                self.high_fence += 1
+                epoch = self.high_fence
+                if not fail:
+                    self.current_fence = epoch
+                return epoch
 
     def reserve(self, revision, chain_digest):
+        if self._store is not None and self._store._authentication_service is not None:
+            raise AuthorizationDenied('legacy witness reservations cannot mutate a U-04 journal')
         if not self.available:
             raise Quarantined("witness unavailable")
         if revision != self.high_revision + 1 or revision in self.pending:
@@ -616,6 +1311,8 @@ class OfflineWitness:
         return "reservation-%d-%s" % (revision, chain_digest[:12])
 
     def commit(self, revision, chain_digest):
+        if self._store is not None and self._store._authentication_service is not None:
+            raise AuthorizationDenied('legacy witness commits cannot mutate a U-04 journal')
         if self.pending.get(revision) != chain_digest:
             self.quarantined = True
             raise Quarantined("witness reservation mismatch")
@@ -623,6 +1320,17 @@ class OfflineWitness:
         self.high_revision = revision
         self.high_chain_digest = chain_digest
         return "witness-%d-%s" % (revision, chain_digest[:12])
+
+    def _check_bound_store_health(self):
+        # Read actual D/W outside W's lock to preserve the store->witness lock
+        # order. Allocated numbers confer no actor or writer entitlement.
+        if self._store is not None and self._store._authentication_service is not None:
+            self._store.assert_healthy_authority()
+            self._store.read_verified(0)
+
+    def _allocation_context(self):
+        return (self._store.authorization_lock if self._store is not None and
+                self._store._authentication_service is not None else nullcontext())
 
 
 class _AuthorizationLock:
@@ -656,15 +1364,57 @@ class _AuthorizationLock:
 
     def __exit__(self, *exc_info):
         self.release()
+
+
+_LOCAL_INSPECTION_BOUNDARY = object()
+_LOCAL_INSPECTION_READER_ID = 'offline-local-reader'
+
+
+class OfflineReadOnlyInspector:
+    """A bootstrap-supplied local reader; never an actor or a writer.
+
+    The pinned OCAV service is the offline trusted-local setup boundary. This
+    models configured local read permission, not remote identity authentication.
+    """
+    def __init__(self, store, service, authorization, reader_identity, *, _entry):
+        if _entry is not _LOCAL_INSPECTION_BOUNDARY:
+            raise AuthorizationDenied('trusted local inspection binding required')
+        self._store, self._service = store, service
+        self._authorization, self._reader_identity = authorization, reader_identity
+
+    def snapshot(self):
+        store = self._store
+        if (self._service is not store._authentication_service or
+                self._reader_identity != _LOCAL_INSPECTION_READER_ID):
+            raise AuthorizationDenied('configured original local reader required')
+        self._service.verify(self._authorization, store_identity=store.identity,
+                             campaign_id=self._authorization.campaign_id)
+        prefix = store.verified_prefix()
+        raw = tuple(bytes(frame['bytes']) for frame in store._durable)
+        if any(frame['envelope'].authorization_digest != self._authorization.authorization_digest or
+               frame['envelope'].campaign_id != self._authorization.campaign_id for frame in prefix['frames']):
+            return {'frames': (), 'stop_reason': 'AUTHORIZATION_UNPROVEN', 'untrusted_raw_bytes': raw,
+                    'reader_identity': self._reader_identity, 'authorizes_execution': False}
+        return dict(prefix, reader_identity=self._reader_identity, untrusted_raw_bytes=raw)
         return False
 
 
 class OfflineDurableStore:
     """Append-only framed-journal model with independent witness semantics."""
 
-    def __init__(self, identity, witness):
+    def __setattr__(self, name, value):
+        if (name in ('identity', 'witness', '_custodian', '_authentication_service', '_activation_authentication_service', '_artifact_verifier') and
+                name in self.__dict__ and self.__dict__[name] is not value):
+            raise AuthorizationDenied('bootstrap identity and authentication references are pinned for this store lifetime')
+        object.__setattr__(self, name, value)
+
+    def __init__(self, identity, witness, *, chair_verifier=None, activation_verifier=None):
+        if witness._store is not None:
+            raise AuthorizationDenied('independent witness is already bound to its original store')
         self.identity = identity
         self.witness = witness
+        self._artifact_verifier = None
+        witness._store = self
         self._durable = []
         self._volatile = []
         self._receipts = {}
@@ -717,6 +1467,1332 @@ class OfflineDurableStore:
         self._validated_campaign_closure = None
         self._validated_boot_custody = {}
         self.torn_tail = b""
+        self._current_actor = None
+        self._current_reconciler = None
+        self._entry_mode = "INSPECTION"
+        self._health = "HEALTHY"
+        self._pending_reset = False
+        # B service reference only; the sealed I root remains owned by the
+        # authentication service chosen by trusted bootstrap before runtime.
+        self._authentication_service = chair_verifier
+        self._historical_producers = {}
+        self._acceptance_acks = {}
+        self._activation_authentication_service = activation_verifier
+
+    @property
+    def health(self):
+        if not self.witness.available:
+            return 'UNKNOWN'
+        return self._health
+
+    def begin_fresh_entry(self, chair_verifier, authorization, owner_identity, fault=None):
+        """Authenticated FRESH binding only. Constructor/OCAV cannot grant LIVE."""
+        from .authorization import OfflineChairAuthorizationVerifier
+        if (type(chair_verifier) is not OfflineChairAuthorizationVerifier or
+                chair_verifier is not self._authentication_service):
+            raise AuthorizationDenied("trusted bootstrap authentication service required")
+        chair_verifier.verify(authorization, store_identity=self.identity,
+                              campaign_id=authorization.campaign_id)
+        with self.authorization_lock:
+            if (self._durable or self.torn_tail or self.witness.high_revision or
+                    self.witness.high_generation or self.witness.high_fence or
+                    self.witness.pending or self._current_actor is not None or
+                    self.witness._actors):
+                raise AuthorizationDenied("witness-backed genuine freshness required")
+            self._check_healthy()
+            generation = self.witness.allocate_generation(self.identity)
+            fence = self.witness.acquire_fence(owner_identity)
+            actor = IncarnationActor(self.identity, authorization.authorization_digest,
+                authorization.campaign_id, generation,
+                "%s-incarnation-%d" % (self.identity, generation),
+                "%s-session-%d" % (self.identity, generation), owner_identity, fence,
+                "FRESH", object())
+            self.witness.register_actor(actor, _entry=_U04_BOUNDARIES["ENTRY"])
+            self._current_actor = actor
+            self._supervisor_generation = generation
+            self._entry_mode = "FRESH"
+            event = self._u04_common(actor, "SUPERVISOR_INCARNATION", "CONTROL", False)
+            event.update(mode="FRESH", entry_refs=[],
+                         witness_generation_receipt="generation-%d" % generation,
+                         incarnation_id=actor.incarnation_id)
+            try:
+                self._commit_u04(actor, "ENTRY", event, fault=fault)
+            except BaseException:
+                self._execution_revoked = self._publication_prohibited = True
+                self.witness.freeze_actor(actor)
+                self._current_actor = None
+                raise
+            return actor
+
+    def _validate_init_payload(self, actor, event, facts):
+        if event.get('record_type') != 'MEASUREMENT_WINDOW' and (
+                event.get('authority_class') != 'CONTROL' or event.get('authorizes_execution') is not False):
+            raise AuthorizationDenied('INIT binding is CONTROL and never execution authority')
+        if event.get('state') == 'AUTHORIZATION_ADMITTED':
+            expected = {'state_domain', 'state', 'store_identity', 'authorization_id',
+                'authorization_digest', 'campaign_id', 'canonical_authorization_hex',
+                'root_id', 'root_version', 'core_manifest_digest', 'adapter_manifest_digest',
+                'policy_digest', 'schema_digest', 'authority_class', 'authorizes_execution'}
+            from .contracts import authorization_from_record
+            payload = json.loads(bytes.fromhex(event['canonical_authorization_hex']))
+            payload['authorization_digest'] = event['authorization_digest']
+            authorization = authorization_from_record(payload)
+            checked = self._authentication_service.verify(authorization,
+                store_identity=self.identity, campaign_id=actor.campaign_id)
+            if (checked.root_id != event['root_id'] or checked.root_version != event['root_version'] or
+                    authorization.authorization_id != event['authorization_id'] or
+                    any(getattr(authorization, name) != event[name] for name in (
+                        'core_manifest_digest', 'adapter_manifest_digest', 'policy_digest', 'schema_digest')) or
+                    any(f['event'].get('state') == 'AUTHORIZATION_ADMITTED' for f in self._committed_frames())):
+                raise AuthorizationDenied('INIT requires exact independent original authentication')
+        elif event.get('state') == 'CAMPAIGN_ADMITTED':
+            expected = {'state_domain', 'state', 'store_identity', 'authorization_digest',
+                'campaign_id', 'boot_id', 'activation_id', 'session_id', 'session_owner',
+                'session_live', 'fence_epoch', 'boot_ordinal', 'session_boot_ordinal',
+                'supervisor_generation', 'authority_class', 'authorizes_execution'}
+            expected.add('operation')
+            if not any(f['event'].get('state') == 'AUTHORIZATION_ADMITTED'
+                       for f in self._committed_frames()):
+                raise AuthorizationDenied('original admission required before campaign binding')
+            if type(facts) is not dict or set(facts) != {'consumptions', 'activation_authentication'}:
+                raise AuthorizationDenied('INIT requires independently authenticated exact activation')
+            proof = facts['activation_authentication']
+            activation = BootActivation(**json.loads(bytes.fromhex(proof['canonical_bytes_hex'])))
+            checked = self._activation_authentication_service.verify(activation,
+                store_identity=self.identity, authorization=self._admitted_payload(), predecessor_digest=None)
+            if (proof != {'verifier_id': checked.verifier_id, 'canonical_bytes_hex': checked.canonical_bytes.hex(),
+                          'digest': checked.digest} or activation.activation_id != event['activation_id'] or
+                    activation.observed_boot_id != event['boot_id'] or activation.boot_ordinal != 1 or
+                    facts['consumptions'] != [['authorization', self._admitted_payload().authorization_id],
+                                             ['boot_activation', activation.activation_id]]):
+                raise AuthorizationDenied('INIT activation differs from authenticated binding')
+        elif event.get('record_type') == 'MEASUREMENT_WINDOW':
+            transition = MeasurementWindowTransition.from_record(self.identity,
+                'measurement-' + event['operation_id'], event)
+            expected = set(transition.record())
+            if not transition.initial or self._window_epoch != 0:
+                raise AuthorizationDenied('INIT window may not resume historical admission')
+        else:
+            raise AuthorizationDenied('closed INIT record required')
+        if (set(event) != expected or
+                event.get('authorization_digest') != actor.authorization_digest or
+                event.get('campaign_id') != actor.campaign_id):
+            raise AuthorizationDenied('closed INIT identity required')
+        if event.get('state') == 'CAMPAIGN_ADMITTED' and any(event.get(name) != value for name, value in {
+                'store_identity': self.identity, 'session_id': actor.session_id,
+                'session_owner': actor.owner_identity, 'session_live': False, 'fence_epoch': actor.fence,
+                'supervisor_generation': actor.generation, 'boot_ordinal': 1, 'session_boot_ordinal': 1,
+                'authority_class': 'CONTROL', 'authorizes_execution': False, 'operation': 'admit-campaign'}.items()):
+            raise AuthorizationDenied('INIT cannot substitute a caller identity for its captured actor')
+        if event.get('record_type') == 'MEASUREMENT_WINDOW' and (
+                transition.session_id != actor.session_id or transition.supervisor_generation != actor.generation or
+                transition.fence_epoch != actor.fence):
+            raise AuthorizationDenied('initial window must bind the captured INIT actor')
+
+    def complete_fresh_admission(self, actor, authorization, activation):
+        """No live membership escapes an incomplete fresh INIT."""
+        with self.authorization_lock:
+            self.require_actor(actor, 'INIT')
+            if self._activation_authentication_service is None:
+                raise AuthorizationDenied('independent activation authentication unavailable')
+            verified = self._activation_authentication_service.verify(activation, store_identity=self.identity,
+                authorization=authorization, predecessor_digest=None)
+            if (not isinstance(activation, BootActivation) or activation.boot_ordinal != 1 or
+                    activation.authorization_digest != authorization.authorization_digest or
+                    activation.chair_identity != authorization.chair_identity or
+                    self.is_consumed('boot_activation', activation.activation_id)):
+                raise AuthorizationDenied('exact fresh authenticated activation required')
+            self.admit_authorization(actor, authorization)
+            event = {'state_domain': 'campaign', 'state': 'CAMPAIGN_ADMITTED',
+                'store_identity': self.identity, 'authorization_digest': actor.authorization_digest,
+                'campaign_id': actor.campaign_id, 'boot_id': activation.observed_boot_id,
+                'activation_id': activation.activation_id, 'session_id': actor.session_id,
+                'session_owner': actor.owner_identity, 'session_live': False,
+                'fence_epoch': actor.fence, 'boot_ordinal': 1, 'session_boot_ordinal': 1,
+                'supervisor_generation': actor.generation, 'authority_class': 'CONTROL',
+                'authorizes_execution': False, 'operation': 'admit-campaign'}
+            self._commit_u04(actor, 'INIT', event, facts={'consumptions': [
+                ['authorization', authorization.authorization_id],
+                ['boot_activation', activation.activation_id]],
+                'activation_authentication': {'verifier_id': verified.verifier_id,
+                    'canonical_bytes_hex': verified.canonical_bytes.hex(), 'digest': verified.digest}},
+                event_id='event-campaign-admitted')
+            transition = MeasurementWindowTransition(self.identity, WINDOW_OPERATION,
+                'window-operation-1', 'measurement-window-operation-1', None, 0,
+                OUTSIDE_MEASURED_WINDOWS, 1, actor.authorization_digest, actor.campaign_id,
+                actor.generation, actor.session_id, actor.fence)
+            receipt = self._commit_u04(actor, 'INIT', transition.record(),
+                event_id=transition.event_id)
+            self._window_operations[transition.operation_id] = transition
+            self._window_results[transition.operation_id] = OperationResultBinding(
+                receipt.event_id, receipt.revision, receipt.event_digest)
+            self._initial_window_operations.add(transition.operation_id)
+            self._window_operation_sequence = self._window_epoch = 1
+            self._measurement_window = OUTSIDE_MEASURED_WINDOWS
+            session = FenceSession(actor.fence, actor.session_id, actor.owner_identity, 1, True)
+            live = self.witness.change_mode(actor, 'LIVE', _boundary=_U04_BOUNDARIES['INIT'], execution_session=session)
+            self._current_actor = live
+            self._entry_mode = 'LIVE'
+            self._supervisor_ready = True
+            self._execution_revoked = self._publication_prohibited = self.containment_only = False
+            self._sessions[live.session_id] = session
+            return live, session
+
+    def _u04_common(self, actor, record_type, authority_class, authorizes_execution):
+        return {"schema_version": "u04-record/v1", "record_type": record_type,
+                "record_id": "%s-%d" % (actor.incarnation_id, self.revision + 1),
+                "store_identity": self.identity, "authorization_digest": actor.authorization_digest,
+                "campaign_id": actor.campaign_id, "writer_generation": actor.generation,
+                "writer_incarnation_id": actor.incarnation_id, "writer_session_id": actor.session_id,
+                "writer_fence": actor.fence, "authority_class": authority_class,
+                "authorizes_execution": authorizes_execution}
+
+    def _commit_u04(self, actor, boundary, event, *, facts=None, fault=None, event_id=None):
+        """Single-journal kernel; only registered dedicated boundaries enter it."""
+        with self.authorization_lock, self._lock:
+            self._check_healthy()
+            if self._durable:
+                self.read_verified(0)
+            if self._current_actor is not actor:
+                raise AuthorizationDenied("captured current store actor required")
+            self.witness.authenticate(actor, self.identity, boundary)
+            if facts is not None and (boundary in ('RESULT', 'SHUTDOWN', 'DENY', 'HISTORY') or
+                    boundary == 'INIT' and event.get('state') != 'CAMPAIGN_ADMITTED'):
+                raise AuthorizationDenied('this record admits no additional authority facts')
+            if event.get('schema_version') == 'u04-record/v1':
+                policy = _U04_RECORD_BOUNDARIES.get(event.get('record_type'))
+                if (policy is None or boundary != policy[0] or
+                        event.get('authority_class') != policy[1] or
+                        event.get('authorizes_execution') is not policy[2]):
+                    raise AuthorizationDenied('closed record writer and authority meaning required')
+            if event.get('schema_version') == 'u04-record/v1' and any(
+                    event.get(name) != value for name, value in self._u04_common(actor,
+                        event.get('record_type'), event.get('authority_class'),
+                        event.get('authorizes_execution')).items()):
+                raise AuthorizationDenied('record writer must match captured incarnation')
+            if boundary == "ENTRY":
+                common = set(self._u04_common(actor, "SUPERVISOR_INCARNATION", "CONTROL", False))
+                if (set(event) != common | {"mode", "entry_refs", "witness_generation_receipt",
+                                           "incarnation_id"} or
+                        event.get("record_type") != "SUPERVISOR_INCARNATION" or
+                        event.get("authorizes_execution") is not False or
+                        event.get("mode") != actor.mode or
+                        event.get("incarnation_id") != actor.incarnation_id or facts is not None or
+                        event.get('witness_generation_receipt') != 'generation-%d' % actor.generation or
+                        any(f.get('envelope') is not None and
+                            f['envelope'].producer_bytes == _u04_canonical(actor.producer())
+                            for f in self._durable)):
+                    raise AuthorizationDenied("closed ENTRY record required")
+                if actor.mode == 'FRESH':
+                    if self._durable or event['entry_refs'] != []:
+                        raise AuthorizationDenied('FRESH entry may not reinterpret existing history')
+                elif actor.mode in ('RECOVERY', 'WAITING', 'TERMINAL'):
+                    frames = self._committed_frames()
+                    if (event['entry_refs'] != [self._reference(f['receipt']) for f in frames[-1:]] or
+                            actor.mode != self._derived_nonlive_mode(self._admitted_payload())):
+                        raise AuthorizationDenied('ENTRY membership and references must derive from exact history')
+                else:
+                    raise AuthorizationDenied('LIVE_PENDING is bound only inside an ADMIT transaction')
+            elif boundary == "INIT":
+                self._validate_init_payload(actor, event, facts)
+            elif boundary == 'EXEC':
+                self._validate_execution_payload(actor, event, facts)
+            elif boundary == 'RESULT':
+                parsed = parse_effect_result_record(_u04_canonical(event))
+                self._validate_result_payload(actor, parsed)
+            elif boundary == 'SHUTDOWN':
+                self._validate_shutdown_payload(actor, event)
+            elif boundary == 'ADMIT':
+                self._validate_admission_payload(actor, event, facts)
+            elif boundary == 'HISTORY':
+                self._validate_original_diagnostic(actor, event)
+            elif boundary == 'DENY':
+                denial = self.witness.denial(actor)
+                required = set(self._u04_common(actor, 'CAMPAIGN_EXECUTION_DENIED', 'DENIAL', False)) | {
+                    'trigger_code', 'trigger_refs', 'witness_latch_receipt'}
+                if (denial is None or set(event) != required or
+                        event['record_type'] != 'CAMPAIGN_EXECUTION_DENIED' or
+                        event['authority_class'] != 'DENIAL' or event['authorizes_execution'] is not False or
+                        event['trigger_code'] != denial[0] or event['trigger_refs'] != [
+                            self._reference(self.event_receipt(identity)) for identity in denial[1]] or
+                        event['witness_latch_receipt'] != _sha(_u04_canonical([self.witness.identity, denial]))):
+                    raise AuthorizationDenied('DENY may only mirror exact independently retained W fact')
+            else:
+                raise AuthorizationDenied("U-04 writer not yet integrated")
+            payload = _u04_canonical(event)
+            transaction_id = (event_id if event_id is not None else event.get("record_id", "%s-%d" % (
+                actor.incarnation_id, self.revision + 1)))
+            if (type(transaction_id) is not str or not transaction_id or
+                    any(frame['event_id'] == transaction_id for frame in self._durable)):
+                raise AuthorizationDenied('unused exact transaction identity required')
+            envelope = JournalEnvelope("u04-transaction/v1", transaction_id,
+                self.revision + 1, self.revision, self.chain_digest, self.identity,
+                actor.authorization_digest, actor.campaign_id,
+                _u04_canonical(actor.producer()), boundary, event.get("authority_class", 'CONTROL'),
+                payload, _sha(payload), _u04_canonical(dict(
+                    facts or {}, producer=actor.producer())))
+            exact = envelope.canonical_bytes()
+            if fault == "before_reservation":
+                raise TransactionPending(envelope.transaction_id, fault, "ABSENT")
+            reservation = self.witness.reserve_frame(actor, envelope, _U04_BOUNDARIES[boundary])
+            if fault == "reservation_response_lost":
+                self._health = "UNKNOWN"
+                raise TransactionPending(envelope.transaction_id, fault, "UNKNOWN")
+            if fault == "reserved_before_frame":
+                self._health = "QUARANTINED"
+                self.quarantined = self.containment_only = True
+                raise Quarantined("reserved frame missing")
+            receipt = AppendReceipt(self.identity, envelope.revision, envelope.transaction_id,
+                envelope.payload_digest, envelope.frame_digest, actor.fence,
+                "pending-" + envelope.transaction_id, False)
+            frame = {"event_id": envelope.transaction_id, "event": copy.deepcopy(event),
+                     "bytes": bytes(exact), "receipt": receipt, "envelope": envelope}
+            self._durable.append(frame)
+            self._health = "RECONCILABLE"
+            if fault == "frame_before_readback":
+                raise TransactionPending(envelope.transaction_id, fault)
+            retained = self._independent_frame_readback(envelope.revision)
+            if fault == "readback_unavailable":
+                self._health = "UNKNOWN"
+                raise TransactionPending(envelope.transaction_id, fault, "UNKNOWN")
+            if fault == "readback_mismatch":
+                self._health = "QUARANTINED"
+                self.quarantined = self.containment_only = True
+                raise Quarantined("independent retained bytes mismatch")
+            if retained != exact or not self._u04_frame_valid(frame):
+                self._health = "QUARANTINED"
+                self.quarantined = self.containment_only = True
+                raise Quarantined("independent retained frame validation failed")
+            if fault == "validated_before_commit":
+                raise TransactionPending(envelope.transaction_id, fault)
+            commit = self.witness.commit_frame(actor, envelope, reservation,
+                                               _U04_BOUNDARIES[boundary], retained)
+            if boundary == 'SHUTDOWN':
+                self._current_actor = None
+                self._sessions.clear()
+                self._acceptance_acks.clear()
+                self._execution_revoked = self._publication_prohibited = True
+                self._entry_mode = 'EXITED'
+            frame["receipt"] = replace(receipt, witness_receipt=commit.receipt_id, durable=True)
+            self._health = "HEALTHY"
+            # Independent confirmation checks retained bytes and W's query,
+            # rather than the receipt returned by commit_frame alone.
+            status, confirmed = self.witness.query_transaction(envelope.transaction_id)
+            if (status != "COMMITTED" or confirmed != commit or
+                    not self._u04_frame_valid(frame) or
+                    self._independent_frame_readback(envelope.revision) != exact):
+                self._health = "UNKNOWN"
+                raise TransactionPending(envelope.transaction_id, "confirmation", "UNKNOWN")
+            self._receipts[envelope.transaction_id] = frame["receipt"]
+            self._event_bytes[envelope.transaction_id] = payload
+            if fault == "commit_before_ack":
+                raise LostAcknowledgement(frame["receipt"])
+            if boundary == 'SHUTDOWN':
+                return frame['receipt']
+            if self._current_actor is not actor:
+                raise TransactionPending(envelope.transaction_id, "actor-lost-before-ack", "UNKNOWN")
+            self.witness.authenticate(actor, self.identity, boundary)
+            self.witness.acknowledge_frame(actor, frame['receipt'], _boundary=_U04_BOUNDARIES[boundary])
+            return frame["receipt"]
+
+    def require_actor(self, actor, boundary='EXEC'):
+        if self._current_actor is not actor or actor is None:
+            raise AuthorizationDenied('captured opaque incarnation is no longer current')
+        if not self.witness.available:
+            self._execution_revoked = self._publication_prohibited = self.containment_only = True
+            raise AuthorizationDenied('witness status unreadable; dependent action denied now')
+        self.witness.authenticate(actor, self.identity, boundary)
+        return actor
+
+    def actor_for_session(self, session):
+        actor = self.require_actor(self._current_actor)
+        if (actor.execution_session is not session or
+                session.session_id != actor.session_id or
+                session.fence_epoch != actor.fence or not session.execution_live):
+            raise AuthorizationDenied('current opaque session membership required')
+        return actor
+
+    def _committed_frames(self):
+        self.read_verified(0)
+        return [frame for frame in self._durable if type(frame.get('envelope')) is JournalEnvelope]
+
+    def _validate_execution_payload(self, actor, event, facts):
+        self.require_actor(actor)
+        if event.get('record_type') == 'PUBLICATION':
+            request = PublicationOperationBinding.from_record(self.identity, event)
+            if (request.supervisor_generation != actor.generation or request.session_id != actor.session_id or
+                    request.fence_epoch != actor.fence or type(facts) is not dict or
+                    set(facts) != {'publication_grant'} or
+                    facts['publication_grant'].get('attestation') != request.attestation_digest() or
+                    facts['publication_grant'].get('phase') not in ('ISSUE', 'INTENT', 'RESULT')):
+                raise AuthorizationDenied('closed publication issuance/consumption required')
+            phase = facts['publication_grant']['phase']
+            grant = PublicationOperationGrant(request, request.attestation_digest())
+            extras = {'intent': {'source_object_id', 'source_digest'},
+                'create': {'reservation_id'},
+                'write': {'written_object_id', 'written_digest', 'written_length', 'write_revision'},
+                'durable': {'written_object_id', 'written_digest', 'write_revision', 'durability_ack_id'},
+                'verify': {'written_object_id', 'written_digest', 'write_revision', 'durability_ack_id',
+                           'readback_digest', 'verification_id'}}
+            if set(event) != set(request.record_fields()) | (set() if phase == 'ISSUE' else extras[request.operation]):
+                raise AuthorizationDenied('publication payload must use its closed operation schema')
+            if phase != 'ISSUE':
+                self._publication_issuance(grant, actor)
+            if phase == 'RESULT':
+                accepted = [f for f in self._committed_frames() if
+                    f['event'].get('record_type') == 'EFFECT_ACCEPTED' and f['event'].get('effect_id') == request.grant_id]
+                if len(accepted) != 1 or not self.witness.acknowledged_current(actor, accepted[0]['event_id']):
+                    raise AuthorizationDenied('publication result requires acknowledged current acceptance')
+                original = self._exact_ref(accepted[0]['event']['intent_ref'])
+                if PublicationOperationBinding.from_record(self.identity, original['event']) != request:
+                    raise AuthorizationDenied('publication result differs from accepted intent')
+                self._custodian.validate_publication_result(request.grant_id,
+                    _u04_canonical(event), self._custodian.identity)
+                if any(f['event'].get('operation_id') == request.grant_id and
+                    self.publication_record_provenanced(f) for f in self._committed_frames()):
+                    raise AuthorizationDenied('publication result is single use')
+            authorization = self._admitted_payload()
+            history = _validated_window_history(self, authorization)
+            if not history.complete or history.window != OUTSIDE_MEASURED_WINDOWS or history.window_epoch != request.window_epoch:
+                raise AuthorizationDenied('publication requires current witnessed outside window')
+            previous = _publication_frame_groups(self).get((request.identity.destination, request.identity.object_key), [])
+            prior = previous[-1][1]['event']['state'] if previous else None
+            if prior != request.expected_prior_state:
+                raise AuthorizationDenied('publication exact predecessor mismatch')
+            return
+        if event.get('record_type') == 'MEASUREMENT_WINDOW':
+            transition = MeasurementWindowTransition.from_record(self.identity,
+                'measurement-' + event['operation_id'], event)
+            if (transition.initial or transition.session_id != actor.session_id or
+                    transition.supervisor_generation != actor.generation or
+                    transition.fence_epoch != actor.fence or facts is not None):
+                raise AuthorizationDenied('current non-initial window operation required')
+            history = _validated_window_history(self, self._admitted_payload())
+            if (not history.complete or transition.previous_window != history.window or
+                    transition.previous_window_epoch != history.window_epoch):
+                raise AuthorizationDenied('window predecessor must be witnessed history')
+            return
+        if event.get('record_type') == 'EFFECT_ACCEPTED':
+            required = set(self._u04_common(actor, 'EFFECT_ACCEPTED', 'EXECUTION', True)) | {
+                'intent_ref', 'effect_id', 'capability_digest', 'operation', 'target',
+                'consumption_id', 'artifact_binding', 'target_acceptance_identity'}
+            if set(event) != required or event['authority_class'] != 'EXECUTION':
+                raise AuthorizationDenied('closed effect acceptance required')
+            if facts is not None and set(facts) == {'publication_acceptance'}:
+                intent = self._durable[event['intent_ref']['revision'] - 1]
+                if not self.publication_record_provenanced(intent, phase='INTENT'):
+                    raise AuthorizationDenied('publication acceptance requires exact witnessed issuance')
+                request = PublicationOperationBinding.from_record(self.identity, intent['event'])
+                grant = PublicationOperationGrant(request, request.attestation_digest())
+                receipt = intent['receipt']
+                expected = {'event_id': receipt.event_id, 'revision': receipt.revision, 'payload_digest': receipt.event_digest}
+                if (facts['publication_acceptance'] != request.grant_id or event['intent_ref'] != expected or
+                        event['effect_id'] != request.grant_id or event['operation'] != request.operation or
+                        event['target'] != request.identity.destination or event['consumption_id'] != request.grant_id or
+                        event['capability_digest'] != _sha(_u04_canonical(asdict(grant))) or
+                        event['target_acceptance_identity'] != request.identity.destination or
+                        any(f['event'].get('record_type') == 'EFFECT_ACCEPTED' and
+                            f['event'].get('effect_id') == request.grant_id for f in self._committed_frames())):
+                    raise AuthorizationDenied('publication acceptance identity mismatch')
+                artifact = ArtifactBinding(**event['artifact_binding'])
+                authorization = self._admitted_payload()
+                if (artifact.session_id != actor.session_id or artifact.fence_epoch != actor.fence or
+                        artifact.authorization_digest != actor.authorization_digest or
+                        any(getattr(artifact, field) != getattr(authorization, expected) for field, expected in (
+                            ('core_digest', 'core_manifest_digest'), ('adapter_digest', 'adapter_manifest_digest'),
+                            ('policy_digest', 'policy_digest'), ('schema_digest', 'schema_digest')))):
+                    raise AuthorizationDenied('publication artifact binding mismatch')
+                return
+            if facts is not None:
+                raise AuthorizationDenied('execution acceptance admits no unregistered authority facts')
+            capability = self.effect_capability(event['effect_id'])
+            intent = self.effect_intent(capability)
+            original = self.event_receipt(capability.transition_event_id)
+            expected = {'event_id': original.event_id, 'revision': original.revision,
+                        'payload_digest': original.event_digest}
+            if (event['intent_ref'] != expected or event['operation'] != capability.operation or
+                    event['target'] != capability.target or event['capability_digest'] !=
+                    _sha(_u04_canonical(asdict(capability))) or event['artifact_binding'] !=
+                    asdict(capability.artifact_binding) or event['consumption_id'] != capability.effect_id or
+                    event['target_acceptance_identity'] != capability.target or
+                    any(f['event'].get('record_type') == 'EFFECT_ACCEPTED' and
+                        f['event'].get('effect_id') == capability.effect_id for f in self._committed_frames())):
+                raise AuthorizationDenied('acceptance must match unique original intent')
+            return
+        # The existing closed execution schemas are retained. Their issuance,
+        # artifact and slot facts now share the event's witnessed envelope.
+        operation, state = event.get('operation'), event.get('state')
+        schema = (GENERIC_TRANSITION_SCHEMAS.get(state) if operation == 'append-transition'
+                  else DEDICATED_OPERATIONS.get(operation, {}).get(state))
+        trusted = {'state', 'effect_id', 'state_domain', 'session_id', 'session_owner',
+            'session_live', 'fence_epoch', 'boot_ordinal', 'session_boot_ordinal',
+            'supervisor_generation', 'authorization_digest', 'campaign_id', 'target',
+            'operation', 'authorizes_execution', 'dispatch_resolved', 'consumption',
+            'verification_id', 'authority_class'}
+        shape_matches = (schema is not None and (set(event) == set(schema) | trusted or
+            operation == 'append-transition' and trusted <= set(event) and
+            set(event) - trusted <= set(schema) and 'slot_id' in event))
+        if (not shape_matches or
+                event['session_id'] != actor.session_id or event['fence_epoch'] != actor.fence or
+                event['supervisor_generation'] != actor.generation or event['session_live'] is not True or
+                event['authorization_digest'] != actor.authorization_digest or
+                event['campaign_id'] != actor.campaign_id or
+                type(facts) is not dict or set(facts) != {'effect'} or
+                set(facts['effect']) != {'capability_id', 'artifact_binding'}):
+            raise AuthorizationDenied('closed current execution intent and issuance required')
+        artifact = ArtifactBinding(**facts['effect']['artifact_binding'])
+        if artifact.session_id != actor.session_id or artifact.fence_epoch != actor.fence:
+            raise AuthorizationDenied('issuance artifact identity mismatch')
+        authorization = self._admitted_payload()
+        session = actor.execution_session
+        if session is None or not self.session_registered(session):
+            raise AuthorizationDenied('independently current execution session required')
+        if (event['session_owner'] != actor.owner_identity or event['boot_ordinal'] != session.boot_ordinal or
+                event['session_boot_ordinal'] != session.boot_ordinal or event['dispatch_resolved'] is not False or
+                event['consumption'] != {'kind': 'effect', 'identity': event['effect_id']} or
+                event['verification_id'] != artifact.verification_id or artifact.transition != state):
+            raise AuthorizationDenied('lower mutation must bind all captured producer and issuance facts')
+        self.validate_artifact_continuity(artifact)
+        if operation in ('admit-campaign', 'admit-authorization', 'consume-boot-activation'):
+            raise AuthorizationDenied('admission belongs exclusively to INIT or ADMIT')
+        if operation == 'append-transition':
+            _closed_payload(operation, state, {k: v for k, v in event.items() if k not in trusted},
+                            schema, {k: event[k] for k in trusted}, authorization, session)
+            intents = [f for f in self.provenanced_frames('SPAWN_INTENT_PERSISTED', 'blocked-create')
+                       if f['event']['boot_ordinal'] == session.boot_ordinal]
+            if (not intents or intents[-1]['event']['slot_id'] != event['slot_id'] or
+                    event.get('spawn_token', intents[-1]['event']['spawn_token']) != intents[-1]['event']['spawn_token']):
+                raise AuthorizationDenied('generic observation must bind the current original spawn')
+        prior = self.authoritative_state(event['state_domain'], event['boot_ordinal'])
+        if prior not in TRANSITION_PREDECESSORS.get(event['state_domain'], {}).get(state, ()):
+            raise AuthorizationDenied('lower mutation boundary predecessor mismatch')
+        if self.is_consumed('effect', event['effect_id']):
+            raise AuthorizationDenied('lower mutation boundary rejects reused operation')
+        if operation == 'make-slot-eligible':
+            self._prepare_slot_grant(authorization, session, event)
+        elif operation == 'blocked-create':
+            self._check_slot_grant_for_creation(authorization, session, event)
+        elif operation == 'record-worker-creation':
+            capability = self.effect_capability('spawn-intent-' + event['slot_id'])
+            original = self.effect_intent(capability)
+            result = self.effect_result(capability.effect_id)
+            if (original.get('spawn_token') != event['spawn_token'] or result is None or
+                    result.receipt.receipt_id != event['custodian_receipt']):
+                raise AuthorizationDenied('worker record requires the exact independently observed creation result')
+        elif operation == 'worker-lifecycle':
+            capability = self.effect_capability('spawn-intent-' + event['slot_id'])
+            original = self._durable[capability.transition_revision - 1]['event']
+            if original.get('spawn_token') != event['spawn_token']:
+                raise AuthorizationDenied('lifecycle must bind the original token-owned worker')
+            receipt = self.effect_result(capability.effect_id).receipt
+            observed = self._custodian.inspect_spawn(event['spawn_token'])
+            identity = observed.process_identity
+            if (identity is None or receipt.process_identity is None or
+                    identity.host_pid != receipt.process_identity.host_pid or
+                    identity.process_start_ticks != receipt.process_identity.process_start_ticks):
+                raise AuthorizationDenied('lifecycle requires independently retained original process identity')
+            if state == 'WORKER_IDENTITY_ESTABLISHED' and (
+                    not observed.possibly_live or event['host_pid'] != identity.host_pid or
+                    event['start_ticks'] != identity.process_start_ticks):
+                raise AuthorizationDenied('caller process labels cannot replace the original custodian identity')
+            if state not in ('WORKER_IDENTITY_ESTABLISHED', 'EXIT_OBSERVED', 'REAPING_PROVEN') and not observed.possibly_live:
+                raise AuthorizationDenied('live lifecycle transition requires actual token-owned custody')
+            if state == 'EXIT_OBSERVED' and (observed.possibly_live or observed.status not in ('EXITED', 'REAPED')):
+                raise AuthorizationDenied('exit record requires independently observed exit')
+            if state == 'REAPING_PROVEN':
+                reap = self._custodian.get_reap_receipt(event['spawn_token'])
+                if (reap is None or event['reap_receipt_id'] != reap.receipt_id or
+                        observed.possibly_live or observed.status != 'REAPED'):
+                    raise AuthorizationDenied('reap record requires the exact independent receipt')
+                self._custodian.validate_reap_receipt(reap)
+        elif operation in ('establish-boot-custody', 'complete-boot-custody'):
+            _boot_custody_evidence(self, authorization, operation, event, event)
+        elif operation == 'complete-attempt':
+            _HistoricalEvidenceVerifier(self, authorization)._validate_attempt_completion_record(
+                event['slot_id'], event, require_completion_event=False)
+        elif operation in ('finalize-boot-closure-candidate', 'finalize-campaign-closure-candidate'):
+            view = _HistoricalEvidenceVerifier(self, authorization)
+            kind = 'boot' if operation == 'finalize-boot-closure-candidate' else 'campaign'
+            candidate, payload = view._rebuild_candidate({'event': event}, kind)
+            if kind == 'boot':
+                expected = {s.slot_id: self.validated_completion(s.slot_id) for s in authorization.slots
+                            if s.boot_ordinal == session.boot_ordinal}
+                if (payload.get('boot_id') != self.boot_identity(session.boot_ordinal) or
+                        any(v is None for v in expected.values()) or
+                        event['attempt_completion_digests'] != {k: v['completion_digest'] for k, v in expected.items()}):
+                    raise AuthorizationDenied('lower boot candidate requires actual validated attempt proofs')
+            elif (payload.get('campaign_id') != authorization.campaign_id or
+                    event['boot_closure_digests'] != [self.validated_boot_closure(i) for i in (1, 2, 3, 4)] or
+                    None in event['boot_closure_digests']):
+                raise AuthorizationDenied('lower campaign candidate requires actual validated boot proofs')
+        elif operation in ('complete-boot', 'complete-campaign'):
+            candidates = self.provenanced_frames(
+                'BOOT_CLOSURE_CANDIDATE_FINALIZED' if operation == 'complete-boot' else
+                'CAMPAIGN_CLOSURE_CANDIDATE_FINALIZED')
+            candidates = [f for f in candidates if operation == 'complete-campaign' or
+                          f['event']['boot_ordinal'] == session.boot_ordinal]
+            if len(candidates) != 1 or candidates[0]['receipt'].event_digest != event['candidate_event_digest']:
+                raise AuthorizationDenied('lower closure mutation requires exact candidate')
+            _closure_publication_proof(self, authorization, candidates[0], event['publication_manifest'], self.revision)
+        elif operation == 'begin-boot-handoff':
+            if self.validated_boot_closure(session.boot_ordinal) is None:
+                raise AuthorizationDenied('lower handoff mutation requires validated closure')
+
+    def _validate_result_payload(self, actor, result):
+        self.require_actor(actor, 'RESULT')
+        if (type(result) is not U04EffectResultRecord or
+                result.store_identity != self.identity or
+                result.authorization_digest != actor.authorization_digest or
+                result.campaign_id != actor.campaign_id):
+            raise AuthorizationDenied('result authority identity mismatch')
+        if result.result_kind == 'EFFECT_PORT_RECEIPT':
+            self._validated_port_observation(result)
+            return
+        capability = self.effect_capability(result.effect_id)
+        acceptance = self._acceptance_frame(capability)
+        ref = result.acceptance_ref
+        receipt = acceptance['receipt']
+        original = self.event_receipt(capability.transition_event_id)
+        if (asdict(ref) != {'event_id': receipt.event_id, 'revision': receipt.revision,
+                           'payload_digest': receipt.event_digest} or
+                asdict(result.original_producer_ref) != {'event_id': original.event_id,
+                    'revision': original.revision, 'payload_digest': original.event_digest}):
+            raise AuthorizationDenied('result exact linked provenance required')
+        raw = self.read_object(result.result.object_id, result.result.sha256)
+        if result.result.length != len(raw) or result.result_kind != 'CUSTODIAN_RECEIPT':
+            raise AuthorizationDenied('independently verifiable result kind required')
+        self._custodian.validate_creation_result(capability, raw, result.verifier_id)
+
+    def _validated_port_observation(self, result):
+        """Pure historical proof; a port receipt never supplies a current token."""
+        if type(result) is not U04EffectResultRecord or result.result_kind != 'EFFECT_PORT_RECEIPT':
+            raise AuthorizationDenied('exact versioned independent port result required')
+        accepted = self._exact_ref(asdict(result.acceptance_ref))
+        event = accepted['event']
+        if (event.get('record_type') != 'EFFECT_ACCEPTED' or event['effect_id'] != result.effect_id or
+                asdict(result.original_producer_ref) != event['intent_ref']):
+            raise AuthorizationDenied('port result must bind the original acceptance and producer')
+        raw = self._object_proof(asdict(result.result))
+        receipt = self._custodian.validate_effect_port_receipt(result.effect_id, raw, result.verifier_id)
+        producer = json.loads(accepted['envelope'].producer_bytes)
+        if (asdict(receipt.acceptance_ref) != asdict(result.acceptance_ref) or receipt.target_id != event['target'] or
+                receipt.original_generation != producer['generation'] or
+                receipt.original_incarnation_id != producer['incarnation_id'] or
+                receipt.original_session_id != producer['session_id'] or receipt.original_fence != producer['fence']):
+            raise AuthorizationDenied('independent port receipt original identity mismatch')
+        observation = self._object_proof(asdict(receipt.result_object))
+        if observation != self._custodian.port_observation_bytes(receipt):
+            raise AuthorizationDenied('port observation differs from independently retained bytes')
+        facts = json.loads(accepted['envelope'].authority_fact_bytes)
+        if 'publication_acceptance' in facts:
+            self._custodian.validate_publication_result(result.effect_id, observation, result.verifier_id)
+        else:
+            self._custodian.validate_control_result(self.effect_capability(result.effect_id), observation, result.verifier_id)
+        return observation
+
+    def _persist_port_observation(self, actor, effect_id):
+        raw = self._custodian.effect_port_receipt_bytes(effect_id)
+        parsed = self._custodian.validate_effect_port_receipt(effect_id, raw, self._custodian.identity)
+        observation = self._custodian.port_observation_bytes(parsed)
+        self.put_object(parsed.result_object.object_id, observation, actor=actor, boundary='RESULT')
+        return raw
+
+    def _validate_original_diagnostic(self, actor, event):
+        self.require_actor(actor, 'HISTORY')
+        if actor.mode != 'LIVE':
+            raise AuthorizationDenied('new recovery writers remain unavailable in Checkpoint A')
+        if event.get('record_type') == 'SURVIVOR_TRANSFER':
+            self._custodian.validate_transfer_record(event)
+            return
+        required = {'state', 'reason', 'raw_digest', 'raw_length', 'authorization_digest', 'campaign_id', 'authorizes_execution'}
+        if 'primary_failure' in event:
+            required |= {'primary_failure', 'secondary_failures'}
+        if (set(event) != required or event.get('state') != 'TAINTED' or
+                event['authorizes_execution'] is not False or
+                event['authorization_digest'] != actor.authorization_digest or event['campaign_id'] != actor.campaign_id or
+                type(event['raw_length']) is not int or not 0 <= event['raw_length'] <= 1_048_576 or
+                type(event['reason']) is not str or not event['reason']):
+            raise AuthorizationDenied('closed original bounded failure diagnostic required')
+
+    def record_original_diagnostic(self, actor, event):
+        with self.authorization_lock:
+            receipt = self._commit_u04(actor, 'HISTORY', event)
+            if event.get('state') == 'TAINTED':
+                self._taint.add(event['reason'])
+                self.witness.deny_campaign(actor, 'EXPLICIT_ABORT_OR_FAILURE',
+                    [f['envelope'] for f in self._committed_frames()], _boundary=_U04_BOUNDARIES['DENY'])
+                self.mirror_denial(actor)
+            return receipt
+
+    def mirror_denial(self, actor):
+        """A failed D mirror never changes the independent irreversible W latch."""
+        with self.authorization_lock:
+            self.require_actor(actor, 'DENY')
+            denial = self.witness.denial(actor)
+            if denial is None:
+                raise AuthorizationDenied('no positive witness denial to mirror')
+            if any(f['event'].get('record_type') == 'CAMPAIGN_EXECUTION_DENIED' for f in self._committed_frames()):
+                return
+            event = self._u04_common(actor, 'CAMPAIGN_EXECUTION_DENIED', 'DENIAL', False)
+            event.update(trigger_code=denial[0], trigger_refs=[
+                self._reference(self.event_receipt(identity)) for identity in denial[1]],
+                witness_latch_receipt=_sha(_u04_canonical([self.witness.identity, denial])))
+            return self._commit_u04(actor, 'DENY', event)
+
+    def _admitted_payload(self):
+        from .contracts import authorization_from_record
+        frames = [f for f in self._committed_frames() if f['event'].get('state') == 'AUTHORIZATION_ADMITTED']
+        if len(frames) != 1:
+            raise AuthorizationDenied('unique original admitted authorization required')
+        event = frames[0]['event']
+        payload = json.loads(bytes.fromhex(event['canonical_authorization_hex']))
+        payload['authorization_digest'] = event['authorization_digest']
+        authorization = authorization_from_record(payload)
+        self.validate_admitted_authorization(authorization)
+        return authorization
+
+    @staticmethod
+    def _reference(receipt):
+        return {'event_id': receipt.event_id, 'revision': receipt.revision,
+                'payload_digest': receipt.event_digest}
+
+    def _exact_ref(self, ref):
+        parsed = JournalReference(**ref)
+        receipt = self.event_receipt(parsed.event_id)
+        if receipt is None or self._reference(receipt) != ref:
+            raise AuthorizationDenied('exact witnessed predecessor reference required')
+        return self._durable[receipt.revision - 1]
+
+    def _object_proof(self, ref):
+        parsed = ImmutableObjectReference(**ref)
+        raw = self.read_object(parsed.object_id, parsed.sha256)
+        if len(raw) != parsed.length:
+            raise AuthorizationDenied('exact object proof length mismatch')
+        return raw
+
+    def open_execution_effects(self):
+        frames = self._committed_frames()
+        results = {f['event'].get('effect_id') for f in frames if f['event'].get('record_type') == 'EFFECT_RESULT'}
+        return tuple(f['event']['effect_id'] for f in frames if
+            (f['event'].get('record_type') == 'EFFECT_ACCEPTED' or
+             (f['event'].get('operation') == 'blocked-create' and
+              f['event'].get('state') == 'SPAWN_INTENT_PERSISTED')) and
+            f['event']['effect_id'] not in results)
+
+    def validate_publication_initiation(self, actor, grant, planned):
+        """Independent effect port repeats captured-actor and W-ack checks."""
+        with self.authorization_lock:
+            self._publication_issuance(grant, actor)
+            self._check_healthy()
+            accepted = [f for f in self._committed_frames() if
+                f['event'].get('record_type') == 'EFFECT_ACCEPTED' and f['event'].get('effect_id') == grant.grant_id]
+            if len(accepted) != 1 or not self.witness.acknowledged_current(actor, accepted[0]['event_id']):
+                raise AuthorizationDenied('current durable acceptance acknowledgement required')
+            original = self._exact_ref(accepted[0]['event']['intent_ref'])
+            if original['event'] != planned or not self.publication_record_provenanced(original, phase='INTENT'):
+                raise AuthorizationDenied('effect port requires exactly the accepted publication request')
+            self.validate_artifact_continuity(ArtifactBinding(**accepted[0]['event']['artifact_binding']))
+            self.require_actor(actor)
+            return original
+
+    def record_publication_effect_result(self, actor, grant):
+        with self.authorization_lock:
+            self.require_actor(actor, 'RESULT')
+            accepted = [f for f in self._committed_frames() if
+                f['event'].get('record_type') == 'EFFECT_ACCEPTED' and f['event'].get('effect_id') == grant.grant_id]
+            if len(accepted) != 1:
+                raise AuthorizationDenied('exact accepted publication operation required')
+            raw = self._persist_port_observation(actor, grant.grant_id)
+            existing = [f for f in self._committed_frames() if
+                f['event'].get('record_type') == 'EFFECT_RESULT' and f['event'].get('effect_id') == grant.grant_id]
+            if existing:
+                parsed = parse_effect_result_record(_u04_canonical(existing[0]['event']))
+                self._validate_result_payload(actor, parsed)
+                return existing[0]['receipt']
+            object_id = 'publication-effect-result-' + grant.grant_id
+            self.put_object(object_id, raw, actor=actor, boundary='RESULT')
+            event = self._u04_common(actor, 'EFFECT_RESULT', 'EVIDENCE', False)
+            event.update(acceptance_ref=self._reference(accepted[0]['receipt']), effect_id=grant.grant_id,
+                original_producer_ref=accepted[0]['event']['intent_ref'], result={
+                    'object_id': object_id, 'sha256': _sha(raw), 'length': len(raw)},
+                result_kind='EFFECT_PORT_RECEIPT', verifier_id=self._custodian.identity)
+            return self._commit_u04(actor, 'RESULT', event)
+
+    def record_control_effect_result(self, actor, capability):
+        with self.authorization_lock:
+            self.require_actor(actor, 'RESULT')
+            accepted = self._acceptance_frame(capability)
+            raw = self._persist_port_observation(actor, capability.effect_id)
+            object_id = 'control-effect-result-' + capability.effect_id
+            self.put_object(object_id, raw, actor=actor, boundary='RESULT')
+            event = self._u04_common(actor, 'EFFECT_RESULT', 'EVIDENCE', False)
+            event.update(acceptance_ref=self._reference(accepted['receipt']), effect_id=capability.effect_id,
+                original_producer_ref=accepted['event']['intent_ref'], result={
+                    'object_id': object_id, 'sha256': _sha(raw), 'length': len(raw)},
+                result_kind='EFFECT_PORT_RECEIPT', verifier_id=self._custodian.identity)
+            return self._commit_u04(actor, 'RESULT', event)
+
+    def _shutdown_binding(self, authorization):
+        self.validate_admitted_authorization(authorization)
+        frames = self._committed_frames()
+        handoffs = [f for f in frames if f['event'].get('operation') == 'begin-boot-handoff' and
+                    self.frame_has_provenance(f)]
+        if not handoffs:
+            raise AuthorizationDenied('exact handoff required')
+        handoff = handoffs[-1]
+        ordinal = handoff['event']['boot_ordinal']
+        closures = [f for f in self.provenanced_frames('BOOT_COMPLETE', 'complete-boot')
+                    if f['event']['boot_ordinal'] == ordinal]
+        candidates = [f for f in self.provenanced_frames('BOOT_CLOSURE_CANDIDATE_FINALIZED')
+                      if f['event']['boot_ordinal'] == ordinal]
+        if len(closures) != 1 or len(candidates) != 1 or ordinal >= 4:
+            raise AuthorizationDenied('exact authorized predecessor closure required')
+        closure, candidate = closures[0], candidates[0]
+        if (closure['event']['candidate_event_digest'] != candidate['receipt'].event_digest or
+                closure['receipt'].revision >= handoff['receipt'].revision or
+                closure['event']['boot_id'] != self.boot_identity(ordinal)):
+            raise AuthorizationDenied('shutdown predecessor identity/order mismatch')
+        published = _closure_publication_proof(self, authorization, candidate,
+            closure['event']['publication_manifest'], self.frame_index(closure['event_id']))
+        binding = {'handoff_ref': self._reference(handoff['receipt']),
+            'predecessor_ordinal': ordinal, 'predecessor_boot_id': closure['event']['boot_id'],
+            'closure_digest': closure['receipt'].event_digest,
+            'publication_digest': _sha(_u04_canonical(published)), 'next_ordinal': ordinal + 1}
+        return binding
+
+    def _validate_shutdown_payload(self, actor, event):
+        self.require_actor(actor, 'SHUTDOWN')
+        binding = self._shutdown_binding(self._admitted_payload())
+        expected = set(self._u04_common(actor, 'PLANNED_SHUTDOWN_COMMITTED', 'CONTROL', False)) | set(binding) | {
+            'shutdown_id', 'originating_generation', 'originating_incarnation_id',
+            'originating_session_id', 'originating_fence', 'custodian_id', 'quiescence_ack', 'bundle_digest'}
+        if (set(event) != expected or any(event[k] != v for k, v in binding.items()) or
+                event['originating_generation'] != actor.generation or
+                event['originating_incarnation_id'] != actor.incarnation_id or
+                event['originating_session_id'] != actor.session_id or event['originating_fence'] != actor.fence or
+                event['custodian_id'] != self._custodian.identity or self.open_execution_effects() or
+                self._taint or self.witness.denial(actor) is not None):
+            raise AuthorizationDenied('closed current shutdown proof required')
+        ack = self._custodian.validate_quiescence(self._object_proof(event['quiescence_ack']))
+        bundle = {k: v for k, v in event.items() if k not in ('quiescence_ack', 'bundle_digest')}
+        if (event['shutdown_id'] != 'shutdown-' + actor.incarnation_id or
+                event['bundle_digest'] != _sha(_u04_canonical(bundle)) or
+                ack.store_identity != actor.store_identity or ack.authorization_digest != actor.authorization_digest or
+                ack.campaign_id != actor.campaign_id or ack.session_id != actor.session_id or
+                ack.predecessor_ordinal != binding['predecessor_ordinal'] or
+                ack.predecessor_boot_id != binding['predecessor_boot_id'] or
+                ack.handoff_digest != binding['handoff_ref']['payload_digest'] or
+                ack.generation != actor.generation or ack.incarnation_id != actor.incarnation_id or
+                ack.fence != actor.fence or ack.bundle_digest != event['bundle_digest'] or
+                ack.closure_digest != binding['closure_digest'] or ack.publication_digest != binding['publication_digest'] or
+                ack.next_ordinal != binding['next_ordinal']):
+            raise AuthorizationDenied('quiescence proof binding mismatch')
+
+    def commit_shutdown(self, actor, authorization, fault=None):
+        with self.authorization_lock:
+            self.require_actor(actor, 'SHUTDOWN')
+            binding = self._shutdown_binding(authorization)
+            event = self._u04_common(actor, 'PLANNED_SHUTDOWN_COMMITTED', 'CONTROL', False)
+            event.update(binding, shutdown_id='shutdown-' + actor.incarnation_id,
+                originating_generation=actor.generation, originating_incarnation_id=actor.incarnation_id,
+                originating_session_id=actor.session_id, originating_fence=actor.fence,
+                custodian_id=self._custodian.identity)
+            event['bundle_digest'] = _sha(_u04_canonical(event))
+            ack = self._custodian.attest_quiescence(actor, binding['predecessor_ordinal'],
+                binding['predecessor_boot_id'], binding['next_ordinal'], binding['handoff_ref']['payload_digest'],
+                binding['closure_digest'], binding['publication_digest'], event['bundle_digest'])
+            raw = _u04_canonical(asdict(ack))
+            object_id = 'shutdown-proof-' + actor.incarnation_id
+            self.put_object(object_id, raw, actor=actor, boundary='SHUTDOWN')
+            event['quiescence_ack'] = {'object_id': object_id, 'sha256': _sha(raw), 'length': len(raw)}
+            return self._commit_u04(actor, 'SHUTDOWN', event, fault=fault)
+
+    def waiting_shutdown(self, authorization):
+        self.validate_admitted_authorization(authorization)
+        frames = self._committed_frames()
+        shutdowns = [f for f in frames if f['event'].get('record_type') == 'PLANNED_SHUTDOWN_COMMITTED']
+        if not shutdowns:
+            raise AuthorizationDenied('no qualifying pre-loss shutdown')
+        frame = shutdowns[-1]
+        envelope, event = frame['envelope'], frame['event']
+        status, commit = self.witness.query_transaction(envelope.transaction_id)
+        producer = json.loads(envelope.producer_bytes)
+        frontier = self.witness._frontiers.get((self.identity, producer['generation'], producer['incarnation_id']))
+        key = (self.identity, authorization.authorization_digest, authorization.campaign_id)
+        later = frames[frame['receipt'].revision:]
+        if (status != 'COMMITTED' or commit.completion_mode != 'ORIGIN' or frontier is None or
+                frontier[0] < frame['receipt'].revision or key in self.witness._denials or
+                self._taint or self.open_execution_effects() or
+                any(f['event'].get('record_type') in ('ACTIVATION_RESERVED', 'ACTIVATION_ADMITTED') or
+                    f['event'].get('state') == 'CAMPAIGN_COMPLETE' for f in later)):
+            raise AuthorizationDenied('waiting requires complete ORIGIN exit before loss')
+        binding = self._shutdown_binding(authorization)
+        if any(event[k] != v for k, v in binding.items()):
+            raise AuthorizationDenied('waiting predecessor changed')
+        ack = self._custodian.validate_quiescence(self._object_proof(event['quiescence_ack']))
+        if ack.bundle_digest != event['bundle_digest'] or ack.incarnation_id != producer['incarnation_id']:
+            raise AuthorizationDenied('waiting quiescence identity mismatch')
+        return frame
+
+    def _validate_admission_payload(self, actor, event, facts=None):
+        self.require_actor(actor, 'ADMIT')
+        if event.get('record_type') == 'BOOT_ACTIVATION':
+            from .contracts import BootActivation
+            required = set(DEDICATED_OPERATIONS['consume-boot-activation']['BOOT_HANDOFF_PENDING']) | {
+                'state', 'effect_id', 'state_domain', 'session_id', 'session_owner', 'session_live',
+                'fence_epoch', 'boot_ordinal', 'session_boot_ordinal', 'supervisor_generation',
+                'authorization_digest', 'campaign_id', 'target', 'operation', 'authorizes_execution',
+                'dispatch_resolved', 'consumption', 'verification_id'}
+            if (set(event) != required or type(facts) is not dict or set(facts) != {'activation_authentication'} or
+                    event['authorizes_execution'] is not False or event['session_id'] != actor.session_id):
+                raise AuthorizationDenied('closed non-executing activation authentication record')
+            shutdown = self.waiting_shutdown(self._admitted_payload())
+            activation = BootActivation(event['activation_id'], event['authorization_digest'],
+                event['activated_boot_ordinal'], event['observed_boot_id'], event['predecessor_closure_digest'],
+                self._admitted_payload().chair_identity, True)
+            verified = self._activation_authentication_service.verify(activation,
+                store_identity=self.identity, authorization=self._admitted_payload(),
+                predecessor_digest=shutdown['event']['closure_digest'])
+            if facts['activation_authentication'] != {
+                    'verifier_id': verified.verifier_id, 'canonical_bytes_hex': verified.canonical_bytes.hex(),
+                    'digest': verified.digest}:
+                raise AuthorizationDenied('activation authentication evidence mismatch')
+            if any(event.get(name) != value for name, value in {
+                    'state': 'BOOT_HANDOFF_PENDING', 'state_domain': 'boot',
+                    'effect_id': 'activation-authentication-' + activation.activation_id,
+                    'session_owner': actor.owner_identity, 'session_live': False, 'fence_epoch': actor.fence,
+                    'supervisor_generation': actor.generation,
+                    'boot_ordinal': shutdown['event']['predecessor_ordinal'],
+                    'session_boot_ordinal': shutdown['event']['predecessor_ordinal'],
+                    'authorization_digest': actor.authorization_digest, 'campaign_id': actor.campaign_id,
+                    'target': self.identity, 'operation': 'consume-boot-activation', 'dispatch_resolved': True,
+                    'consumption': {'kind': 'effect', 'identity': 'activation-authentication-' + activation.activation_id},
+                    'verification_id': verified.verifier_id}.items()):
+                raise AuthorizationDenied('activation authentication must bind the actual waiting actor')
+            return
+        required = set(self._u04_common(actor, event.get('record_type'), 'CONTROL', False)) | {
+            'activation_id', 'shutdown_ref', 'predecessor_closure_digest', 'next_boot_ordinal',
+            'observed_boot_id', 'new_generation', 'new_incarnation_id', 'activation_authentication_ref'}
+        if event.get('record_type') == 'ACTIVATION_ADMITTED':
+            required |= {'reservation_ref', 'fresh_session', 'all_lower_fences_ack'}
+            reservation = self._exact_ref(event['reservation_ref'])
+            if (reservation['event'].get('record_type') != 'ACTIVATION_RESERVED' or
+                    any(reservation['event'][k] != event[k] for k in (
+                        'activation_id', 'shutdown_ref', 'predecessor_closure_digest', 'next_boot_ordinal',
+                        'observed_boot_id', 'new_generation', 'new_incarnation_id', 'activation_authentication_ref'))):
+                raise AuthorizationDenied('admission must match exact consumed reservation')
+            self._custodian.validate_lower_fences(self._object_proof(event['all_lower_fences_ack']), actor)
+            session = FenceSession(**event['fresh_session'])
+            if session != FenceSession(actor.fence, actor.session_id, actor.owner_identity,
+                                       event['next_boot_ordinal'], True) or facts is not None:
+                raise AuthorizationDenied('fresh admitted session mismatch')
+        elif event.get('record_type') == 'ACTIVATION_RESERVED':
+            shutdown = self.waiting_shutdown(self._admitted_payload())
+            if event['shutdown_ref'] != self._reference(shutdown['receipt']):
+                raise AuthorizationDenied('reservation shutdown reference mismatch')
+            if self.is_consumed('boot_activation', event['activation_id']):
+                raise AuthorizationDenied('activation already consumed')
+            if facts != {'consumptions': [['boot_activation', event['activation_id']]],
+                         'incarnation': actor.producer()}:
+                raise AuthorizationDenied('reserved activation and incarnation facts share one exact transaction')
+        else:
+            raise AuthorizationDenied('closed admission record required')
+        if (set(event) != required or event['new_generation'] != actor.generation or
+                event['new_incarnation_id'] != actor.incarnation_id):
+            raise AuthorizationDenied('closed reserved incarnation required')
+        authentication = self._exact_ref(event['activation_authentication_ref'])
+        if (authentication['event'].get('record_type') != 'BOOT_ACTIVATION' or
+                authentication['envelope'].boundary != 'ADMIT' or
+                any(authentication['event'].get(old) != event[new] for old, new in (
+                    ('activation_id', 'activation_id'), ('activated_boot_ordinal', 'next_boot_ordinal'),
+                    ('observed_boot_id', 'observed_boot_id'),
+                    ('predecessor_closure_digest', 'predecessor_closure_digest')))):
+            raise AuthorizationDenied('exact independent activation authentication reference required')
+
+    def admit_next_boot(self, authorization, activation, owner_identity, *, reservation_fault=None, admission_fault=None):
+        with self.authorization_lock:
+            try:
+                return self._admit_next_boot(authorization, activation, owner_identity,
+                    reservation_fault=reservation_fault, admission_fault=admission_fault)
+            except BaseException:
+                actor = self._current_actor
+                if actor is not None and actor.mode == 'LIVE_PENDING':
+                    try:
+                        self.crash()
+                    except StoreError:
+                        pass
+                    try:
+                        self.witness.deny_frozen_campaign(self, actor, 'INTERRUPTED_ADMISSION',
+                            [f['envelope'] for f in self._committed_frames()], _boundary=_U04_BOUNDARIES['DENY'])
+                    except (StoreError, ContractError):
+                        # Unreadable/pending evidence denies now. It does not
+                        # invent a permanent trigger or permit admission repair.
+                        pass
+                raise
+
+    def _admit_next_boot(self, authorization, activation, owner_identity, *, reservation_fault=None, admission_fault=None):
+        with self.authorization_lock:
+            shutdown = self.waiting_shutdown(authorization)
+            self._custodian._ensure_live()
+            event = shutdown['event']
+            used_boots = {f['event'].get('boot_id') for f in self._committed_frames()}
+            used_boots.update(f['event'].get('observed_boot_id') for f in self._committed_frames())
+            if (type(activation) is not BootActivation or activation.authorization_digest != authorization.authorization_digest or
+                    activation.chair_identity != authorization.chair_identity or activation.boot_ordinal != event['next_ordinal'] or
+                    activation.predecessor_closure_digest != event['closure_digest'] or
+                    activation.observed_boot_id in used_boots or self.is_consumed('boot_activation', activation.activation_id)):
+                raise AuthorizationDenied('exact fresh unused successor activation required')
+            if self._activation_authentication_service is None:
+                raise AuthorizationDenied('independent activation authentication unavailable')
+            verified = self._activation_authentication_service.verify(activation,
+                store_identity=self.identity, authorization=authorization,
+                predecessor_digest=event['closure_digest'])
+            waiting = self._current_actor
+            if waiting is None:
+                waiting = self.open_nonlive_entry(authorization, owner_identity)
+            self.require_actor(waiting, 'ADMIT')
+            authentication = {'record_type': 'BOOT_ACTIVATION', 'activation_id': activation.activation_id,
+                'activated_boot_ordinal': activation.boot_ordinal, 'observed_boot_id': activation.observed_boot_id,
+                'predecessor_closure_digest': activation.predecessor_closure_digest,
+                'state': 'BOOT_HANDOFF_PENDING', 'effect_id': 'activation-authentication-' + activation.activation_id,
+                'state_domain': 'boot', 'session_id': waiting.session_id, 'session_owner': waiting.owner_identity,
+                'session_live': False, 'fence_epoch': waiting.fence, 'boot_ordinal': event['predecessor_ordinal'],
+                'session_boot_ordinal': event['predecessor_ordinal'], 'supervisor_generation': waiting.generation,
+                'authorization_digest': waiting.authorization_digest, 'campaign_id': waiting.campaign_id,
+                'target': self.identity, 'operation': 'consume-boot-activation', 'authorizes_execution': False,
+                'dispatch_resolved': True, 'consumption': {'kind': 'effect',
+                    'identity': 'activation-authentication-' + activation.activation_id},
+                'verification_id': verified.verifier_id}
+            authentication_receipt = self._commit_u04(waiting, 'ADMIT', authentication,
+                facts={'activation_authentication': {'verifier_id': verified.verifier_id,
+                    'canonical_bytes_hex': verified.canonical_bytes.hex(), 'digest': verified.digest}})
+            if self._current_actor is not None:
+                self.witness.freeze_actor(self._current_actor)
+            generation = self.witness.allocate_generation(self.identity)
+            actor = IncarnationActor(self.identity, authorization.authorization_digest, authorization.campaign_id,
+                generation, '%s-incarnation-%d' % (self.identity, generation),
+                '%s-session-%d' % (self.identity, generation), owner_identity, self.witness.current_fence,
+                'LIVE_PENDING', object())
+            self.witness.register_actor(actor, _entry=_U04_BOUNDARIES['ENTRY'])
+            self._current_actor = actor
+            reserved = self._u04_common(actor, 'ACTIVATION_RESERVED', 'CONTROL', False)
+            reserved.update(activation_id=activation.activation_id, shutdown_ref=self._reference(shutdown['receipt']),
+                predecessor_closure_digest=event['closure_digest'], next_boot_ordinal=activation.boot_ordinal,
+                observed_boot_id=activation.observed_boot_id, new_generation=generation,
+                new_incarnation_id=actor.incarnation_id,
+                activation_authentication_ref=self._reference(authentication_receipt))
+            reservation = self._commit_u04(actor, 'ADMIT', reserved, fault=reservation_fault,
+                facts={'consumptions': [['boot_activation', activation.activation_id]],
+                       'incarnation': actor.producer()})
+            fence = self.witness.acquire_fence(owner_identity)
+            actor = self.witness.advance_admission_fence(actor, reservation, fence)
+            self._current_actor = actor
+            ack = self._custodian.revoke_all_lower_fences(actor)
+            raw = _u04_canonical(asdict(ack))
+            object_id = 'fence-proof-' + actor.incarnation_id
+            self.put_object(object_id, raw, actor=actor, boundary='ADMIT')
+            session = FenceSession(fence, actor.session_id, owner_identity, activation.boot_ordinal, True)
+            admitted = dict(reserved, **self._u04_common(actor, 'ACTIVATION_ADMITTED', 'EXECUTION', True))
+            admitted.update(reservation_ref=self._reference(reservation), fresh_session=asdict(session),
+                all_lower_fences_ack={'object_id': object_id, 'sha256': _sha(raw), 'length': len(raw)})
+            self._commit_u04(actor, 'ADMIT', admitted, fault=admission_fault)
+            self.require_actor(actor, 'ADMIT')
+            live = self.witness.change_mode(actor, 'LIVE', _boundary=_U04_BOUNDARIES['ADMIT'], execution_session=session)
+            self._current_actor = live
+            self._entry_mode = 'LIVE'
+            self._supervisor_generation = generation
+            self._supervisor_ready = True
+            self._sessions = {live.session_id: session}
+            self._acceptance_acks.clear()
+            self._execution_revoked = self._publication_prohibited = self.containment_only = False
+            return live, session
+
+    def _derived_nonlive_mode(self, authorization):
+        if self.provenanced_frames('CAMPAIGN_COMPLETE', 'complete-campaign') and self.validated_campaign_closure():
+            return 'TERMINAL'
+        try:
+            self.waiting_shutdown(authorization)
+        except AuthorizationDenied:
+            return 'RECOVERY'
+        return 'WAITING'
+
+    def open_nonlive_entry(self, authorization, owner_identity):
+        """Evidence derives membership. An opaque non-live reader cannot dispatch."""
+        with self.authorization_lock:
+            self.validate_admitted_authorization(authorization)
+            frames = self._committed_frames()
+            if self._current_actor is not None:
+                self.crash()
+            mode = self._derived_nonlive_mode(authorization)
+            generation = self.witness.allocate_generation(self.identity)
+            fence = self.witness.acquire_fence(owner_identity)
+            actor = IncarnationActor(self.identity, authorization.authorization_digest,
+                authorization.campaign_id, generation, '%s-incarnation-%d' % (self.identity, generation),
+                '%s-session-%d' % (self.identity, generation), owner_identity, fence, mode, object())
+            self.witness.register_actor(actor, _entry=_U04_BOUNDARIES['ENTRY'])
+            self._current_actor = actor
+            self._entry_mode = mode
+            self._supervisor_generation = generation
+            event = self._u04_common(actor, 'SUPERVISOR_INCARNATION', 'CONTROL', False)
+            event.update(mode=mode, entry_refs=[self._reference(f['receipt']) for f in frames[-1:]],
+                witness_generation_receipt='generation-%d' % generation, incarnation_id=actor.incarnation_id)
+            self._commit_u04(actor, 'ENTRY', event)
+            if mode == 'RECOVERY':
+                events = [f['event'] for f in frames]
+                for code in ('SHUTDOWN_PENDING_AT_LOSS', 'UNPLANNED_HANDOFF_LOSS',
+                             'UNFINISHED_BOOT_LOSS', 'INTERRUPTED_ADMISSION'):
+                    try:
+                        self.witness.deny_campaign(actor, code,
+                            [f['envelope'] for f in self._committed_frames()], _boundary=_U04_BOUNDARIES['DENY'])
+                    except AuthorizationDenied:
+                        continue
+                    self.mirror_denial(actor)
+                    break
+            return actor
+
+    def admit_authorization(self, actor, authorization, fault=None):
+        """INIT fixes original authority durably without exposing execution."""
+        with self.authorization_lock:
+            if self._authentication_service is None:
+                raise AuthorizationDenied("pinned offline authentication unavailable")
+            result = self._authentication_service.verify(authorization,
+                store_identity=self.identity, campaign_id=authorization.campaign_id)
+            self.witness.authenticate(actor, self.identity, "INIT")
+            if any(frame["event"].get("state") == "AUTHORIZATION_ADMITTED"
+                   for frame in self._durable):
+                raise AuthorizationDenied("INIT cannot replace admitted authority")
+            event = {"state_domain": "authorization", "state": "AUTHORIZATION_ADMITTED",
+                "store_identity": self.identity, "authorization_id": authorization.authorization_id,
+                "authorization_digest": result.authorization_digest,
+                "campaign_id": result.campaign_id,
+                "canonical_authorization_hex": result.canonical_authorization_bytes.hex(),
+                "root_id": result.root_id, "root_version": result.root_version,
+                "core_manifest_digest": authorization.core_manifest_digest,
+                "adapter_manifest_digest": authorization.adapter_manifest_digest,
+                "policy_digest": authorization.policy_digest, "schema_digest": authorization.schema_digest,
+                "authority_class": "CONTROL", "authorizes_execution": False}
+            return self._commit_u04(actor, "INIT", event, fault=fault)
+
+    def validate_admitted_authorization(self, authorization):
+        """No caller digest, cached Boolean or second valid approval substitutes."""
+        with self.authorization_lock:
+            if self._authentication_service is None:
+                raise AuthorizationDenied("pinned offline authentication unavailable")
+            result = self._authentication_service.verify(authorization,
+                store_identity=self.identity, campaign_id=authorization.campaign_id)
+            self.read_verified(0)
+            frames = [frame for frame in self._durable if (
+                frame["event"].get("state") == "AUTHORIZATION_ADMITTED" and
+                type(frame.get("envelope")) is JournalEnvelope and
+                frame["envelope"].boundary == "INIT")]
+            if len(frames) != 1:
+                raise AuthorizationDenied("unique original witnessed admission required")
+            frame = frames[0]
+            event = frame["event"]
+            if (event.get("authorization_id") != result.authorization_id or
+                    event.get("authorization_digest") != result.authorization_digest or
+                    event.get("campaign_id") != result.campaign_id or
+                    event.get("store_identity") != self.identity or
+                    event.get("root_id") != result.root_id or
+                    event.get("root_version") != result.root_version or
+                    event.get("canonical_authorization_hex") != result.canonical_authorization_bytes.hex()):
+                raise AuthorizationDenied("original admitted authority cannot be substituted")
+            return frame["receipt"]
+
+    def reset_volatile(self):
+        """Exhaustive in-place reset. No historical handle becomes live."""
+        if self._authorization_lock.owned_by_current_thread():
+            self.crash()
+            return
+        with self.authorization_lock, self._lock:
+            # A loss while W was unreadable already removed the D-side live
+            # handle. Once the same original witness returns, fence its exact
+            # retained member before allocating any successor. No caller ID or
+            # historical session is used to reconstruct an execution token.
+            if self._current_actor is None and self.witness.available:
+                outgoing = self.witness._actors.get(self.identity)
+                if outgoing is not None:
+                    self.witness.freeze_actor(outgoing)
+            self.crash()
+            _journal_envelope_bytes.cache_clear()
+            if set(vars(self)) != set(STORE_FIELD_DOMAINS):
+                raise StoreError("unclassified store field; reset denied")
+            for name in ("_receipts", "_event_bytes", "_sessions", "_effect_capabilities",
+                    "_effect_status", "_effect_results", "_effect_acceptance_counts",
+                    "_publication_grants", "_publication_grant_records", "_window_operations",
+                    "_window_results", "_slot_grants", "_validated_completions",
+                    "_validated_boot_closures", "_validated_boot_custody", "_historical_producers", "_acceptance_acks"):
+                setattr(self, name, {})
+            for name in ("_taint", "_consumed", "_active_creation_grants", "_accepted_effects",
+                    "_invalidated_effects", "_consumed_publication_grants", "_initial_window_operations"):
+                setattr(self, name, set())
+            self._volatile = []
+            self._current_actor = self._current_reconciler = self._initialization_token = None
+            self._validated_campaign_closure = None
+            self._entry_mode = "INSPECTION"
+            self._supervisor_generation = self.witness.high_generation
+            self._supervisor_ready = False
+            self._execution_revoked = self._publication_prohibited = self.containment_only = True
+            self._measurement_window = None
+            self._window_epoch = self._window_operation_sequence = self._publication_grant_sequence = 0
+            self._pending_reset = False
+            # Only independently confirmed committed facts populate indexes.
+            # Legacy frames remain exact inspectable bytes, without authority.
+            if not self.witness.available:
+                self._health = "UNKNOWN"
+                return
+            previous = "0" * 64
+            for revision, frame in enumerate(self._durable, 1):
+                envelope = frame.get("envelope")
+                if type(envelope) is not JournalEnvelope:
+                    previous = frame["receipt"].chain_digest
+                    continue
+                status, commit = self.witness.query_transaction(envelope.transaction_id)
+                if (not self._u04_frame_valid(frame) or envelope.revision != revision or
+                        envelope.predecessor_revision != revision - 1 or
+                        envelope.predecessor_hash != previous):
+                    self._health = "QUARANTINED"
+                    self.quarantined = True
+                    return
+                if status == "PENDING":
+                    self._health = "RECONCILABLE"
+                    return
+                if (status != "COMMITTED" or commit.reservation.frame_digest != envelope.frame_digest or
+                        commit.receipt_id != frame["receipt"].witness_receipt):
+                    self._health = "QUARANTINED"
+                    self.quarantined = True
+                    return
+                previous = envelope.frame_digest
+                self._receipts[envelope.transaction_id] = frame["receipt"]
+                self._event_bytes[envelope.transaction_id] = envelope.payload_bytes
+                self._historical_producers[envelope.transaction_id] = envelope.producer_bytes
+            if self.witness.high_revision != len(self._durable) or self.witness.high_chain_digest != previous:
+                self._health = "QUARANTINED"
+                self.quarantined = True
+                return
+            self._health = "HEALTHY"
+
+    def _independent_frame_readback(self, revision):
+        """Read retained D bytes, independently of the construction buffer."""
+        return bytes(self._durable[revision - 1]["bytes"])
+
+    def _u04_frame_valid(self, frame):
+        envelope = frame.get("envelope")
+        if type(envelope) is not JournalEnvelope:
+            return False
+        try:
+            return (envelope.canonical_bytes() == frame["bytes"] and
+                    envelope.payload_bytes == _u04_canonical(frame["event"]) and
+                    envelope.payload_digest == _sha(envelope.payload_bytes) and
+                    frame["receipt"].event_digest == envelope.payload_digest and
+                    frame["receipt"].chain_digest == envelope.frame_digest)
+        except (StoreError, ValueError, TypeError, KeyError):
+            return False
+
+    def _validate_reconciliation_frame(self, envelope):
+        """Validate all retained D against W before any reconciliation mutation.
+
+        Called under bound-store authorization/journal exclusion, including
+        from W's lower ports. Only one exact pending tail is permitted skew.
+        """
+        if self.quarantined or self.witness.quarantined or self._health == 'QUARANTINED':
+            raise Quarantined('quarantined reconciliation is read-only')
+        if not self.witness.available:
+            raise TransactionPending(envelope.transaction_id, 'reconciliation-witness', 'UNKNOWN')
+        if not self._durable or self._durable[-1].get('envelope') != envelope:
+            raise AuthorizationDenied('bound retained reconciliation tail required')
+
+        def divergent(reason):
+            self.quarantined = self.containment_only = True
+            self._health = 'QUARANTINED'
+            raise Quarantined(reason)
+
+        if self.torn_tail:
+            divergent('incomplete reconciliation tail')
+        previous = '0' * 64
+        tail_status, tail_record = None, None
+        for revision, frame in enumerate(self._durable, 1):
+            old = frame.get('envelope')
+            if (not self._u04_frame_valid(frame) or old.revision != revision or
+                    old.predecessor_revision != revision - 1 or
+                    old.predecessor_hash != previous or old.store_identity != self.identity):
+                divergent('invalid complete reconciliation prefix')
+            expected = WitnessReservation(old.store_identity, old.transaction_id,
+                old.revision, old.frame_digest, old.authorization_digest,
+                old.campaign_id, old.producer_bytes, old.boundary)
+            status, record = self.witness.query_transaction(old.transaction_id)
+            if status == 'PENDING':
+                if (revision != len(self._durable) or record != expected or
+                        self.witness.pending != {revision: expected} or
+                        self.witness.high_revision != revision - 1 or
+                        self.witness.high_chain_digest != previous):
+                    divergent('frame without exact sole tail reservation')
+            elif (status != 'COMMITTED' or record.reservation != expected or
+                    record.receipt_id != frame['receipt'].witness_receipt):
+                divergent('conflicting committed reconciliation prefix')
+            previous = old.frame_digest
+            tail_status, tail_record = status, record
+        if tail_status == 'COMMITTED' and (self.witness.pending or
+                self.witness.high_revision != len(self._durable) or
+                self.witness.high_chain_digest != previous):
+            divergent('committed reconciliation frontier diverges')
+        return tail_status, tail_record
+
+    def reconcile_pending(self, chair_verifier, authorization, fault=None):
+        """Finish only the exact retained reservation; never dispatch an effect.
+
+        Incarnation-only reconciliation is available now. Authority-bearing
+        pending transactions remain denied until their positive-fact latch
+        predicates and dedicated writers are integrated.
+        """
+        if chair_verifier is not self._authentication_service:
+            raise AuthorizationDenied("pinned authentication service required")
+        chair_verifier.verify(authorization, store_identity=self.identity,
+                              campaign_id=authorization.campaign_id)
+        with self.authorization_lock, self._lock:
+            if not self.witness.available or self.torn_tail or not self._durable:
+                raise Quarantined("exact complete retained frame unavailable")
+            frame = self._durable[-1]
+            envelope = frame.get("envelope")
+            if not self._u04_frame_valid(frame):
+                self.quarantined = self.containment_only = True
+                self._health = "QUARANTINED"
+                raise Quarantined("reconciliation envelope/bytes conflict")
+            if (envelope.authorization_digest != authorization.authorization_digest or
+                    envelope.campaign_id != authorization.campaign_id):
+                raise AuthorizationDenied("caller authorization differs from retained reconciliation binding")
+            status, record = self._validate_reconciliation_frame(envelope)
+            if status == "COMMITTED":
+                return frame["receipt"]
+            if self._current_actor is not None:
+                self.crash()
+            binding = self.witness.issue_reconciler(envelope)
+            self._current_reconciler = binding
+            if envelope.boundary != 'ENTRY':
+                prefix = self._durable[:-1]
+                if any(not self._u04_frame_valid(f) for f in prefix):
+                    raise Quarantined('unreadable/conflicting prefix prevents dependent reconciliation')
+                self.witness.deny_pending_reconciliation(binding, envelope,
+                    [f['envelope'] for f in prefix])
+            if fault == "before_commit":
+                self.crash()
+                raise TransactionPending(envelope.transaction_id, "reconciliation-before-commit")
+            retained = self._independent_frame_readback(envelope.revision)
+            committed = self.witness.reconcile_frame(binding, envelope, retained)
+            self._current_reconciler = None
+            frame["receipt"] = replace(frame["receipt"], witness_receipt=committed.receipt_id,
+                                        durable=True)
+            self._health = "HEALTHY"
+            self.quarantined = False
+            self._receipts[envelope.transaction_id] = frame["receipt"]
+            self._event_bytes[envelope.transaction_id] = envelope.payload_bytes
+            if fault == "lost_ack":
+                raise LostAcknowledgement(frame["receipt"])
+            status, confirmed = self.witness.query_transaction(envelope.transaction_id)
+            if (status != "COMMITTED" or confirmed != committed or
+                    retained != envelope.canonical_bytes()):
+                raise TransactionPending(envelope.transaction_id, "reconciliation-confirmation", "UNKNOWN")
+            return frame["receipt"]
 
     @property
     def revision(self):
@@ -758,6 +2834,8 @@ class OfflineDurableStore:
 
     def _append(self, expected_revision, fence_epoch, event_id, event, fault=None,
                 control_token=None):
+        if self._authentication_service is not None:
+            raise AuthorizationDenied("legacy append cannot mutate a U-04 foundation")
         if type(expected_revision) is not int or type(fence_epoch) is not int:
             raise CASMismatch("revision and fence must be integers")
         if type(event_id) is not str or type(event) is not dict:
@@ -804,8 +2882,9 @@ class OfflineDurableStore:
             self._durable.append(frame)
             self._volatile.clear()
             if fault == "journal_ahead":
-                self.quarantined = self.containment_only = True
-                raise Quarantined("journal ahead of witness")
+                self._health = 'RECONCILABLE'
+                self.containment_only = True
+                raise TransactionPending(event_id, 'complete-legacy-frame-before-commit')
             witness_receipt = self.witness.commit(revision, chain_digest)
             receipt = replace(pending_receipt, witness_receipt=witness_receipt)
             frame["receipt"] = receipt
@@ -859,6 +2938,8 @@ class OfflineDurableStore:
         this store is fresh.  Freshness is never inferred from a missing
         window record alone."""
         self._require_dedicated(authority)
+        if self._authentication_service is not None:
+            raise AuthorizationDenied('initial window authority belongs only to witnessed INIT')
         with self._lock:
             fresh = (not self._durable and not self._volatile and not self._receipts and
                      self.witness.high_revision == 0 and not self.witness.pending and
@@ -879,16 +2960,29 @@ class OfflineDurableStore:
             if token is not None and self._initialization_token is token:
                 self._initialization_token = None
 
-    def _next_window_operation_id(self, authority):
+    def _next_window_operation_id(self, authority, *, actor=None):
         self._require_dedicated(authority)
         with self._lock:
+            if self._authentication_service is not None:
+                self.require_actor(actor)
+                return 'window-operation-%d-%d' % (actor.generation, self.revision + 1)
             return "window-operation-%d" % (self._window_operation_sequence + 1)
 
-    def _register_window_operation(self, authority, transition, initialization=None):
+    def _register_window_operation(self, authority, transition, initialization=None, *, actor=None):
         """Mark a window operation started: register its exact transition as
         pending before anything is appended."""
         self._require_dedicated(authority)
         with self._lock:
+            if self._authentication_service is not None:
+                self.require_actor(actor)
+                if (not isinstance(transition, MeasurementWindowTransition) or transition.initial or
+                        initialization is not None or transition.session_id != actor.session_id or
+                        transition.fence_epoch != actor.fence or transition.supervisor_generation != actor.generation or
+                        transition.operation_id != self._next_window_operation_id(authority, actor=actor)):
+                    raise AuthorizationDenied('closed current window operation required')
+                self._window_operations[transition.operation_id] = transition
+                self._window_operation_sequence += 1
+                return
             if (not isinstance(transition, MeasurementWindowTransition) or
                     transition.store_identity != self.identity or
                     transition.operation_id !=
@@ -909,10 +3003,14 @@ class OfflineDurableStore:
             self._window_operation_sequence += 1
             self._window_operations[transition.operation_id] = transition
 
-    def _append_window_result(self, authority, transition, fault=None):
+    def _append_window_result(self, authority, transition, fault=None, *, actor=None):
         """Append and witness the exact record of a pending window operation."""
         self._require_dedicated(authority)
         with self._lock:
+            if self._authentication_service is not None:
+                self.require_actor(actor)
+                return self._commit_u04(actor, 'EXEC', transition.record(),
+                    event_id=transition.event_id, fault=fault)
             if (not isinstance(transition, MeasurementWindowTransition) or
                     self._window_operations.get(transition.operation_id) != transition or
                     transition.operation_id in self._window_results):
@@ -921,10 +3019,18 @@ class OfflineDurableStore:
                                         transition.event_id, transition.record(),
                                         fault=fault)
 
-    def _bind_window_result(self, authority, operation_id, receipt):
+    def _bind_window_result(self, authority, operation_id, receipt, *, actor=None):
         """Bind a pending window operation to the exact record it produced."""
         self._require_dedicated(authority)
         with self._lock:
+            if self._authentication_service is not None:
+                self.require_actor(actor)
+                frame = self._frame_for_receipt(receipt, receipt.event_id)
+                if frame['event'].get('operation_id') != operation_id or not self.window_record_provenanced(frame):
+                    raise AuthorizationDenied('only witnessed exact window result may populate a view')
+                result = OperationResultBinding(receipt.event_id, receipt.revision, receipt.event_digest)
+                self._window_results[operation_id] = result
+                return result
             transition = self._window_operations.get(operation_id)
             if transition is None or operation_id in self._window_results:
                 raise StoreError("measurement-window result unregistered or already bound")
@@ -945,6 +3051,23 @@ class OfflineDurableStore:
         receipt = frame.get("receipt") if type(frame) is dict else None
         if type(event) is not dict or not isinstance(receipt, AppendReceipt):
             return False
+        if self._authentication_service is not None:
+            envelope = frame.get('envelope')
+            if type(envelope) is not JournalEnvelope or envelope.boundary not in ('INIT', 'EXEC'):
+                return False
+            status, committed = self.witness.query_transaction(envelope.transaction_id)
+            if (status != 'COMMITTED' or not self._u04_frame_valid(frame) or
+                    committed.reservation.frame_digest != envelope.frame_digest):
+                return False
+            try:
+                transition = MeasurementWindowTransition.from_record(self.identity, frame['event_id'], event)
+                producer = json.loads(envelope.producer_bytes)
+                return (transition.session_id == producer['session_id'] and
+                        transition.fence_epoch == producer['fence'] and
+                        transition.supervisor_generation == producer['generation'] and
+                        transition.initial == (envelope.boundary == 'INIT'))
+            except (ContractError, KeyError, TypeError):
+                return False
         operation_id = event.get("operation_id")
         if type(operation_id) is not str:
             return False
@@ -970,14 +3093,38 @@ class OfflineDurableStore:
 
     # ---- publication operations ---------------------------------------------
 
-    def _next_publication_grant_id(self, authority):
+    def _next_publication_grant_id(self, authority, *, actor=None):
         self._require_dedicated(authority)
         with self._lock:
+            if self._authentication_service is not None:
+                self.require_actor(actor)
+                return 'publication-grant-%d-%d' % (actor.generation, self.revision + 1)
             return "publication-grant-%d" % (self._publication_grant_sequence + 1)
 
-    def _register_publication_grant(self, authority, grant):
+    def _publication_issuance(self, grant, actor):
+        self.require_actor(actor)
+        frames = [f for f in self._committed_frames() if
+                  f['event'].get('operation_id') == grant.grant_id and
+                  self.publication_record_provenanced(f, phase='ISSUE')]
+        if (len(frames) != 1 or PublicationOperationBinding.from_record(self.identity,
+                frames[0]['event']) != grant.binding or grant.session_id != actor.session_id or
+                grant.supervisor_generation != actor.generation or grant.fence_epoch != actor.fence):
+            raise AuthorizationDenied('exact witnessed current publication issuance required')
+        return frames[0]
+
+    def _register_publication_grant(self, authority, grant, *, actor=None):
         self._require_dedicated(authority)
-        with self._lock:
+        with self.authorization_lock, self._lock:
+            if self._authentication_service is not None:
+                self.require_actor(actor)
+                if (not isinstance(grant, PublicationOperationGrant) or not grant.attestation_valid() or
+                        grant.grant_id != self._next_publication_grant_id(authority, actor=actor)):
+                    raise AuthorizationDenied('closed unused current publication issuance required')
+                self._commit_u04(actor, 'EXEC', grant.binding.record_fields(),
+                    facts={'publication_grant': {'attestation': grant.attestation, 'phase': 'ISSUE'}})
+                self._publication_grants[grant.grant_id] = grant
+                self._publication_grant_sequence += 1
+                return grant
             if (not isinstance(grant, PublicationOperationGrant) or
                     grant.binding.store_identity != self.identity or
                     grant.grant_id !=
@@ -990,22 +3137,34 @@ class OfflineDurableStore:
             return grant
 
     def publication_grant_consumed(self, grant_id):
+        if self._authentication_service is not None:
+            return any(f['event'].get('record_type') == 'EFFECT_ACCEPTED' and
+                f['event'].get('effect_id') == grant_id for f in self._committed_frames())
         return grant_id in self._consumed_publication_grants
 
-    def _consume_publication_grant(self, authority, grant):
+    def _consume_publication_grant(self, authority, grant, *, actor=None):
         """Mark a publication operation started.  Consumption is never
         refunded; a consumed grant without a bound result prohibits promotion."""
         self._require_dedicated(authority)
         with self._lock:
+            if self._authentication_service is not None:
+                self._publication_issuance(grant, actor)
+                if self.publication_grant_consumed(grant.grant_id):
+                    raise AuthorizationDenied('publication acceptance cannot be reused')
+                return
             if (self._publication_grants.get(grant.grant_id) != grant or
                     grant.grant_id in self._consumed_publication_grants):
                 raise StoreError("publication grant is not registered and unused")
             self._consumed_publication_grants.add(grant.grant_id)
 
-    def _append_publication_result(self, authority, grant, event_id, event):
+    def _append_publication_result(self, authority, grant, event_id, event, *, actor=None):
         """Append and witness the exact result record of a consumed grant."""
         self._require_dedicated(authority)
         with self._lock:
+            if self._authentication_service is not None:
+                self._publication_issuance(grant, actor)
+                return self._commit_u04(actor, 'EXEC', event, event_id=event_id,
+                    facts={'publication_grant': {'attestation': grant.attestation, 'phase': 'RESULT'}})
             if (self._publication_grants.get(grant.grant_id) != grant or
                     grant.grant_id not in self._consumed_publication_grants or
                     grant.grant_id in self._publication_grant_records):
@@ -1021,6 +3180,16 @@ class OfflineDurableStore:
     def incomplete_publication_operations(self):
         """Consumed grants lacking a result, and results lacking their record."""
         reasons = []
+        if self._authentication_service is not None:
+            frames = self._committed_frames()
+            for frame in frames:
+                event = frame['event']
+                if (event.get('record_type') == 'EFFECT_ACCEPTED' and
+                        'publication_acceptance' in json.loads(frame['envelope'].authority_fact_bytes) and
+                        not any(f['event'].get('operation_id') == event['effect_id'] and
+                            self.publication_record_provenanced(f) for f in frames)):
+                    reasons.append('consumed-publication-grant-without-result')
+            return reasons
         for grant_id in sorted(self._consumed_publication_grants):
             result = self._publication_grant_records.get(grant_id)
             if result is None:
@@ -1032,9 +3201,42 @@ class OfflineDurableStore:
                 reasons.append("publication-result-without-record")
         return reasons
 
+    def publication_outcome_unknown(self, identity):
+        """Acceptance without a versioned result remains outcome-unknown."""
+        frames = self._committed_frames()
+        results = {f['event'].get('effect_id') for f in frames if f['event'].get('record_type') == 'EFFECT_RESULT'}
+        for frame in frames:
+            event = frame['event']
+            if (event.get('record_type') != 'EFFECT_ACCEPTED' or event.get('effect_id') in results or
+                    'publication_acceptance' not in json.loads(frame['envelope'].authority_fact_bytes)):
+                continue
+            intended = self._exact_ref(event['intent_ref'])
+            if PublicationIdentity.from_record(intended['event']) == identity:
+                return True
+        return False
+
     def read_verified(self, min_revision, expected_chain_digest=None):
         with self._lock:
             self._check_healthy()
+            for frame in self._durable:
+                if "envelope" in frame and not self._u04_frame_valid(frame):
+                    try:
+                        self.witness.deny_durable_digest_conflict(self, _boundary=_U04_BOUNDARIES['DENY'])
+                    except AuthorizationDenied:
+                        pass
+                    self.quarantined = self.containment_only = True
+                    self._health = "QUARANTINED"
+                    raise Quarantined("retained U-04 envelope changed")
+                if "envelope" in frame:
+                    envelope = frame["envelope"]
+                    status, committed = self.witness.query_transaction(envelope.transaction_id)
+                    if (status != "COMMITTED" or
+                            committed.reservation.frame_digest != envelope.frame_digest or
+                            committed.reservation.initiator_bytes != envelope.producer_bytes or
+                            committed.receipt_id != frame["receipt"].witness_receipt):
+                        self.quarantined = self.containment_only = True
+                        self._health = "QUARANTINED"
+                        raise Quarantined("independent witness confirmation absent/conflicting")
             if min_revision > self.revision:
                 raise StaleRead("authoritative minimum revision unavailable")
             if (self.witness.high_revision != self.revision or
@@ -1053,12 +3255,72 @@ class OfflineDurableStore:
         return {"revision": min(revision, self.revision),
                 "events": self.events[:revision], "authoritative": False}
 
+    def verified_prefix(self):
+        """Read-only forensic prefix; never issues a session or repairs history.
+
+        A corrupt suffix cannot erase independently confirmed earlier evidence.
+        Unavailable W evidence is not classified as a positive contradiction.
+        Callers receive copies, not writable D references.
+        """
+        with self.authorization_lock, self._lock:
+            previous = '0' * 64
+            verified = []
+            if not self.witness.available:
+                return {'frames': (), 'stop_reason': 'UNKNOWN', 'authorizes_execution': False}
+            for revision, frame in enumerate(self._durable, 1):
+                envelope = frame.get('envelope')
+                if (type(envelope) is not JournalEnvelope or not self._u04_frame_valid(frame) or
+                        envelope.revision != revision or envelope.predecessor_revision != revision - 1 or
+                        envelope.predecessor_hash != previous or envelope.store_identity != self.identity):
+                    return {'frames': tuple(verified), 'stop_reason': 'QUARANTINED', 'authorizes_execution': False}
+                status, commit = self.witness.query_transaction(envelope.transaction_id)
+                if status == 'PENDING':
+                    return {'frames': tuple(verified), 'stop_reason': 'RECONCILABLE', 'authorizes_execution': False}
+                if (status != 'COMMITTED' or commit.reservation.frame_digest != envelope.frame_digest or
+                        commit.reservation.initiator_bytes != envelope.producer_bytes or
+                        commit.receipt_id != frame['receipt'].witness_receipt):
+                    return {'frames': tuple(verified), 'stop_reason': 'QUARANTINED', 'authorizes_execution': False}
+                verified.append(copy.deepcopy(frame))
+                previous = envelope.frame_digest
+            return {'frames': tuple(verified), 'stop_reason':
+                ('HEALTHY' if self.witness.high_revision == len(verified) and
+                 self.witness.high_chain_digest == previous else 'QUARANTINED'),
+                'authorizes_execution': False}
+
+    def read_only_inspector(self, service, authorization, reader_identity):
+        """Trusted local setup supplies a reader without touching D/W authority."""
+        if (service is not self._authentication_service or service is None or
+                reader_identity != _LOCAL_INSPECTION_READER_ID):
+            raise AuthorizationDenied('pinned service and configured local reader required')
+        service.verify(authorization, store_identity=self.identity, campaign_id=authorization.campaign_id)
+        return OfflineReadOnlyInspector(self, service, authorization, reader_identity,
+                                        _entry=_LOCAL_INSPECTION_BOUNDARY)
+
     def crash(self):
+        # A same-thread hook is revoke-only. Exhaustive reset must occur after
+        # the interrupted stack unwinds; it cannot replace its captured token.
+        self._current_reconciler = None
+        if self._current_actor is not None:
+            actor = self._current_actor
+            self._execution_revoked = self._publication_prohibited = True
+            self._supervisor_ready = False
+            self._pending_reset = True
+            try:
+                self.witness.freeze_actor(actor)
+            finally:
+                self._current_actor = None
         self._volatile.clear()
 
     def simulate_rollback(self, revision):
-        with self._lock:
+        with self.authorization_lock, self._lock:
+            if type(revision) is not int or not 0 <= revision <= self.revision:
+                raise StoreError('bounded simulated rollback revision required')
+            before = tuple(self._durable)
+            if self._authentication_service is not None:
+                self.read_verified(0)
             self._durable = self._durable[:revision]
+            if self._authentication_service is not None and len(self._durable) < len(before):
+                self.witness.deny_observed_rollback(self, before, _boundary=_U04_BOUNDARIES['DENY'])
             self.quarantined = self.containment_only = True
 
     def snapshot(self):
@@ -1085,6 +3347,17 @@ class OfflineDurableStore:
         )
 
     def is_consumed(self, kind, identity):
+        if self._authentication_service is not None:
+            for frame in self._committed_frames():
+                event = frame['event']
+                if event.get('consumption') == {'kind': kind, 'identity': identity}:
+                    return True
+                if (kind == 'slot' and event.get('operation') == 'make-slot-eligible' and
+                        event.get('slot_id') == identity and self.frame_has_provenance(frame)):
+                    return True
+                if [kind, identity] in json.loads(frame['envelope'].authority_fact_bytes).get('consumptions', []):
+                    return True
+            return False
         return (kind, identity) in self._consumed
 
     def add_taint(self, reason):
@@ -1128,6 +3401,8 @@ class OfflineDurableStore:
         its callback). Other threads wait for the entire protected operation,
         including result binding/state exposure or its failure prohibition.
         """
+        if self._authentication_service is not None:
+            raise AuthorizationDenied("U-04 operational supervisor integration unavailable")
         if self._authorization_lock.owned_by_current_thread():
             raise AuthorizationDenied("supervisor takeover cannot reenter authorization")
         with self.authorization_lock:
@@ -1149,23 +3424,62 @@ class OfflineDurableStore:
             return generation
 
     def supervisor_is_current(self, generation):
-        return (self._supervisor_ready and type(generation) is int and
-                generation == self._supervisor_generation)
+        actor = self._current_actor
+        return (self._authentication_service is not None and self._supervisor_ready and
+                actor is not None and type(generation) is int and generation == actor.generation and
+                generation == self.witness.high_generation and actor.fence == self.witness.current_fence and
+                self.witness._actors.get(self.identity) is actor)
 
     def bind_custodian(self, custodian):
         """Bind the single independent custodian whose registry is evidence."""
         with self._lock:
             if self._custodian is not None and self._custodian is not custodian:
                 raise AuthorizationDenied("store custodian already bound")
-            self._custodian = custodian
+            if self.witness._custodian is not None and self.witness._custodian is not custodian:
+                raise AuthorizationDenied('witness independent custody verifier already bound')
+            object.__setattr__(self, '_custodian', custodian)
+            self.witness._custodian = custodian
+
+    def bind_artifact_verifier(self, verifier):
+        """Pin the actual bootstrap verification primitive for independent ports."""
+        with self.authorization_lock:
+            if type(verifier) is not ArtifactVerificationPrimitive:
+                raise AuthorizationDenied('independent artifact verification primitive required')
+            if self._artifact_verifier is not None and self._artifact_verifier is not verifier:
+                raise AuthorizationDenied('artifact verification service already pinned')
+            if self._authentication_service is not None:
+                self._authentication_service.verify(verifier.authorization, store_identity=self.identity,
+                                                     campaign_id=verifier.authorization.campaign_id)
+            object.__setattr__(self, '_artifact_verifier', verifier)
+
+    def validate_artifact_continuity(self, binding):
+        authorization = self._admitted_payload()
+        expected = {'core': authorization.core_manifest_digest,
+                    'adapter': authorization.adapter_manifest_digest,
+                    'policy': authorization.policy_digest,
+                    'schema': authorization.schema_digest}
+        if (self._artifact_verifier is None or binding.verifier_identity != self._artifact_verifier.identity or
+                binding.authorization_digest != authorization.authorization_digest or
+                self._artifact_verifier.authorization != authorization or
+                binding.manifest() != expected):
+            raise AuthorizationDenied('pinned original artifact verification service required')
+        self._artifact_verifier.assert_continuity(binding)
 
     def bound_custodian(self):
         return self._custodian
 
-    def _bind_publication_grant(self, authority, grant_id, receipt):
+    def _bind_publication_grant(self, authority, grant_id, receipt, *, actor=None):
         """Bind a consumed grant to the exact result record it produced."""
         self._require_dedicated(authority)
         with self._lock:
+            if self._authentication_service is not None:
+                self.require_actor(actor)
+                frame = self._frame_for_receipt(receipt, receipt.event_id)
+                if frame['event'].get('operation_id') != grant_id or not self.publication_record_provenanced(frame):
+                    raise AuthorizationDenied('only witnessed result may populate publication view')
+                result = OperationResultBinding(receipt.event_id, receipt.revision, receipt.event_digest)
+                self._publication_grant_records[grant_id] = result
+                return result
             grant = self._publication_grants.get(grant_id)
             if (grant is None or grant_id not in self._consumed_publication_grants or
                     grant_id in self._publication_grant_records):
@@ -1184,7 +3498,7 @@ class OfflineDurableStore:
             self._publication_grant_records[grant_id] = result
             return result
 
-    def publication_record_provenanced(self, frame):
+    def publication_record_provenanced(self, frame, *, phase='RESULT'):
         """True only for the exact bound result of its registered, consumed,
         single-use grant: the record decodes to the grant's complete canonical
         operation binding (identity, store, grant, operation, prior state,
@@ -1195,6 +3509,32 @@ class OfflineDurableStore:
         receipt = frame.get("receipt") if type(frame) is dict else None
         if type(event) is not dict or not isinstance(receipt, AppendReceipt):
             return False
+        if self._authentication_service is not None:
+            envelope = frame.get('envelope')
+            if type(envelope) is not JournalEnvelope or envelope.boundary != 'EXEC' or not self._u04_frame_valid(frame):
+                return False
+            status, committed = self.witness.query_transaction(envelope.transaction_id)
+            if status != 'COMMITTED' or committed.reservation.frame_digest != envelope.frame_digest:
+                return False
+            try:
+                binding = PublicationOperationBinding.from_record(self.identity, event)
+                facts = json.loads(envelope.authority_fact_bytes)
+                producer = json.loads(envelope.producer_bytes)
+                if phase == 'RESULT':
+                    results = [f for f in self._durable if f['event'].get('record_type') == 'EFFECT_RESULT' and
+                               f['event'].get('effect_id') == binding.grant_id]
+                    if len(results) != 1:
+                        return False
+                    parsed = parse_effect_result_record(_u04_canonical(results[0]['event']))
+                    raw = self._validated_port_observation(parsed)
+                    if parsed.result_kind != 'EFFECT_PORT_RECEIPT' or raw != _u04_canonical(event):
+                        return False
+                    self._custodian.validate_publication_result(binding.grant_id, raw, parsed.verifier_id)
+                return (facts.get('publication_grant') == {'attestation': binding.attestation_digest(), 'phase': phase} and
+                        binding.session_id == producer['session_id'] and binding.fence_epoch == producer['fence'] and
+                        binding.supervisor_generation == producer['generation'])
+            except (ContractError, KeyError, TypeError):
+                return False
         grant_id = event.get("operation_id")
         if type(grant_id) is not str:
             return False
@@ -1217,14 +3557,23 @@ class OfflineDurableStore:
         session = self._sessions.get(grant.session_id)
         return session is not None and session.fence_epoch == grant.fence_epoch
 
-    def put_object(self, object_id, bytes_value):
-        if type(object_id) is not str or not object_id or type(bytes_value) is not bytes:
-            raise StoreError("closed immutable object")
-        existing = self._objects.get(object_id)
-        if existing is not None and existing != bytes_value:
-            raise StoreError("immutable object collision")
-        self._objects[object_id] = bytes(bytes_value)
-        return _sha(bytes_value)
+    def put_object(self, object_id, bytes_value, *, actor=None, boundary='EXEC'):
+        with self.authorization_lock:
+            if self._authentication_service is None:
+                raise AuthorizationDenied('legacy history cannot authorize a new immutable object')
+            if self._authentication_service is not None:
+                if boundary not in ('EXEC', 'RESULT', 'SHUTDOWN', 'ADMIT'):
+                    raise AuthorizationDenied('immutable object writer is unavailable in this mode')
+                self.require_actor(actor, boundary)
+                self._check_healthy()
+                self.read_verified(0)
+            if type(object_id) is not str or not object_id or type(bytes_value) is not bytes:
+                raise StoreError("closed immutable object")
+            existing = self._objects.get(object_id)
+            if existing is not None and existing != bytes_value:
+                raise StoreError("immutable object collision")
+            self._objects[object_id] = bytes(bytes_value)
+            return _sha(bytes_value)
 
     def read_object(self, object_id, expected_digest):
         value = self._objects.get(object_id)
@@ -1233,8 +3582,10 @@ class OfflineDurableStore:
         return bytes(value)
 
     def register_session(self, session):
-        if not isinstance(session, FenceSession):
-            raise AuthorizationDenied("closed execution session required")
+        if self._authentication_service is not None:
+            raise AuthorizationDenied('session registration is admission-owned')
+        if not isinstance(session, FenceSession) or session.execution_live:
+            raise AuthorizationDenied('legacy identity cannot register execution membership')
         previous = self._sessions.get(session.session_id)
         if previous is not None and previous != session:
             if not (previous.fence_epoch == session.fence_epoch and
@@ -1245,6 +3596,12 @@ class OfflineDurableStore:
         self._sessions[session.session_id] = session
 
     def session_registered(self, session):
+        if self._authentication_service is not None:
+            actor = self._current_actor
+            return (actor is not None and actor.execution_session is session and
+                    actor.session_id == session.session_id and actor.fence == session.fence_epoch and
+                    actor.mode == 'LIVE' and actor.generation == self.witness.high_generation and
+                    self.witness._actors.get(self.identity) is actor)
         return isinstance(session, FenceSession) and self._sessions.get(session.session_id) == session
 
     def register_effect_capability(self, capability, *, _control=None):
@@ -1254,6 +3611,13 @@ class OfflineDurableStore:
             raise AuthorizationDenied("capability registration is boundary-owned")
         if not isinstance(capability, EffectCapability):
             raise AuthorizationDenied("closed effect capability required")
+        if self._authentication_service is not None:
+            if self.effect_capability(capability.effect_id) != capability:
+                raise AuthorizationDenied('view registration requires exact witnessed issuance')
+            self.effect_intent(capability)
+            self._effect_capabilities[capability.effect_id] = capability
+            self._effect_status[capability.effect_id] = 'INTENT_RECORDED'
+            return
         if capability.effect_id in self._effect_capabilities:
             raise AuthorizationDenied("effect capability already issued")
         if not self.supervisor_is_current(capability.supervisor_generation):
@@ -1262,6 +3626,19 @@ class OfflineDurableStore:
         self._effect_status[capability.effect_id] = "INTENT_RECORDED"
 
     def effect_capability(self, effect_id):
+        if self._authentication_service is not None:
+            frames = [f for f in self._committed_frames()
+                      if f['event'].get('effect_id') == effect_id and
+                      'effect' in json.loads(f['envelope'].authority_fact_bytes)]
+            if len(frames) != 1:
+                raise AuthorizationDenied('unique witnessed issuance required')
+            frame = frames[0]
+            event, receipt = frame['event'], frame['receipt']
+            fact = json.loads(frame['envelope'].authority_fact_bytes)['effect']
+            return EffectCapability(fact['capability_id'], receipt.event_id, receipt.revision,
+                receipt.event_digest, ArtifactBinding(**fact['artifact_binding']),
+                event['authorization_digest'], event['fence_epoch'], event['session_id'],
+                event['target'], event['operation'], effect_id, event['supervisor_generation'], True)
         capability = self._effect_capabilities.get(effect_id)
         if capability is None:
             raise AuthorizationDenied("authoritative effect capability absent")
@@ -1269,7 +3646,20 @@ class OfflineDurableStore:
 
     def effect_intent(self, capability):
         with self.authorization_lock:
+            if self._authentication_service is None:
+                raise AuthorizationDenied('legacy history cannot authorize an execution intent')
             self.assert_healthy_authority()
+            if self._authentication_service is not None:
+                actor = self.require_actor(self._current_actor)
+                if (self.effect_capability(capability.effect_id) != capability or
+                        capability.supervisor_generation != actor.generation or
+                        capability.session_id != actor.session_id or capability.fence_epoch != actor.fence):
+                    raise AuthorizationDenied('historical issuance cannot confer current authority')
+                if not self.witness.acknowledged_current(actor, capability.transition_event_id):
+                    raise AuthorizationDenied('intent was not acknowledged in the captured incarnation')
+                if self.execution_revoked:
+                    raise AuthorizationDenied('execution revoked')
+                return copy.deepcopy(self._durable[capability.transition_revision - 1]['event'])
             if (not isinstance(capability, EffectCapability) or
                     self._effect_capabilities.get(capability.effect_id) != capability or
                     capability.effect_id in self._invalidated_effects or
@@ -1297,6 +3687,12 @@ class OfflineDurableStore:
     def activate_creation_grant(self, capability):
         with self.authorization_lock:
             self.effect_intent(capability)
+            if self._authentication_service is not None:
+                if capability.operation != 'blocked-create' or self.effect_acceptance_count(capability.effect_id):
+                    raise AuthorizationDenied('current original unaccepted creation intent required')
+                self._active_creation_grants.add(capability.effect_id)
+                self._effect_status[capability.effect_id] = 'FIRST_DISPATCH_ACTIVE'
+                return
             if (capability.operation != "blocked-create" or
                     self._effect_status.get(capability.effect_id) != "INTENT_RECORDED"):
                 raise AuthorizationDenied("first dispatch is not creation eligible")
@@ -1311,11 +3707,23 @@ class OfflineDurableStore:
                 self._invalidated_effects.add(capability.effect_id)
 
     def creation_grant_active(self, capability):
+        if self._authentication_service is not None:
+            self.effect_intent(capability)
+            return capability.operation == 'blocked-create' and not self.effect_acceptance_count(capability.effect_id)
         return (self._effect_status.get(capability.effect_id) == "FIRST_DISPATCH_ACTIVE" and
                 capability.effect_id in self._active_creation_grants and
                 self.supervisor_is_current(capability.supervisor_generation))
 
     def effect_status(self, capability):
+        if self._authentication_service is not None:
+            if self.effect_capability(capability.effect_id) != capability:
+                raise AuthorizationDenied('effect identity substitution')
+            if any(f['event'].get('record_type') == 'EFFECT_RESULT' and
+                   f['event'].get('effect_id') == capability.effect_id for f in self._committed_frames()):
+                return 'KNOWN_RESULT'
+            if self.effect_acceptance_count(capability.effect_id):
+                return 'ACCEPTANCE_PENDING'
+            return 'INTENT_RECORDED'
         if self._effect_capabilities.get(capability.effect_id) != capability:
             raise AuthorizationDenied("authoritative effect capability absent")
         return self._effect_status.get(capability.effect_id)
@@ -1327,8 +3735,34 @@ class OfflineDurableStore:
                 self._effect_status[capability.effect_id] = "UNRESOLVED"
                 self._invalidated_effects.add(capability.effect_id)
 
-    def record_effect_result(self, capability, receipt):
+    def record_effect_result(self, capability, receipt, *, actor=None):
         with self.authorization_lock:
+            if self._authentication_service is not None:
+                actor = self.require_actor(actor, 'RESULT')
+                acceptance = self._acceptance_frame(capability)
+                original = self.event_receipt(capability.transition_event_id)
+                raw = _u04_canonical(asdict(receipt))
+                self._custodian.validate_creation_result(capability, raw, self._custodian.identity)
+                existing = [f for f in self._committed_frames() if
+                    f['event'].get('record_type') == 'EFFECT_RESULT' and f['event'].get('effect_id') == capability.effect_id]
+                if existing:
+                    known = self.effect_result(capability.effect_id)
+                    if known.receipt != receipt:
+                        raise AuthorizationDenied('historical result cannot be substituted')
+                    return known
+                object_id = 'effect-result-' + capability.effect_id
+                self.put_object(object_id, raw, actor=actor, boundary='RESULT')
+                accepted = acceptance['receipt']
+                event = self._u04_common(actor, 'EFFECT_RESULT', 'EVIDENCE', False)
+                event.update(acceptance_ref={'event_id': accepted.event_id,
+                    'revision': accepted.revision, 'payload_digest': accepted.event_digest},
+                    effect_id=capability.effect_id, original_producer_ref={
+                        'event_id': original.event_id, 'revision': original.revision,
+                        'payload_digest': original.event_digest}, result={
+                            'object_id': object_id, 'sha256': _sha(raw), 'length': len(raw)},
+                    result_kind='CUSTODIAN_RECEIPT', verifier_id=self._custodian.identity)
+                self._commit_u04(actor, 'RESULT', event)
+                return self.effect_result(capability.effect_id)
             if (self._effect_capabilities.get(capability.effect_id) != capability or
                     self._effect_status.get(capability.effect_id) != "ACCEPTANCE_PENDING"):
                 raise AuthorizationDenied("effect acceptance is not awaiting a result")
@@ -1340,6 +3774,18 @@ class OfflineDurableStore:
             return envelope
 
     def effect_result(self, effect_id):
+        if self._authentication_service is not None:
+            capability = self.effect_capability(effect_id)
+            frames = [f for f in self._committed_frames() if
+                f['event'].get('record_type') == 'EFFECT_RESULT' and
+                f['event'].get('effect_id') == effect_id]
+            if len(frames) != 1:
+                raise AuthorizationDenied('exact durable effect result unavailable')
+            result = parse_effect_result_record(_u04_canonical(frames[0]['event']))
+            raw = self.read_object(result.result.object_id, result.result.sha256)
+            receipt = self._custodian.validate_creation_result(capability, raw, result.verifier_id)
+            return HistoricalEffectReceipt(effect_id, capability.supervisor_generation,
+                                            capability.transition_event_digest, receipt)
         envelope = self._effect_results.get(effect_id)
         capability = self._effect_capabilities.get(effect_id)
         if (envelope is None or capability is None or
@@ -1353,26 +3799,61 @@ class OfflineDurableStore:
         return envelope
 
     def effect_acceptance_count(self, effect_id):
+        if self._authentication_service is not None:
+            return len([f for f in self._committed_frames() if
+                f['event'].get('record_type') == 'EFFECT_ACCEPTED' and
+                f['event'].get('effect_id') == effect_id])
         return self._effect_acceptance_counts.get(effect_id, 0)
 
     def accept_effect(self, capability):
         with self.authorization_lock:
+            if self._authentication_service is None:
+                raise AuthorizationDenied('legacy records cannot accept a new execution effect')
             event = self.effect_intent(capability)
-            if capability.effect_id in self._accepted_effects:
-                raise AuthorizationDenied("effect capability already accepted")
-            if (capability.operation == "blocked-create" and
-                    not self.creation_grant_active(capability)):
-                raise AuthorizationDenied("active first-dispatch grant required")
-            self._accepted_effects.add(capability.effect_id)
-            self._effect_status[capability.effect_id] = (
-                "ACCEPTANCE_PENDING" if capability.operation == "blocked-create"
-                else "EFFECT_ACCEPTED")
-            self._effect_acceptance_counts[capability.effect_id] = (
-                self._effect_acceptance_counts.get(capability.effect_id, 0) + 1)
-            return event
+            if self._authentication_service is not None:
+                actor = self.require_actor(self._current_actor)
+                if capability.operation == 'blocked-create' and not self.creation_grant_active(capability):
+                    raise AuthorizationDenied('active first dispatch required')
+                original = self.event_receipt(capability.transition_event_id)
+                accepted = self._u04_common(actor, 'EFFECT_ACCEPTED', 'EXECUTION', True)
+                accepted.update(intent_ref={'event_id': original.event_id,
+                    'revision': original.revision, 'payload_digest': original.event_digest},
+                    effect_id=capability.effect_id,
+                    capability_digest=_sha(_u04_canonical(asdict(capability))),
+                    operation=capability.operation, target=capability.target,
+                    consumption_id=capability.effect_id,
+                    artifact_binding=asdict(capability.artifact_binding),
+                    target_acceptance_identity=capability.target)
+                self._commit_u04(actor, 'EXEC', accepted)
+                self.require_actor(actor)
+                # Acknowledgement is a current volatile capability, never
+                # reconstructed from the committed acceptance alone.
+                self._effect_status[capability.effect_id] = 'ACCEPTANCE_PENDING'
+                self._acceptance_acks[capability.effect_id] = actor
+                return event
 
     def effect_accepted(self, capability):
-        return capability.effect_id in self._accepted_effects
+        if self._authentication_service is not None:
+            return self.effect_acceptance_count(capability.effect_id) == 1
+        return False
+
+    def _acceptance_frame(self, capability):
+        frames = [f for f in self._committed_frames() if
+            f['event'].get('record_type') == 'EFFECT_ACCEPTED' and
+            f['event'].get('effect_id') == capability.effect_id]
+        if len(frames) != 1 or frames[0]['event']['capability_digest'] != _sha(
+                _u04_canonical(asdict(capability))):
+            raise AuthorizationDenied('unique exact witnessed acceptance required')
+        return frames[0]
+
+    def validate_initiation(self, capability):
+        """Independent port check after acknowledgement, immediately before effect."""
+        self.effect_intent(capability)
+        acceptance = self._acceptance_frame(capability)
+        if not self.witness.acknowledged_current(self._current_actor, acceptance['event_id']):
+            raise AuthorizationDenied('acceptance was not acknowledged in this incarnation')
+        self.validate_artifact_continuity(capability.artifact_binding)
+        return self.require_actor(self._current_actor)
 
     def authoritative_state(self, domain, boot_ordinal):
         """Latest state label whose frame carries authorization-boundary provenance."""
@@ -1390,12 +3871,34 @@ class OfflineDurableStore:
     # ---- provenance -----------------------------------------------------
 
     def event_receipt(self, event_id):
+        if self._authentication_service is not None:
+            matches = [f['receipt'] for f in self._committed_frames() if f['event_id'] == event_id]
+            return matches[0] if len(matches) == 1 else None
         return self._receipts.get(event_id)
 
     def frame_has_provenance(self, frame):
         """True only for a frame written by the authorization boundary for the
         exact operation that is allowed to produce its state."""
         event = frame["event"]
+        if self._authentication_service is None:
+            return False
+        if self._authentication_service is not None:
+            envelope = frame.get('envelope')
+            if type(envelope) is not JournalEnvelope or not self._u04_frame_valid(frame):
+                return False
+            status, committed = self.witness.query_transaction(envelope.transaction_id)
+            if status != 'COMMITTED' or committed.reservation.frame_digest != envelope.frame_digest:
+                return False
+            if envelope.boundary == 'INIT' and event.get('state') in ('AUTHORIZATION_ADMITTED', 'CAMPAIGN_ADMITTED'):
+                return True
+            facts = json.loads(envelope.authority_fact_bytes)
+            if 'effect' not in facts:
+                return False
+            operation, state = event.get('operation'), event.get('state')
+            schema = (GENERIC_TRANSITION_SCHEMAS.get(state) if operation == 'append-transition'
+                      else DEDICATED_OPERATIONS.get(operation, {}).get(state))
+            return (schema is not None and envelope.boundary == 'EXEC' and
+                    envelope.producer_bytes == _u04_canonical(facts['producer']))
         state = event.get("state")
         operation = event.get("operation")
         effect_id = event.get("effect_id")
@@ -1459,6 +3962,20 @@ class OfflineDurableStore:
             }
 
     def validated_completion(self, slot_id):
+        if self._authentication_service is not None:
+            self._committed_frames()
+            frames = [f for f in self.provenanced_frames('ATTEMPT_COMPLETE', 'complete-attempt')
+                      if f['event'].get('slot_id') == slot_id]
+            if len(frames) != 1:
+                return None
+            frame = frames[0]
+            try:
+                _HistoricalEvidenceVerifier(self, self._admitted_payload())._validate_attempt_completion_record(
+                    slot_id, frame['event'], require_completion_event=True)
+            except (ContractError, StoreError, KeyError, TypeError, ValueError):
+                return None
+            return {'slot_id': slot_id, 'completion_digest': frame['event']['completion_digest'],
+                    'event_id': frame['event_id'], 'event_digest': frame['receipt'].event_digest}
         record = self._validated_completions.get(slot_id)
         if record is None:
             return None
@@ -1481,6 +3998,18 @@ class OfflineDurableStore:
 
     def validated_boot_custody(self, boot_ordinal):
         """Custody completion re-derived from custodian evidence, or None."""
+        if self._authentication_service is not None:
+            frames = [f for f in self.provenanced_frames('BOOT_CUSTODY_COMPLETE',
+                        'complete-boot-custody') if f['event'].get('boot_ordinal') == boot_ordinal]
+            if len(frames) != 1:
+                return None
+            frame = frames[0]
+            try:
+                proof = _boot_custody_proof(self, self._admitted_payload(), boot_ordinal,
+                    frame['event'], self.frame_index(frame['event_id']))
+                return dict(proof, event_id=frame['event_id'], event_digest=frame['receipt'].event_digest)
+            except (ContractError, StoreError, KeyError, TypeError):
+                return None
         record = self._validated_boot_custody.get(boot_ordinal)
         if record is None:
             return None
@@ -1498,6 +4027,12 @@ class OfflineDurableStore:
             self._validated_boot_closures[boot_ordinal] = event_digest
 
     def validated_boot_closure(self, boot_ordinal):
+        if self._authentication_service is not None:
+            self._committed_frames()
+            try:
+                return _HistoricalEvidenceVerifier(self, self._admitted_payload())._validate_boot_closure(boot_ordinal)
+            except (ContractError, StoreError, KeyError, TypeError, ValueError):
+                return None
         digest = self._validated_boot_closures.get(boot_ordinal)
         if digest is None:
             return None
@@ -1513,6 +4048,12 @@ class OfflineDurableStore:
             self._validated_campaign_closure = event_digest
 
     def validated_campaign_closure(self):
+        if self._authentication_service is not None:
+            self._committed_frames()
+            try:
+                return _HistoricalEvidenceVerifier(self, self._admitted_payload())._validate_campaign_closure()
+            except (ContractError, StoreError, KeyError, TypeError, ValueError):
+                return None
         return self._validated_campaign_closure
 
     def boot_identity(self, boot_ordinal):
@@ -1520,6 +4061,13 @@ class OfflineDurableStore:
         if boot_ordinal == 1:
             frames = self.provenanced_frames("CAMPAIGN_ADMITTED", "admit-campaign")
             return frames[-1]["event"].get("boot_id") if len(frames) == 1 else None
+        if self._authentication_service is not None:
+            admitted = [f for f in self._committed_frames() if
+                f['event'].get('record_type') == 'ACTIVATION_ADMITTED' and
+                f['event'].get('next_boot_ordinal') == boot_ordinal]
+            if len(admitted) == 1:
+                return admitted[0]['event']['observed_boot_id']
+            return None
         for frame in self.provenanced_frames("BOOT_HANDOFF_PENDING",
                                              "consume-boot-activation"):
             event = frame["event"]
@@ -1543,7 +4091,7 @@ class OfflineDurableStore:
         boot_id = self.boot_identity(slot.boot_ordinal)
         if boot_id is None or event.get("boot_id") != boot_id:
             raise AuthorizationDenied("slot eligibility boot identity")
-        if self.is_consumed("slot", slot.slot_id) or slot.slot_id in self._slot_grants:
+        if self.is_consumed("slot", slot.slot_id) or (self._authentication_service is None and slot.slot_id in self._slot_grants):
             raise AuthorizationDenied("slot already consumed")
         custody = self.validated_boot_custody(slot.boot_ordinal)
         if (custody is None or custody["boot_id"] != boot_id or
@@ -1590,7 +4138,7 @@ class OfflineDurableStore:
                 grant["predecessor_completion_digest"])
 
     def _check_slot_grant_for_creation(self, authorization, session, event):
-        grant = self._slot_grants.get(event.get("slot_id"))
+        grant = self._derived_slot_grant(event.get('slot_id'))
         if grant is None or grant["status"] != "ELIGIBLE":
             raise AuthorizationDenied("store-backed slot capability required")
         index = self.frame_index(grant["eligibility_event_id"])
@@ -1601,7 +4149,9 @@ class OfflineDurableStore:
                 eligibility[-1]["event_id"] != grant["eligibility_event_id"] or
                 eligibility[-1]["receipt"].event_digest != grant["eligibility_event_digest"]):
             raise AuthorizationDenied("slot eligibility is not the current attempt")
-        if (grant["supervisor_generation"] != self._supervisor_generation or
+        generation = (self.require_actor(self._current_actor).generation
+                      if self._authentication_service is not None else self._supervisor_generation)
+        if (grant["supervisor_generation"] != generation or
                 event.get("supervisor_generation") != grant["supervisor_generation"] or
                 grant["session_id"] != session.session_id or
                 grant["fence_epoch"] != session.fence_epoch or
@@ -1622,14 +4172,43 @@ class OfflineDurableStore:
         return grant
 
     def _reserve_slot_grant(self, slot_id, effect_id, launch_spec_digest):
+        if self._authentication_service is not None:
+            # Cache registration is derived after the actual journaled intent.
+            self._slot_grants[slot_id] = self._derived_slot_grant(slot_id)
+            return
         grant = self._slot_grants[slot_id]
         grant.update(status="RESERVED", effect_id=effect_id,
                      launch_spec_digest=launch_spec_digest)
 
+    def _derived_slot_grant(self, slot_id):
+        if self._authentication_service is None:
+            return self._slot_grants.get(slot_id)
+        eligibility = [f for f in self.provenanced_frames('SLOT_SPAWN_ELIGIBLE', 'make-slot-eligible')
+                       if f['event'].get('slot_id') == slot_id]
+        if len(eligibility) != 1:
+            return None
+        frame = eligibility[0]
+        event = frame['event']
+        grant = {name: event[name] for name in ('slot_id', 'attempt_id', 'boot_ordinal',
+            'boot_id', 'campaign_id', 'spawn_token', 'custodian_id', 'predecessor_slot_id',
+            'predecessor_completion_digest', 'supervisor_generation', 'session_id', 'fence_epoch')}
+        grant.update(status='ELIGIBLE', eligibility_event_id=frame['event_id'],
+            eligibility_event_digest=frame['receipt'].event_digest, effect_id=None,
+            launch_spec_digest=None)
+        intents = [f for f in self.provenanced_frames('SPAWN_INTENT_PERSISTED', 'blocked-create')
+                   if f['event'].get('slot_id') == slot_id]
+        if intents:
+            if len(intents) != 1:
+                raise AuthorizationDenied('multiple creation intents for one slot')
+            grant.update(status='RESERVED', effect_id=intents[0]['event']['effect_id'],
+                         launch_spec_digest=intents[0]['event']['launch_spec_digest'])
+        return grant
+
     def creation_slot_grant(self, capability, token):
         """Authoritative creation-boundary check used by the custodian."""
         with self.authorization_lock:
-            grant = self._slot_grants.get(getattr(token, "slot_id", None))
+            self.effect_intent(capability)
+            grant = self._derived_slot_grant(getattr(token, "slot_id", None))
             if (grant is None or grant["status"] != "RESERVED" or
                     not isinstance(capability, EffectCapability) or
                     grant["effect_id"] != capability.effect_id or
@@ -1651,6 +4230,12 @@ class OfflineDurableStore:
 
 class ArtifactVerificationPrimitive:
     """Nonrecursive trust root for exact authorized execution bytes."""
+
+    def __setattr__(self, name, value):
+        if (name in ('identity', 'authorization', 'artifact_reader') and
+                name in self.__dict__ and self.__dict__[name] is not value):
+            raise AuthorizationDenied('artifact verification bootstrap references are pinned')
+        object.__setattr__(self, name, value)
 
     def __init__(self, verifier_identity, authorization, artifact_reader):
         if type(verifier_identity) is not str or not verifier_identity:
@@ -1905,8 +4490,13 @@ def authorize_and_dispatch(store, verifier, expected_revision, current_fence,
         event.update(trusted)
         event["verification_id"] = binding.verification_id
         try:
-            receipt = store._append_control(expected_revision, current_fence,
-                                            effect_specification["event_id"], event)
+            actor = store.actor_for_session(session)
+            if expected_revision != store.revision:
+                raise CASMismatch('stale expected revision')
+            event['authority_class'] = 'CONTROL'
+            receipt = store._commit_u04(actor, 'EXEC', event, event_id=effect_specification['event_id'],
+                facts={'effect': {'capability_id': 'capability-' + effect_id,
+                                  'artifact_binding': asdict(binding)}})
             capability = EffectCapability(
                 "capability-" + effect_id, receipt.event_id,
                 receipt.revision, receipt.event_digest, binding,
@@ -1937,14 +4527,20 @@ def authorize_and_dispatch(store, verifier, expected_revision, current_fence,
             if creation_operation:
                 store.activate_creation_grant(capability)
             try:
-                result = dispatcher(capability, binding)
+                if target in (store.identity, 'offline-store'):
+                    result = store._custodian.initiate_control(capability, binding, dispatcher)
+                    store.record_control_effect_result(actor, capability)
+                else:
+                    result = dispatcher(capability, binding)
             finally:
                 if creation_operation:
                     store.deactivate_creation_grant(capability)
             if not store.effect_accepted(capability):
                 raise AuthorizationDenied("dispatcher did not accept bound capability")
             return result, capability
-        except DispatchUncertain:
+        except (DispatchUncertain, TransactionPending, LostAcknowledgement, Quarantined):
+            store.revoke_execution()
+            store._publication_prohibited = True
             raise
         except Exception:
             store.install_failure_latch("authoritative-mutation-failure")
@@ -1978,15 +4574,67 @@ class PersistentSupervisor:
         self._finalized_candidates = {}
         self.last_lifecycle_failure = None
         self.reconstruction_violations = []
-        with self.store._supervisor_takeover() as generation:
-            self._supervisor_generation = generation
-            self.store.register_session(session)
+        if self.store._authorization_lock.owned_by_current_thread():
+            raise AuthorizationDenied('supervisor takeover cannot reenter authorization')
+        fresh = (self.store._authentication_service is not None and not self.store._durable and
+                 self.store.witness.high_generation == 0 and self.store.witness.high_fence == 0)
+        if not fresh:
+            try:
+                self.store.reset_volatile()
+            except BaseException:
+                # A failed replacement cannot leave the outgoing token usable.
+                # Preserve the primary failure; unreadable W is only uncertainty.
+                try:
+                    with self.store.authorization_lock:
+                        self.store.crash()
+                except StoreError:
+                    pass
+                self.store.revoke_execution()
+                self.store._publication_prohibited = self.store.containment_only = True
+                raise
+        with self.store.authorization_lock:
+            self.store.bind_artifact_verifier(verifier)
             self.custodian.bind_authority(self.store, self.record_custodian_loss)
+            self._actor = None
+            if (self.store._authentication_service is not None and not self.store._durable and
+                    self.store.witness.high_generation == 0 and self.store.witness.high_fence == 0):
+                self._actor = self.store.begin_fresh_entry(self.store._authentication_service,
+                    authorization, session.owner_identity)
+                self.session = FenceSession(self._actor.fence, self._actor.session_id,
+                    self._actor.owner_identity, 1, False)
+            else:
+                self.session = replace(session, execution_live=False)
+            self._supervisor_generation = self.store.witness.high_generation
+            if not fresh and self.store.health != 'HEALTHY':
+                self._window_history = WindowHistory(None, 0, (), frozenset(), ('history-unavailable',))
+                self.safety_markers.add('CONTAINMENT_ONLY_RECOVERY')
+                self._history_violation('history-health:' + self.store.health)
+                # Inspection preserves forensic bytes and cannot resurrect
+                # sessions, interpret labels as authority, or allocate ENTRY.
+                if self.store._authentication_service is not None:
+                    inspector = self.store.read_only_inspector(self.store._authentication_service,
+                        self.authorization, _LOCAL_INSPECTION_READER_ID)
+                    prefix_ids = {f['event_id'] for f in inspector.snapshot()['frames']}
+                else:
+                    # Unauthenticated local raw inspection cannot label any
+                    # frame authoritative or allocate a reader actor.
+                    prefix_ids = set()
+                for frame in self.store._durable:
+                    event = frame['event']
+                    if (_is_reserved_control_record(event) and frame['event_id'] not in prefix_ids):
+                        self._history_violation('unprovenanced-reserved-record:' +
+                                                str(event.get('state') or event.get('record_type')))
+                return
             self._reconstruct()
-            # Replay may have installed sticky prohibitions; readiness never
-            # clears them, and historical provenance is not a current-generation
-            # check. No successor authority is usable during partial replay.
-            self.store._supervisor_ready = True
+            if not fresh and self.store._authentication_service is not None and self.store.health == 'HEALTHY':
+                try:
+                    self._actor = self.store.open_nonlive_entry(authorization, session.owner_identity)
+                except (AuthorizationDenied, Quarantined):
+                    self._actor = None
+                if self._actor is not None:
+                    self._supervisor_generation = self._actor.generation
+                    self.session = FenceSession(self._actor.fence, self._actor.session_id,
+                        self._actor.owner_identity, max(1, self.current_boot_ordinal), False)
 
     # ---- reconstruction ----------------------------------------------------
 
@@ -1998,8 +4646,16 @@ class PersistentSupervisor:
         event = frame["event"]
         state = event.get("state")
         record_type = event.get("record_type")
+        if (record_type == 'BOOT_ACTIVATION' and type(frame.get('envelope')) is JournalEnvelope and
+                'activation_authentication' in json.loads(frame['envelope'].authority_fact_bytes)):
+            return False
+        if event.get('schema_version') == 'u04-record/v1':
+            return False
         authorizing = event.get("authorizes_execution") is True
         if record_type == "PUBLICATION":
+            envelope = frame.get('envelope')
+            if type(envelope) is JournalEnvelope and json.loads(envelope.authority_fact_bytes).get('publication_grant', {}).get('phase') != 'RESULT':
+                return False
             if (authorizing or state not in STATE_DOMAINS["publication"] or
                     "effect_id" in event or "state_domain" in event or
                     event.get("operation") not in _PUBLICATION_OPERATIONS):
@@ -2041,6 +4697,12 @@ class PersistentSupervisor:
         for frame in frames:
             event = frame["event"]
             state = event.get("state")
+            if event.get('record_type') == 'ACTIVATION_ADMITTED':
+                self.current_boot_ordinal = event['next_boot_ordinal']
+                self.current_boot_id = event['observed_boot_id']
+                self._boot_ids[self.current_boot_ordinal] = self.current_boot_id
+                self.activation_ids.add(event['activation_id'])
+                self.boot_state = self.attempt_state = None
             try:
                 if not self._classify_frame(frame):
                     continue
@@ -2050,18 +4712,17 @@ class PersistentSupervisor:
                     reconstructed = FenceSession(
                         event["fence_epoch"], event["session_id"], event["session_owner"],
                         event.get("session_boot_ordinal", event.get("boot_ordinal", 1)),
-                        event.get("session_live", True))
+                        False)
             except (ContractError, StoreError, KeyError, TypeError, ValueError):
                 self._history_violation("malformed-reserved-record")
                 continue
             if reconstructed is not None:
-                existing = self.store._sessions.get(reconstructed.session_id)
-                if existing is None:
-                    self.store.register_session(reconstructed)
-                elif (existing.fence_epoch != reconstructed.fence_epoch or
-                      existing.owner_identity != reconstructed.owner_identity or
-                      existing.boot_ordinal != reconstructed.boot_ordinal):
-                    raise AuthorizationDenied("durable session identity collision")
+                envelope = frame.get('envelope')
+                self.store._historical_producers[frame['event_id']] = (
+                    envelope.producer_bytes if type(envelope) is JournalEnvelope else _u04_canonical({
+                        'legacy_historical': True, 'generation': event.get('supervisor_generation'),
+                        'session_id': reconstructed.session_id, 'fence': reconstructed.fence_epoch,
+                        'owner_identity': reconstructed.owner_identity}))
             try:
                 if event.get("record_type") == "MEASUREMENT_WINDOW":
                     continue
@@ -2071,7 +4732,9 @@ class PersistentSupervisor:
                     failure_reasons.append(event["reason"])
                 if state in _STICKY_HISTORY_STATES:
                     self.safety_markers.add(state)
-                if event.get("authorizes_execution") is not True:
+                if (event.get("authorizes_execution") is not True and
+                        not (event.get('state') == 'CAMPAIGN_ADMITTED' and
+                             self.store.frame_has_provenance(frame))):
                     continue
                 if event.get("operation") == "consume-boot-activation":
                     ordinal = event["activated_boot_ordinal"]
@@ -2184,6 +4847,9 @@ class PersistentSupervisor:
                                 campaign_id=self.authorization.campaign_id)
                 _boot_custody_attestation_digest(
                     self.store, event.get("custody_attestation"), expected)
+                if self.custodian.confirms_required_custody_loss(event.get('custody_attestation')):
+                    self.safety_markers.update(('CUSTODY_UNCERTAIN', 'TAINTED', 'CONTAINMENT_ONLY_RECOVERY'))
+                    self.store.revoke_execution()
             except (AuthorizationDenied, ContractError, StoreError, KeyError, TypeError,
                     ValueError):
                 self._history_violation("invalid-boot-custody:%s" % (ordinal,))
@@ -2400,6 +5066,7 @@ class PersistentSupervisor:
     # ---- transitions -------------------------------------------------------
 
     def _ensure_session(self):
+        self.store.require_actor(self._actor)
         if (not self.session.execution_live or
                 not self.store.supervisor_is_current(self._supervisor_generation) or
                 self.session.fence_epoch != self.store.witness.current_fence or
@@ -2439,7 +5106,9 @@ class PersistentSupervisor:
                 self.session, state, spec, dispatcher, interlock=interlock,
                 _authority=None if operation is None else _DEDICATED_AUTHORITY,
             )
-        except DispatchUncertain:
+        except (DispatchUncertain, TransactionPending, LostAcknowledgement, Quarantined):
+            self.store.revoke_execution()
+            self.store._publication_prohibited = True
             raise
         except Exception:
             self._contain_after_failure(
@@ -2480,37 +5149,17 @@ class PersistentSupervisor:
                 raise AuthorizationDenied("local evidence transition precondition")
 
     def admit_campaign(self, boot_activation):
-        if self.campaign_state is not None:
-            raise ContractError("campaign authorization replay")
-        if not isinstance(boot_activation, BootActivation) or boot_activation.boot_ordinal != 1:
-            raise AuthorizationDenied("initial boot activation")
-        if boot_activation.authorization_digest != self.authorization.authorization_digest:
-            raise AuthorizationDenied("activation authorization digest")
-        # Initialization eligibility is established before any admission write
-        # and is usable only within this call.
-        initialization = self.store._begin_window_initialization(_DEDICATED_AUTHORITY)
-        if initialization is None:
-            raise AuthorizationDenied(
-                "campaign admission requires a fresh, uninitialized store")
-        try:
-            self._dedicated_transition("admit-authorization", "authorization",
-                                       "AUTHORIZATION_ADMITTED", "authorization-admitted")
-            self.store.consume("authorization", self.authorization.authorization_id)
-            self._dedicated_transition("admit-campaign", "campaign", "CAMPAIGN_ADMITTED",
-                                       "campaign-admitted",
-                                       {"boot_id": boot_activation.observed_boot_id,
-                                        "activation_id": boot_activation.activation_id})
-            self.store.consume("boot_activation", boot_activation.activation_id)
-            self.activation_ids.add(boot_activation.activation_id)
-            self.campaign_state = "CAMPAIGN_ADMITTED"
-            self.current_boot_id = boot_activation.observed_boot_id
-            self.current_boot_ordinal = 1
-            self._boot_ids[1] = boot_activation.observed_boot_id
-            self._observed_boot_ids = {boot_activation.observed_boot_id}
-            self._set_measurement_window(OUTSIDE_MEASURED_WINDOWS,
-                                         initialization=initialization)
-        finally:
-            self.store._end_window_initialization(_DEDICATED_AUTHORITY, initialization)
+        if self.campaign_state is not None or self._actor is None:
+            raise AuthorizationDenied('witness-authenticated fresh admission required')
+        self._actor, self.session = self.store.complete_fresh_admission(
+            self._actor, self.authorization, boot_activation)
+        self._supervisor_generation = self._actor.generation
+        self.activation_ids.add(boot_activation.activation_id)
+        self.campaign_state = 'CAMPAIGN_ADMITTED'
+        self.current_boot_id = boot_activation.observed_boot_id
+        self.current_boot_ordinal = 1
+        self._boot_ids[1] = self.current_boot_id
+        self._observed_boot_ids = {self.current_boot_id}
 
     def establish_boot_custody(self, custody_proof, observer_isolated, watchdog_ready,
                                observer_id="isolated-observer"):
@@ -2593,7 +5242,8 @@ class PersistentSupervisor:
              "custodian_id": self.custodian.identity,
              "predecessor_slot_id": predecessor_slot_id,
              "predecessor_completion_digest": predecessor_digest})
-        self.store.consume("slot", slot_id)
+        if self.store._authentication_service is None:
+            self.store.consume("slot", slot_id)
         spawn_token = "spawn-" + slot_id
         capability = SlotCapability(
             "slot-capability-" + slot_id, self.authorization.authorization_digest,
@@ -2847,7 +5497,7 @@ class PersistentSupervisor:
         reference = pipeline.capture(token.token_id, raw_bytes, 1, self.store.revision)
         raw_object_id = "attempt-raw-" + slot.attempt_id
         raw_digest = self.store.put_object(raw_object_id,
-                                           pipeline.raw.read(reference))
+                                           pipeline.raw.read(reference), actor=self._actor)
         self._dedicated_transition(
             "persist-local-evidence", "local_evidence", "RAW_CAPTURED", "raw-captured-" + slot_id,
             {"slot_id": slot_id, "attempt_id": slot.attempt_id,
@@ -2875,7 +5525,7 @@ class PersistentSupervisor:
         normalized = pipeline.normalize(reference, decoded)
         normalized_object_id = "attempt-normalized-" + slot.attempt_id
         normalized_digest = self.store.put_object(normalized_object_id,
-                                                   normalized.value)
+                                                   normalized.value, actor=self._actor)
         self._dedicated_transition(
             "persist-local-evidence", "local_evidence", "NORMALIZATION_BOUND", "normalization-bound-" + slot_id,
             {"slot_id": slot_id, "attempt_id": slot.attempt_id,
@@ -2884,7 +5534,7 @@ class PersistentSupervisor:
              "normalized_digest": normalized_digest})
         core = pipeline.freeze_core(decoded, normalized)
         core_object_id = "attempt-core-" + slot.attempt_id
-        core_digest = self.store.put_object(core_object_id, core.bytes)
+        core_digest = self.store.put_object(core_object_id, core.bytes, actor=self._actor)
         self._dedicated_transition(
             "persist-local-evidence", "local_evidence", "IMMUTABLE_BYTES_STORED",
             "immutable-bytes-stored-" + slot_id,
@@ -2911,7 +5561,7 @@ class PersistentSupervisor:
         residual_digests = []
         for sequence, (residual_reference, residual_raw) in enumerate(residual_records, 1):
             object_id = "attempt-residual-%s-%d" % (slot.attempt_id, sequence)
-            digest = self.store.put_object(object_id, residual_raw)
+            digest = self.store.put_object(object_id, residual_raw, actor=self._actor)
             if self.store.read_object(object_id, digest) != residual_raw:
                 raise AuthorizationDenied("residual readback mismatch")
             residual_object_ids.append(object_id)
@@ -3175,6 +5825,15 @@ class PersistentSupervisor:
                                     "CONTAINMENT_ONLY_RECOVERY"))
         self.store.revoke_execution()
         reason = "custody-uncertain:" + lifecycle_point
+        if self.store._authentication_service is not None:
+            try:
+                self.store.witness.deny_campaign(self._actor, 'CUSTODY_LOSS_PROVEN',
+                    [f['envelope'] for f in self.store._committed_frames()], _boundary=_U04_BOUNDARIES['DENY'])
+                self.store.mirror_denial(self._actor)
+            except (StoreError, ContractError):
+                pass
+            self.store._taint.add(reason)
+            return
         try:
             self.store.add_taint(reason)
             self.store.append_nonauthorizing(
@@ -3191,8 +5850,7 @@ class PersistentSupervisor:
             if not inspection.possibly_live or not self.custodian.alive:
                 continue
             try:
-                capability = self.store.effect_capability("spawn-intent-" + slot_id)
-                binding = capability.artifact_binding
+                binding = self.custodian.original_creation_binding(token.token_id)
             except Exception:
                 continue
             try:
@@ -3203,12 +5861,17 @@ class PersistentSupervisor:
 
     def _write_failure_record(self, reason, raw_bytes, *, primary_failure=None,
                               secondary_failures=None):
-        self.store.add_taint(reason)
+        if self.store._authentication_service is None:
+            self.store.add_taint(reason)
         record = {"state": "TAINTED", "reason": reason, "raw_digest": _sha(raw_bytes),
                   "raw_length": len(raw_bytes)}
         if primary_failure is not None:
             record["primary_failure"] = str(primary_failure)
             record["secondary_failures"] = [str(item) for item in secondary_failures or ()]
+        if self.store._authentication_service is not None:
+            record.update(authorization_digest=self.authorization.authorization_digest,
+                          campaign_id=self.authorization.campaign_id, authorizes_execution=False)
+            return self.store.record_original_diagnostic(self._actor, record)
         return self.store.append_nonauthorizing(
             self.store.witness.current_fence, "failure-%d" % (self.store.revision + 1),
             record,
@@ -3219,6 +5882,14 @@ class PersistentSupervisor:
         self.store.install_failure_latch(reason)
         self._cleanup_existing_workers()
         try:
+            if self.store._authentication_service is not None and self._actor is not None:
+                try:
+                    self.store.witness.deny_campaign(self._actor, 'PUBLICATION_INTEGRITY_CONFLICT',
+                        [f['envelope'] for f in self.store._committed_frames()], _boundary=_U04_BOUNDARIES['DENY'])
+                except AuthorizationDenied:
+                    pass
+                else:
+                    self.store.mirror_denial(self._actor)
             self._write_failure_record(reason, raw_bytes)
         except Exception:
             self.store._taint.add(reason)
@@ -3277,11 +5948,7 @@ class PersistentSupervisor:
                         if history.window_epoch != 0 or window != OUTSIDE_MEASURED_WINDOWS:
                             raise AuthorizationDenied("initial measurement window")
                         previous = (None, 0)
-                    if ((self.store._measurement_window, self.store._window_epoch) !=
-                            previous):
-                        raise AuthorizationDenied(
-                            "exposed measurement window diverges from its history")
-                    operation_id = self.store._next_window_operation_id(_DEDICATED_AUTHORITY)
+                    operation_id = self.store._next_window_operation_id(_DEDICATED_AUTHORITY, actor=self._actor)
                     transition = MeasurementWindowTransition(
                         self.store.identity, WINDOW_OPERATION, operation_id,
                         "measurement-" + operation_id, previous[0], previous[1], window,
@@ -3291,11 +5958,11 @@ class PersistentSupervisor:
                     # Mark started: register the exact operation as pending.
                     started = True
                     self.store._register_window_operation(
-                        _DEDICATED_AUTHORITY, transition, initialization=initialization)
+                        _DEDICATED_AUTHORITY, transition, initialization=initialization, actor=self._actor)
                     receipt = self.store._append_window_result(_DEDICATED_AUTHORITY,
-                                                               transition)
+                                                               transition, actor=self._actor)
                     self.store._bind_window_result(_DEDICATED_AUTHORITY,
-                                                   transition.operation_id, receipt)
+                                                   transition.operation_id, receipt, actor=self._actor)
                     self.store._measurement_window = transition.window
                     self.store._window_epoch = transition.window_epoch
                 except BaseException:
@@ -3305,6 +5972,10 @@ class PersistentSupervisor:
                         self.store._measurement_window = None
                         self._prohibit_started_operation("measurement-window-failure")
                     raise
+        except (TransactionPending, LostAcknowledgement, Quarantined):
+            self.store.revoke_execution()
+            self.store._publication_prohibited = True
+            raise
         except StoreError:
             self._contain_after_failure(
                 "measurement-window-failure", b"", suppress_reporting_error=True)
@@ -3338,6 +6009,11 @@ class PersistentSupervisor:
                     self.session.fence_epoch,
                     self.authorization.authorization_digest,
                     self.authorization.campaign_id)
+        if not mutation:
+            if binding != expected:
+                raise AuthorizationDenied('foreign historical reader binding')
+            self.store.validate_admitted_authorization(self.authorization)
+            return None
         if (binding != expected or
                 not self.store.supervisor_is_current(self._supervisor_generation) or
                 self.session.fence_epoch != self.store.witness.current_fence or
@@ -3355,9 +6031,6 @@ class PersistentSupervisor:
             raise AuthorizationDenied("authoritative measurement window is absent")
         if history.window != OUTSIDE_MEASURED_WINDOWS:
             raise AuthorizationDenied("publication prohibited during measured window")
-        if ((self.store._measurement_window, self.store._window_epoch) !=
-                (history.window, history.window_epoch)):
-            raise AuthorizationDenied("exposed measurement window diverges from its history")
         return history
 
     @staticmethod
@@ -3437,12 +6110,12 @@ class PersistentSupervisor:
         with self.store.authorization_lock:
             history = self._assert_publication_binding(binding, mutation=True)
             self.store.assert_healthy_authority()
-            grant_id = self.store._next_publication_grant_id(_DEDICATED_AUTHORITY)
+            grant_id = self.store._next_publication_grant_id(_DEDICATED_AUTHORITY, actor=self._actor)
             request = self._publication_lifecycle(grant_id, operation, identity,
                                                   history.window_epoch)
             grant = PublicationOperationGrant(request,
                                               _publication_grant_attestation(request))
-            return self.store._register_publication_grant(_DEDICATED_AUTHORITY, grant)
+            return self.store._register_publication_grant(_DEDICATED_AUTHORITY, grant, actor=self._actor)
 
     def perform_publication(self, binding, grant, intent, payload=None,
                             interlock=None):
@@ -3464,8 +6137,8 @@ class PersistentSupervisor:
                     history = self._assert_publication_binding(binding, mutation=True)
                     self.store.assert_healthy_authority()
                     request = grant.binding
-                    if (self.store._publication_grants.get(request.grant_id) != grant or
-                            self.store.publication_grant_consumed(request.grant_id) or
+                    self.store._publication_issuance(grant, self._actor)
+                    if (self.store.publication_grant_consumed(request.grant_id) or
                             not grant.attestation_valid() or
                             grant.attestation != _publication_grant_attestation(request)):
                         raise AuthorizationDenied(
@@ -3491,19 +6164,19 @@ class PersistentSupervisor:
                         raise AuthorizationDenied("unexpected %s payload" % operation)
                     # Consume, then perform the bounded modeled object operation.
                     started = True
-                    self.store._consume_publication_grant(_DEDICATED_AUTHORITY, grant)
+                    self.store._consume_publication_grant(_DEDICATED_AUTHORITY, grant, actor=self._actor)
                     event = request.record_fields()
                     result = request.state
                     if operation == "intent":
                         source_id = self._publication_source_object_id(intent)
                         event["source_object_id"] = source_id
-                        event["source_digest"] = self.store.put_object(source_id, payload)
+                        event["source_digest"] = _sha(payload)
                         result = intent
                     elif operation == "create":
                         event["reservation_id"] = "reservation-" + request.grant_id
                     elif operation == "write":
                         object_id = self._publication_written_object_id(intent)
-                        written_digest = self.store.put_object(object_id, payload)
+                        written_digest = _sha(payload)
                         event.update({"written_object_id": object_id,
                                       "written_digest": written_digest,
                                       "written_length": len(payload),
@@ -3539,12 +6212,36 @@ class PersistentSupervisor:
                             identity.destination, identity.object_key,
                             identity.object_digest, identity.length,
                             "PUBLICATION_VERIFIED", _sha(readback))
+                    # Freeze exact issuance/consumption before any modeled
+                    # object effect. The provisional payload is not a result.
+                    provisional = self.store._commit_u04(self._actor, 'EXEC', event,
+                        facts={'publication_grant': {'attestation': grant.attestation, 'phase': 'INTENT'}})
+                    artifact = self.verifier.verify(request.state, self._actor.fence, self._actor.session_id)
+                    accepted = self.store._u04_common(self._actor, 'EFFECT_ACCEPTED', 'EXECUTION', True)
+                    accepted.update(intent_ref={'event_id': provisional.event_id,
+                        'revision': provisional.revision, 'payload_digest': provisional.event_digest},
+                        effect_id=grant.grant_id, capability_digest=_sha(_u04_canonical(asdict(grant))),
+                        operation=request.operation, target=request.identity.destination,
+                        consumption_id=grant.grant_id, artifact_binding=asdict(artifact),
+                        target_acceptance_identity=request.identity.destination)
+                    self.store._commit_u04(self._actor, 'EXEC', accepted,
+                        facts={'publication_acceptance': request.grant_id})
+                    self.store.require_actor(self._actor)
+                    self.store._acceptance_acks[request.grant_id] = self._actor
+                    self.verifier.assert_continuity(artifact)
+                    event = self.custodian.initiate_publication(self._actor, grant, event, payload)
                     # Append and witness the exact result, then bind it.
                     appended = self.store._append_publication_result(
                         _DEDICATED_AUTHORITY, grant,
-                        "publication-%s-%d" % (operation, self.store.revision + 1), event)
+                        "publication-%s-%d" % (operation, self.store.revision + 1), event, actor=self._actor)
+                    self.store.record_publication_effect_result(self._actor, grant)
+                    if self.custodian.confirms_publication_conflict(event):
+                        self.store.witness.deny_campaign(self._actor, 'PUBLICATION_INTEGRITY_CONFLICT',
+                            [f['envelope'] for f in self.store._committed_frames()], _boundary=_U04_BOUNDARIES['DENY'])
+                        self.store.mirror_denial(self._actor)
+                        raise AuthorizationDenied('independently completed publication conflicts with intended bytes')
                     self.store._bind_publication_grant(_DEDICATED_AUTHORITY,
-                                                       request.grant_id, appended)
+                                                       request.grant_id, appended, actor=self._actor)
                     return result
                 except BaseException as exc:
                     if started:
@@ -3552,9 +6249,14 @@ class PersistentSupervisor:
                             "publication-authority-failure" if isinstance(exc, StoreError)
                             else "publication-mutation-failure")
                     raise
+        except (TransactionPending, LostAcknowledgement, Quarantined):
+            self.store.revoke_execution()
+            self.store._publication_prohibited = True
+            raise
         except StoreError:
-            self._contain_after_failure(
-                "publication-authority-failure", b"", suppress_reporting_error=True)
+            if started:
+                self._contain_after_failure(
+                    "publication-authority-failure", b"", suppress_reporting_error=True)
             raise
         except Exception:
             if started:
@@ -3760,54 +6462,62 @@ class PersistentSupervisor:
         self._dedicated_transition("begin-boot-handoff", "boot", "BOOT_HANDOFF_PENDING",
                                    "boot-%d-handoff" % self.current_boot_ordinal)
         self.boot_state = "BOOT_HANDOFF_PENDING"
+        self._actor = self.store.witness.change_mode(self._actor, 'SHUTDOWN_ONLY', _boundary=_U04_BOUNDARIES['EXEC'])
+        self.store._current_actor = self._actor
+        self.store._entry_mode = 'SHUTDOWN_ONLY'
         self.session = replace(self.session, execution_live=False)
-        self.store.register_session(self.session)
+        self.store._sessions[self.session.session_id] = self.session
+
+    def commit_planned_shutdown(self, fault=None):
+        return self.store.commit_shutdown(self._actor, self.authorization, fault=fault)
 
     def activate_next_boot(self, activation):
-        if not isinstance(activation, BootActivation) or self.boot_state != "BOOT_HANDOFF_PENDING":
-            raise AuthorizationDenied("fresh boot activation required")
-        expected = self.current_boot_ordinal + 1
-        if (activation.boot_ordinal != expected or
-                activation.authorization_digest != self.authorization.authorization_digest or
-                activation.predecessor_closure_digest != self.predecessor_closure_digest or
-                activation.activation_id in self.activation_ids):
-            raise AuthorizationDenied("wrong or replayed boot activation")
-        if self.store.taint or self.store.execution_revoked:
-            raise AuthorizationDenied("tainted campaign")
-        if activation.observed_boot_id in self._observed_boot_ids:
-            raise AuthorizationDenied("observed boot ID was already used")
-        # Boot activation re-checks the full closure evidence that makes the
-        # predecessor BOOT_COMPLETE authoritative; the label alone is not proof.
-        closure = self._validate_boot_closure(self.current_boot_ordinal)
-        if (closure != activation.predecessor_closure_digest or
-                self.store.validated_boot_closure(self.current_boot_ordinal) != closure):
-            raise AuthorizationDenied("boot activation predecessor closure evidence")
-        fresh_epoch = self.store.acquire_fence(self.session.owner_identity)
-        fresh_session = FenceSession(fresh_epoch,
-                                     "session-boot-%d" % expected,
-                                     self.session.owner_identity, expected, True)
-        self.store.register_session(fresh_session)
-        spec = {
-            "effect_id": "boot-activation-" + activation.activation_id,
-            "target": "offline-store", "operation": "consume-boot-activation",
-            "event_id": "event-boot-activation-" + activation.activation_id,
-            "event": {"record_type": "BOOT_ACTIVATION", "activation_id": activation.activation_id,
-                      "activated_boot_ordinal": expected,
-                      "observed_boot_id": activation.observed_boot_id,
-                      "predecessor_closure_digest": activation.predecessor_closure_digest},
-        }
-        authorize_and_dispatch(
-            self.store, self.verifier, self.store.revision, fresh_session.fence_epoch,
-            fresh_session, "BOOT_HANDOFF_PENDING", spec,
-            lambda capability, binding: None, _authority=_DEDICATED_AUTHORITY,
-        )
-        self.store.consume("boot_activation", activation.activation_id)
+        actor, fresh_session = self.store.admit_next_boot(self.authorization, activation,
+                                                         self.session.owner_identity)
+        self._actor, self.session = actor, fresh_session
+        self._supervisor_generation = actor.generation
         self.activation_ids.add(activation.activation_id)
-        self.current_boot_ordinal = expected
+        self.current_boot_ordinal = activation.boot_ordinal
         self.current_boot_id = activation.observed_boot_id
-        self._boot_ids[expected] = activation.observed_boot_id
-        self._observed_boot_ids.add(activation.observed_boot_id)
-        self.session = fresh_session
-        self.boot_state = None
-        self.attempt_state = None
-        self._custody = None
+        self._boot_ids[self.current_boot_ordinal] = self.current_boot_id
+        self._observed_boot_ids.add(self.current_boot_id)
+        self.boot_state = self.attempt_state = self._custody = None
+
+
+class _HistoricalEvidenceVerifier:
+    """Ephemeral derived view shared by lower store checks and historical readers.
+
+    Every member is a B service reference or V/D historical view. No actor,
+    opaque session, live registration, writer, or dispatch method is exposed.
+    A retained completion/closure dictionary can never supply authority here.
+    """
+    def __init__(self, store, authorization):
+        self.store, self.authorization, self.custodian = store, authorization, store._custodian
+        store._committed_frames()
+        self._boot_ids = {ordinal: store.boot_identity(ordinal) for ordinal in (1, 2, 3, 4)}
+        self.current_boot_id = None
+        self._slot_tokens = {}
+        for frame in store.provenanced_frames('SPAWN_INTENT_PERSISTED', 'blocked-create'):
+            event = frame['event']
+            slot_id = event['slot_id']
+            if slot_id in self._slot_tokens:
+                raise AuthorizationDenied('multiple original spawn identities for one slot')
+            self._slot_tokens[slot_id] = SpawnToken(event['spawn_token'], event['campaign_id'],
+                event['boot_id'], slot_id, event['attempt_id'], event['launch_spec_digest'],
+                event['custodian_id'], event['supervisor_generation'])
+        self._completed_attempts = {f['event']['slot_id']: f['event'] for f in
+            store.provenanced_frames('ATTEMPT_COMPLETE', 'complete-attempt')}
+        self._completed_boots = {f['event']['boot_ordinal'] for f in
+            store.provenanced_frames('BOOT_COMPLETE', 'complete-boot')}
+
+    _dedicated_events = PersistentSupervisor._dedicated_events
+    _candidate_frame = PersistentSupervisor._candidate_frame
+    _rebuild_candidate = PersistentSupervisor._rebuild_candidate
+    _history_clean_before = PersistentSupervisor._history_clean_before
+    _validate_residual_observations = PersistentSupervisor._validate_residual_observations
+    _validate_attempt_completion_record = PersistentSupervisor._validate_attempt_completion_record
+    _validate_boot_candidate = PersistentSupervisor._validate_boot_candidate
+    _validate_published_manifest = PersistentSupervisor._validate_published_manifest
+    _validate_boot_closure = PersistentSupervisor._validate_boot_closure
+    _validate_campaign_candidate = PersistentSupervisor._validate_campaign_candidate
+    _validate_campaign_closure = PersistentSupervisor._validate_campaign_closure

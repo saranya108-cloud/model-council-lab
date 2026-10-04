@@ -11,7 +11,7 @@ from tools.decision_0009.acer_adapter.contracts import PublicationReceipt
 from tools.decision_0009.acer_adapter.supervisor import (
     AuthorizationDenied, PersistentSupervisor,
 )
-from acer_adapter_fakes import make_supervisor
+from acer_adapter_fakes import make_supervisor, inject_untrusted_record
 
 
 def _append_unprovenanced(store, fence_epoch, event_id, event):
@@ -19,7 +19,7 @@ def _append_unprovenanced(store, fence_epoch, event_id, event):
     nonauthorizing record through the store's control plumbing."""
     record = dict(event)
     record["authorizes_execution"] = False
-    return store._append_control(store.revision, fence_epoch, event_id, record)
+    return inject_untrusted_record(store, fence_epoch, event_id, record)
 
 
 class EvidenceTests(unittest.TestCase):
@@ -127,7 +127,8 @@ class EvidenceTests(unittest.TestCase):
         publisher = ImmutablePublication(supervisor)
         intent = publisher.intent("dest", "boot", candidate.bytes)
         publisher.exclusive_create(intent)
-        publisher.write_durable(intent, b"corrupt", allow_partial=True)
+        with self.assertRaises(EvidenceError):
+            publisher.write_durable(intent, b"corrupt", allow_partial=True)
         with self.assertRaises(EvidenceError):
             publisher.verify(intent)
         good_supervisor, _, _ = make_supervisor()
@@ -250,8 +251,17 @@ class EvidenceTests(unittest.TestCase):
             supervisor.authorization, supervisor.session)
         recovered = ImmutablePublication(restarted)
         self.assertEqual(recovered.reconcile(intent), "WRITTEN")
-        recovered.make_durable(intent)
-        self.assertEqual(recovered.verify(intent).state, "PUBLICATION_VERIFIED")
+        before = (restarted.store.revision, dict(restarted.store._objects))
+        with self.assertRaises(EvidenceError):
+            recovered.make_durable(intent)
+        self.assertEqual((restarted.store.revision, dict(restarted.store._objects)), before)
+        live, _, _ = make_supervisor()
+        positive = ImmutablePublication(live)
+        original = positive.intent('dest', 'uninterrupted-written', b'value')
+        positive.exclusive_create(original)
+        positive.write(original, b'value')
+        positive.make_durable(original)
+        self.assertEqual(positive.verify(original).state, 'PUBLICATION_VERIFIED')
 
     def test_each_publication_state_reconstructs_without_promotion(self):
         for target, expected in (("RESERVED", "RESERVED"),
@@ -414,12 +424,13 @@ class EvidenceTests(unittest.TestCase):
             with self.subTest(authority=authority), self.assertRaises(AuthorizationDenied):
                 authority.perform_publication(binding, stale_grant, intent)
         recovered = ImmutablePublication(restarted)
-        recovered.exclusive_create(intent)
-        reservations = [event for event in supervisor.store.events
+        with self.assertRaises(EvidenceError):
+            recovered.exclusive_create(intent)
+        reservations = [event for event in _result_events(supervisor.store)
                         if event.get("record_type") == "PUBLICATION" and
                         event.get("state") == "EXCLUSIVE_CREATE" and
                         event.get("intent_id") == intent.intent_id]
-        self.assertEqual(len(reservations), 1)
+        self.assertEqual(len(reservations), 0)
 
 
 # ---------------------------------------------------------------------------
@@ -437,7 +448,14 @@ from tools.decision_0009.acer_adapter.evidence import PublicationIntent
 from tools.decision_0009.acer_adapter.supervisor import (
     ArtifactVerificationPrimitive, OfflineDurableStore, OfflineWitness, StoreError,
 )
-from acer_adapter_fakes import MutableArtifacts, activation, authorization, session
+from acer_adapter_fakes import (MutableArtifacts, activation, u04_authorization,
+                               offline_chair_service, offline_activation_service, session)
+
+
+def _result_events(store):
+    from tools.decision_0009.acer_adapter.supervisor import _publication_frame_groups
+    return [frame['event'] for entries in _publication_frame_groups(store).values()
+            for _, frame in entries]
 
 IDENTITY_FIELDS = ("intent_id", "destination", "object_key", "object_digest", "length")
 OPERATIONS = ("intent", "create", "write", "durable", "verify")
@@ -484,6 +502,17 @@ def _substituted(intent):
 
 
 class ConsolidatedPublicationIntegrationTests(unittest.TestCase):
+    def test_independent_completed_wrong_bytes_trigger_exact_integrity_denial(self):
+        supervisor, _, custodian = make_supervisor()
+        publisher = ImmutablePublication(supervisor)
+        intent = publisher.intent('dest', 'stable-conflict', b'expected')
+        publisher.exclusive_create(intent)
+        with self.assertRaises(EvidenceError):
+            publisher.write(intent, b'different', allow_partial=True)
+        self.assertEqual(supervisor.store.witness.denial(supervisor._actor)[0],
+                         'PUBLICATION_INTEGRITY_CONFLICT')
+        self.assertTrue(custodian._publication_counts)
+
     def test_identity_substitutions_are_rejected_for_every_operation_before_consumption(self):
         for operation in OPERATIONS:
             supervisor, _, _ = make_supervisor()
@@ -523,7 +552,7 @@ class ConsolidatedPublicationIntegrationTests(unittest.TestCase):
             for later in OPERATIONS[OPERATIONS.index(operation) + 1:]:
                 _publisher_step(publisher, later, intent, intent.bytes)
             self.assertEqual(publisher.reconcile(intent).state, "PUBLICATION_VERIFIED")
-            records = [event for event in store.events
+            records = [event for event in _result_events(store)
                        if event.get("record_type") == "PUBLICATION" and
                        event.get("object_key") == key]
             self.assertEqual(len(records), 5)
@@ -533,24 +562,26 @@ class ConsolidatedPublicationIntegrationTests(unittest.TestCase):
 
     def test_initial_window_gates_publication(self):
         artifacts = MutableArtifacts()
-        auth = authorization(artifacts)
-        store = OfflineDurableStore("store-1", OfflineWitness("witness-1"))
-        fence = store.acquire_fence("supervisor-1")
+        auth = u04_authorization(artifacts)
+        store = OfflineDurableStore("store-1", OfflineWitness("witness-1"),
+            chair_verifier=offline_chair_service(auth), activation_verifier=offline_activation_service(auth))
         verifier = ArtifactVerificationPrimitive("offline-root", auth, artifacts.read)
         supervisor = PersistentSupervisor(store, verifier, OfflineCustodian("custodian-1"),
-                                          auth, session(fence))
-        publisher = ImmutablePublication(supervisor)
-        with self.assertRaises(EvidenceError):
-            publisher.intent("dest", "uninitialized", b"value")
-        self.assertEqual(store.revision, 0)
+                                          auth, session())
+        with self.assertRaises((EvidenceError, AuthorizationDenied)):
+            ImmutablePublication(supervisor)
+        self.assertEqual(store.revision, 1)
         # Interrupted admission: the campaign is admitted but the initial
         # window never registers a result.
-        def interrupted(authority, operation_id, receipt):
-            raise StoreError("interrupted before initial window result binding")
-        store._bind_window_result = interrupted
+        commit = store._commit_u04
+        def interrupted(actor, boundary, event, **kwargs):
+            if boundary == 'INIT' and event.get('record_type') == 'MEASUREMENT_WINDOW':
+                raise StoreError('interrupted before initial window transaction')
+            return commit(actor, boundary, event, **kwargs)
+        store._commit_u04 = interrupted
         with self.assertRaises(StoreError):
             supervisor.admit_campaign(activation())
-        del store._bind_window_result
+        del store._commit_u04
         restarted = _restart(supervisor)
         with self.assertRaises(EvidenceError):
             ImmutablePublication(restarted).intent("dest", "interrupted", b"value")
@@ -570,25 +601,28 @@ class ConsolidatedPublicationIntegrationTests(unittest.TestCase):
                 publisher = ImmutablePublication(supervisor)
                 intent = _publisher_advance(publisher, "unbound-" + operation, operation)
 
-                def interrupted(authority, grant_id, receipt):
-                    raise StoreError("interrupted before result binding")
-                store._bind_publication_grant = interrupted
+                commit = store._commit_u04
+                def interrupted(actor, boundary, event, **kwargs):
+                    if event.get('record_type') == 'PUBLICATION' and kwargs.get('facts', {}).get('publication_grant', {}).get('phase') == 'RESULT':
+                        raise StoreError('interrupted before durable observed result')
+                    return commit(actor, boundary, event, **kwargs)
+                store._commit_u04 = interrupted
                 try:
                     with self.assertRaises(EvidenceError):
                         _publisher_step(publisher, operation, intent)
                 finally:
-                    del store._bind_publication_grant
+                    del store._commit_u04
                 self.assertTrue(store.publication_prohibited)
-                with self.assertRaises(EvidenceError):
-                    publisher.reconcile(intent)
+                self.assertEqual(publisher.reconcile(intent), 'UNKNOWN')
                 store.crash()
                 restarted = _restart(supervisor)
                 self.assertIn("consumed-publication-grant-without-result",
                               restarted.reconstruction_violations)
-                self.assertIn("unprovenanced-publication-history",
-                              restarted.reconstruction_violations)
-                with self.assertRaises((EvidenceError, AuthorizationDenied)):
-                    ImmutablePublication(restarted)
+                # The accepted effect remains unresolved. Existing exact
+                # earlier history is readable; no new mutation is authorized.
+                recovered = ImmutablePublication(restarted)
+                with self.assertRaises(EvidenceError):
+                    _publisher_step(recovered, operation, intent)
                 receipt = PublicationReceipt(
                     "publication-receipt-" + intent.object_digest[:16], intent.destination,
                     intent.object_key, intent.object_digest, intent.length,
@@ -610,20 +644,25 @@ class ConsolidatedPublicationIntegrationTests(unittest.TestCase):
                 self.assertEqual(restarted.reconstruction_violations, [])
                 recovered = ImmutablePublication(restarted)
                 self.assertEqual(recovered.reconcile(intent), state)
-                for operation in OPERATIONS[OPERATIONS.index(next_operation):]:
-                    _publisher_step(recovered, operation, intent)
-                receipt = recovered.reconcile(intent)
-                self.assertEqual(receipt.state, "PUBLICATION_VERIFIED")
+                with self.assertRaises(EvidenceError):
+                    _publisher_step(recovered, next_operation, intent)
+                self.assertEqual(recovered.reconcile(intent), state)
                 supervisor.store.crash()
                 again = _restart(restarted)
                 self.assertEqual(again.reconstruction_violations, [])
-                self.assertEqual(ImmutablePublication(again).reconcile(intent), receipt)
-                states = [event["state"] for event in again.store.events
+                self.assertEqual(ImmutablePublication(again).reconcile(intent), state)
+                states = [event["state"] for event in _result_events(again.store)
                           if event.get("record_type") == "PUBLICATION" and
                           event.get("intent_id") == intent.intent_id]
-                self.assertEqual(states, ["PUBLICATION_INTENT", "EXCLUSIVE_CREATE",
-                                          "PUBLICATION_WRITTEN", "DURABLE_BYTES",
-                                          "PUBLICATION_VERIFIED"])
+                expected = ['PUBLICATION_INTENT', 'EXCLUSIVE_CREATE', 'PUBLICATION_WRITTEN',
+                            'DURABLE_BYTES', 'PUBLICATION_VERIFIED']
+                self.assertEqual(states, expected[:OPERATIONS.index(next_operation)])
+                live, _, _ = make_supervisor()
+                positive = ImmutablePublication(live)
+                original = _publisher_advance(positive, 'live-' + state.lower(), next_operation)
+                for operation in OPERATIONS[OPERATIONS.index(next_operation):]:
+                    _publisher_step(positive, operation, original)
+                self.assertEqual(positive.reconcile(original).state, 'PUBLICATION_VERIFIED')
 
     def test_outside_dwell_outside_restart_resumes_only_at_final_window_epoch(self):
         supervisor, _, _ = make_supervisor()
@@ -638,9 +677,17 @@ class ConsolidatedPublicationIntegrationTests(unittest.TestCase):
         self.assertEqual((restarted.current_window, restarted.window_epoch),
                          ("OUTSIDE_MEASURED_WINDOWS", 3))
         recovered = ImmutablePublication(restarted)
-        recovered.exclusive_create(intent)
-        recovered.write_durable(intent, b"value")
-        self.assertEqual(recovered.verify(intent).state, "PUBLICATION_VERIFIED")
-        epochs = [event["window_epoch"] for event in restarted.store.events
+        with self.assertRaises(EvidenceError):
+            recovered.exclusive_create(intent)
+        epochs = [event["window_epoch"] for event in _result_events(restarted.store)
                   if event.get("record_type") == "PUBLICATION"]
-        self.assertEqual(epochs, [1, 3, 3, 3, 3])
+        self.assertEqual(epochs, [1])
+        live, _, _ = make_supervisor()
+        positive = ImmutablePublication(live)
+        original = positive.intent('dest', 'live-window-cycle', b'value')
+        live.set_measurement_window('DWELL')
+        live.set_measurement_window('OUTSIDE_MEASURED_WINDOWS')
+        positive.exclusive_create(original)
+        positive.write_durable(original, b'value')
+        self.assertEqual(positive.verify(original).state, 'PUBLICATION_VERIFIED')
+        self.assertEqual([e['window_epoch'] for e in _result_events(live.store)], [1, 3, 3, 3, 3])

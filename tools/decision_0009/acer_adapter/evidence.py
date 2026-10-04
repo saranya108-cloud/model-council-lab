@@ -14,6 +14,13 @@ class EvidenceError(ValueError):
     pass
 
 
+from .supervisor import AuthorizationDenied
+
+
+class PublicationAuthorityDenied(EvidenceError, AuthorizationDenied):
+    pass
+
+
 class AttributionUnavailable(EvidenceError):
     pass
 
@@ -324,7 +331,12 @@ class ImmutablePublication:
         self._states = {}
         self._authority = authority
         self._authority_binding = authority.publication_binding()
-        self._restore(authority.publication_snapshot(self._authority_binding))
+        try:
+            self._restore(authority.publication_snapshot(self._authority_binding))
+        except AuthorizationDenied as exc:
+            raise PublicationAuthorityDenied('publication history is not independently verified') from exc
+        except RuntimeError as exc:
+            raise EvidenceError('publication history unavailable') from exc
 
     def _restore(self, records):
         if type(records) is not list:
@@ -392,6 +404,8 @@ class ImmutablePublication:
             self._restore(self._authority.publication_snapshot(
                 self._authority_binding))
             return result
+        except AuthorizationDenied as exc:
+            raise PublicationAuthorityDenied('publication authority rejected operation') from exc
         except (ContractError, RuntimeError) as exc:
             raise EvidenceError("publication authority rejected operation") from exc
 
@@ -463,6 +477,8 @@ class ImmutablePublication:
                 self._authority_binding))
         except (ContractError, RuntimeError) as exc:
             raise EvidenceError("publication authority rejected reconciliation") from exc
+        if self._authority.store.publication_outcome_unknown(self._authority._publication_identity(intent)):
+            return 'UNKNOWN'
         if key in self._receipts:
             return self._receipts[key]
         return self._states.get(key, "INTENT")

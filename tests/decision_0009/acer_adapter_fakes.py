@@ -106,10 +106,49 @@ def authorization(artifacts=None):
     )
 
 
+def u04_authorization(artifacts=None):
+    """Independent runtime carrier; enrollment is a separate setup operation."""
+    from tools.decision_0009.acer_adapter.contracts import (
+        AUTHORIZATION_V2_SCHEMA, authorization_digest,
+    )
+    payload = replace(authorization(artifacts), schema_version=AUTHORIZATION_V2_SCHEMA,
+        evidence_operations=("WRITE_EXACT", "ESTABLISH_DURABILITY", "VERIFY_EXACT",
+                             "PUBLISH_RECOVERY_SUPPLEMENT"),
+        exact_byte_recovery_authorized=True, evidence_source_ids=("normalizer-1",),
+        recovery_publisher_ids=("recovery-reader-1",), destination_rules=(),
+        object_rules=(), supplement_rules=())
+    return replace(payload, authorization_digest=authorization_digest(payload))
+
+
+def offline_chair_service(payload, store_identity="store-1"):
+    """Trusted test setup only, performed before creating any runtime object."""
+    from tools.decision_0009.acer_adapter.contracts import (
+        OfflineChairApproval, OfflineChairTrustRoot, canonical_authorization_bytes,
+    )
+    from tools.decision_0009.acer_adapter.authorization import OfflineChairAuthorizationVerifier
+    approval = OfflineChairApproval(payload.chair_identity, payload.trust_domain,
+        store_identity, payload.campaign_id, payload.authorization_id,
+        payload.schema_version, canonical_authorization_bytes(payload),
+        payload.authorization_digest)
+    return OfflineChairAuthorizationVerifier(OfflineChairTrustRoot(
+        "offline-root-1", 1, "offline-test", ("chair-1",), (approval,)))
+
+
+def offline_activation_service(payload, store_identity='store-1'):
+    from tools.decision_0009.acer_adapter.authorization import (
+        OfflineBootActivationApproval, OfflineBootActivationVerifier)
+    return OfflineBootActivationVerifier('offline-activation-root-1', tuple(
+        OfflineBootActivationApproval(store_identity, payload.authorization_digest,
+            payload.chair_identity, pattern % boot, boot, 'boot-%d' % boot)
+        for boot in (1, 2, 3, 4)
+        for pattern in ('activation-%d', 'fresh-activation-%d',
+                        'campaign-activation-%d', 'consolidated-activation-%d')))
+
+
 def activation(boot=1, boot_id="boot-1", predecessor=None, activation_id=None):
     return BootActivation(
         activation_id=activation_id or "activation-%d" % boot,
-        authorization_digest=digest("authorization"),
+        authorization_digest=u04_authorization().authorization_digest,
         boot_ordinal=boot,
         observed_boot_id=boot_id,
         predecessor_closure_digest=predecessor,
@@ -335,6 +374,27 @@ def residual_observations(*, allocated_bytes=0, populated=False, pids=(), descen
     return tuple(values)
 
 
+def independent_fault_world(seed):
+    """Seed a separate offline test world; never simulate reset by cloning.
+
+    Each case has independent D/W/C state and fresh locks. Immutable trusted
+    bootstrap services are shared. Crash/reconciliation within a case resets
+    that case's actual store object and discards its volatile authority.
+    """
+    import threading
+    from tools.decision_0009.acer_adapter.supervisor import _AuthorizationLock
+    store = seed.store
+    memo = {
+        id(store._lock): threading.RLock(),
+        id(store._authorization_lock): _AuthorizationLock(),
+        id(store.witness._lock): threading.Lock(),
+        id(seed.custodian._lock): threading.Lock(),
+        id(store._authentication_service): store._authentication_service,
+        id(store._activation_authentication_service): store._activation_authentication_service,
+    }
+    return copy.deepcopy(seed, memo)
+
+
 class RecordingDispatch:
     def __init__(self, replacement=None, result="accepted"):
         self.replacement = replacement
@@ -350,6 +410,22 @@ class RecordingDispatch:
         return self.result
 
 
+def inject_untrusted_record(store, fence_epoch, event_id, event):
+    """Test-only retained-byte corruption; never invokes an authority writer.
+
+    Model a planted legacy frame without a matching authenticated checkpoint.
+    The witness deliberately remains unchanged, so construction must deny or
+    quarantine and preserve these exact forensic bytes.
+    """
+    from tools.decision_0009.acer_adapter.supervisor import AppendReceipt, _canonical, _sha
+    raw = _canonical(event)
+    receipt = AppendReceipt(store.identity, store.revision + 1, event_id, _sha(raw),
+        _sha(bytes.fromhex(store.chain_digest) + raw), fence_epoch, 'untrusted-fixture', False)
+    store._durable.append({'event_id': event_id, 'event': copy.deepcopy(event),
+                          'bytes': raw, 'receipt': receipt})
+    return receipt
+
+
 def make_supervisor():
     from tools.decision_0009.acer_adapter.custody import OfflineCustodian
     from tools.decision_0009.acer_adapter.supervisor import (
@@ -357,10 +433,11 @@ def make_supervisor():
         PersistentSupervisor,
     )
     artifacts = MutableArtifacts()
-    auth = authorization(artifacts)
+    auth = u04_authorization(artifacts)
     witness = OfflineWitness("witness-1")
-    store = OfflineDurableStore("store-1", witness)
-    fence = store.acquire_fence("supervisor-1")
+    store = OfflineDurableStore("store-1", witness, chair_verifier=offline_chair_service(auth),
+                                activation_verifier=offline_activation_service(auth))
+    fence = 1
     verifier = ArtifactVerificationPrimitive("offline-root", auth, artifacts.read)
     custodian = OfflineCustodian("custodian-1")
     supervisor = PersistentSupervisor(store, verifier, custodian, auth, session(fence))
