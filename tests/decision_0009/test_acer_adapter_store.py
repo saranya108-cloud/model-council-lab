@@ -7,6 +7,179 @@ from tools.decision_0009.acer_adapter.supervisor import (
 )
 
 
+class CheckpointBRecoveryTests(unittest.TestCase):
+    def test_terminal_historical_result_reconciliation_does_not_invent_boot_loss(self):
+        from acer_adapter_fakes import make_supervisor
+        from test_acer_adapter_supervisor import SupervisorTests
+        world = make_supervisor()
+        completed = SupervisorTests(
+            'test_campaign_candidate_publication_precedes_campaign_completion')
+        completed.make_supervisor = lambda: world
+        completed.test_campaign_candidate_publication_precedes_campaign_completion()
+        supervisor, _, custodian = world
+        store = supervisor.store
+        store.crash()
+        actor = store.open_nonlive_entry(supervisor.authorization, 'terminal-result-observer')
+        self.assertEqual(actor.mode, 'TERMINAL')
+        self.assertIsNone(store.witness.denial(actor))
+        closure_before = store.validated_campaign_closure()
+        boot_four_before = store.validated_boot_closure(4)
+        self.assertIsNotNone(closure_before)
+        self.assertIsNotNone(boot_four_before)
+        self.assertEqual(supervisor.current_boot_ordinal, 4)
+        self.assertEqual(supervisor.boot_state, 'BOOT_COMPLETE')
+        results = [f['event'] for f in store._committed_frames()
+                   if f['event'].get('record_type') == 'EFFECT_RESULT'
+                   and f['event'].get('result_kind') == 'EFFECT_PORT_RECEIPT']
+        self.assertTrue(results)
+        capability = store.effect_capability(results[0]['effect_id'])
+        controls_before = dict(custodian._control_counts)
+        creates_before = custodian.underlying_create_count_for_all()
+        original_commit = store._commit_u04
+
+        def interrupt_result(actor, boundary, event, **kwargs):
+            if boundary == 'RESULT':
+                kwargs['fault'] = 'validated_before_commit'
+            return original_commit(actor, boundary, event, **kwargs)
+
+        store._commit_u04 = interrupt_result
+        try:
+            with self.assertRaises(TransactionPending):
+                store.record_control_effect_result(actor, capability)
+        finally:
+            store._commit_u04 = original_commit
+        self.assertEqual(store.health, 'RECONCILABLE')
+        pending = store._durable[-1]
+        exact_bytes = pending['bytes']
+        self.assertEqual(pending['event']['result'], results[0]['result'])
+        self.assertEqual(pending['envelope'].boundary, 'RESULT')
+        self.assertEqual(store.witness.query_transaction(pending['event_id'])[0], 'PENDING')
+        self.assertEqual(store._validate_reconciliation_frame(pending['envelope'])[0], 'PENDING')
+        from dataclasses import replace
+        from tools.decision_0009.acer_adapter.authorization import OfflineChairAuthenticationError
+        before_invalid = (store.health, store._current_actor, store.revision,
+                          store.witness.high_generation, store.witness.current_fence,
+                          dict(store.witness.pending), dict(store.witness._denials))
+        for service, approval, rejection in (
+                (object(), supervisor.authorization, AuthorizationDenied),
+                (store._authentication_service,
+                 replace(supervisor.authorization, authorization_id='unenrolled-input'),
+                 OfflineChairAuthenticationError)):
+            with self.subTest(invalid_service=service is not store._authentication_service):
+                with self.assertRaises(rejection):
+                    store.reconcile_pending(service, approval)
+                self.assertEqual((store.health, store._current_actor, store.revision,
+                                  store.witness.high_generation, store.witness.current_fence,
+                                  dict(store.witness.pending), dict(store.witness._denials)),
+                                 before_invalid)
+        store.crash()
+        receipt = store.reconcile_pending(store._authentication_service, supervisor.authorization)
+        self.assertTrue(receipt.durable)
+        self.assertEqual(store.witness.query_transaction(pending['event_id'])[0], 'COMMITTED')
+        self.assertEqual(store._durable[-1]['bytes'], exact_bytes)
+        self.assertEqual(store.witness.query_transaction(pending['event_id'])[1].completion_mode,
+                         'RECOVERY_RECONCILE')
+        self.assertEqual(custodian._control_counts, controls_before)
+        self.assertEqual(custodian.underlying_create_count_for_all(), creates_before)
+        self.assertEqual(store.health, 'HEALTHY')
+        self.assertEqual(store.validated_campaign_closure(), closure_before)
+        self.assertEqual(store.validated_boot_closure(4), boot_four_before)
+        self.assertEqual(store._derived_nonlive_mode(supervisor.authorization), 'TERMINAL')
+        denial = store.witness.denial(actor)
+        self.assertIsNone(None if denial is None else denial[0],
+                          'terminal historical RESULT is not an active unfinished boot')
+
+
+    def test_terminal_pending_exec_reconciliation_does_not_invent_boot_loss(self):
+        from acer_adapter_fakes import make_supervisor
+        from test_acer_adapter_supervisor import SupervisorTests
+        from tools.decision_0009.acer_adapter.contracts import (
+            MeasurementWindowTransition, WINDOW_OPERATION,
+        )
+        from tools.decision_0009.acer_adapter.supervisor import _DEDICATED_AUTHORITY
+        world = make_supervisor()
+        completed = SupervisorTests(
+            'test_campaign_candidate_publication_precedes_campaign_completion')
+        completed.make_supervisor = lambda: world
+        completed.test_campaign_candidate_publication_precedes_campaign_completion()
+        supervisor, _, custodian = world
+        store, actor = supervisor.store, supervisor._actor
+        closure_before = store.validated_campaign_closure()
+        self.assertIsNotNone(closure_before)
+        self.assertIsNone(store.witness.denial(actor))
+        controls_before = dict(custodian._control_counts)
+        creates_before = custodian.underlying_create_count_for_all()
+        operation_id = store._next_window_operation_id(_DEDICATED_AUTHORITY, actor=actor)
+        transition = MeasurementWindowTransition(
+            store.identity, WINDOW_OPERATION, operation_id, 'measurement-' + operation_id,
+            supervisor.current_window, supervisor.window_epoch,
+            'OUTSIDE_MEASURED_WINDOWS', supervisor.window_epoch + 1,
+            actor.authorization_digest, actor.campaign_id, actor.generation,
+            actor.session_id, actor.fence)
+        store._register_window_operation(_DEDICATED_AUTHORITY, transition, actor=actor)
+        with self.assertRaises(TransactionPending):
+            store._append_window_result(_DEDICATED_AUTHORITY, transition,
+                                       fault='validated_before_commit', actor=actor)
+        pending = store._durable[-1]
+        self.assertEqual(pending['envelope'].boundary, 'EXEC')
+        self.assertEqual(store.health, 'RECONCILABLE')
+        exact_bytes = pending['bytes']
+        store.crash()
+        receipt = store.reconcile_pending(store._authentication_service, supervisor.authorization)
+        self.assertTrue(receipt.durable)
+        self.assertEqual(pending['bytes'], exact_bytes)
+        self.assertEqual(store.witness.query_transaction(pending['event_id'])[1].completion_mode,
+                         'RECOVERY_RECONCILE')
+        self.assertEqual(store.health, 'HEALTHY')
+        self.assertEqual(store.validated_campaign_closure(), closure_before)
+        self.assertEqual(store._derived_nonlive_mode(supervisor.authorization), 'TERMINAL')
+        self.assertEqual(custodian._control_counts, controls_before)
+        self.assertEqual(custodian.underlying_create_count_for_all(), creates_before)
+        self.assertIsNone(store.witness.denial(actor))
+
+    def test_unfinished_boot_pending_exec_and_result_reconciliation_still_deny(self):
+        from acer_adapter_fakes import make_supervisor
+        for boundary in ('EXEC', 'RESULT'):
+            with self.subTest(boundary=boundary):
+                supervisor, _, custodian = make_supervisor()
+                store, actor = supervisor.store, supervisor._actor
+                self.assertIsNone(store.validated_campaign_closure())
+                self.assertIsNone(store.witness.denial(actor))
+                controls_before = dict(custodian._control_counts)
+                creates_before = custodian.underlying_create_count_for_all()
+                commit = store._commit_u04
+
+                def interrupt(captured, selected, event, **kwargs):
+                    if selected == boundary:
+                        kwargs['fault'] = 'validated_before_commit'
+                    return commit(captured, selected, event, **kwargs)
+
+                store._commit_u04 = interrupt
+                try:
+                    with self.assertRaises(TransactionPending):
+                        if boundary == 'EXEC':
+                            supervisor.make_slot_eligible('slot-1-1')
+                        else:
+                            result = next(e for e in store.events
+                                          if e.get('result_kind') == 'EFFECT_PORT_RECEIPT')
+                            store.record_control_effect_result(
+                                actor, store.effect_capability(result['effect_id']))
+                finally:
+                    store._commit_u04 = commit
+                pending = store._durable[-1]
+                self.assertEqual(pending['envelope'].boundary, boundary)
+                exact_bytes = pending['bytes']
+                store.crash()
+                store.reconcile_pending(store._authentication_service, supervisor.authorization)
+                self.assertEqual(store.witness.denial(actor)[0], 'UNFINISHED_BOOT_LOSS')
+                self.assertEqual(pending['bytes'], exact_bytes)
+                self.assertEqual(store.witness.query_transaction(pending['event_id'])[1].completion_mode,
+                                 'RECOVERY_RECONCILE')
+                self.assertEqual(store.health, 'HEALTHY')
+                self.assertEqual(custodian._control_counts, controls_before)
+                self.assertEqual(custodian.underlying_create_count_for_all(), creates_before)
+
+
 class StoreTests(unittest.TestCase):
     def setUp(self):
         self.witness = OfflineWitness("witness-1")

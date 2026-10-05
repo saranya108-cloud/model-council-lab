@@ -1077,6 +1077,11 @@ class OfflineWitness:
             elif envelope.boundary in ('ADMIT', 'INIT'):
                 code = 'INTERRUPTED_ADMISSION'
             elif envelope.boundary in ('EXEC', 'RESULT'):
+                # Committed terminal closure excludes boot loss. A pending
+                # closure is not part of this authenticated committed prefix.
+                if any(json.loads(old.payload_bytes).get('state') == 'CAMPAIGN_COMPLETE'
+                       for old in prefix):
+                    return None
                 code = 'UNFINISHED_BOOT_LOSS'
             else:
                 return None
