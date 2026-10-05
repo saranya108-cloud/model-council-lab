@@ -1391,3 +1391,258 @@ class LocalAttemptEvidence:
                 self.readback_digest == self.immutable_storage_digest and
                 self.completion_digest is not None and self.witnessed and self.durable and
                 self.no_unresolved_worker)
+
+
+# Revision 6 section 7.3: syntax only. Independent provenance is checked by RW.
+RECOVERY_RECORD_FIELDS = {
+    'RECOVERY_ENTRY': {'entry_refs', 'health_at_entry', 'latch_state', 'checkpoint_ref'},
+    'RECOVERY_OBLIGATION': {'obligation_id', 'kind', 'reason_code', 'subject_refs', 'target_ref', 'status'},
+    'RECOVERY_SUPPLEMENT': {'parent_ref', 'parent_digest', 'obligation_ref', 'obligation_link',
+                            'supplement_kind', 'evidence', 'source_id', 'verifier_id'},
+}
+RECOVERY_OBLIGATION_REASONS = {
+    'CONTAINMENT_UNAVAILABLE': frozenset(('CUSTODIAN_UNAVAILABLE', 'OWNERSHIP_UNPROVEN',
+        'CAPABILITY_MISMATCH', 'ARTIFACT_MISMATCH', 'TARGET_IDENTITY_MISMATCH', 'REAP_UNPROVEN')),
+    'PUBLICATION_UNVERIFIED': frozenset(('AUTHORIZATION_MISSING', 'DESTINATION_UNAUTHORIZED',
+        'INTENT_UNPROVEN', 'RESERVATION_OWNER_MISMATCH', 'PARTIAL_OBJECT', 'CONTENT_MISMATCH',
+        'DESTINATION_UNKNOWN', 'DESTINATION_REGISTRY_UNAVAILABLE', 'WRITER_FENCE_UNPROVEN',
+        'READBACK_UNAVAILABLE', 'DURABILITY_UNPROVEN', 'OUTCOME_UNKNOWN')),
+    'EFFECT_RESULT_UNRESOLVED': frozenset(('OUTCOME_UNKNOWN', 'ACCEPTED_NOT_STARTED',
+        'RESULT_UNAVAILABLE', 'RESULT_PROVENANCE_MISMATCH')),
+    'EVIDENCE_SERIALIZATION_FAILED': frozenset(('SERIALIZATION_FAILED', 'SOURCE_UNAVAILABLE',
+        'SOURCE_PROVENANCE_MISMATCH')),
+}
+RECOVERY_SUPPLEMENT_KINDS = frozenset(('VERIFIED_EFFECT_RESULT', 'CONTAINMENT_EVIDENCE',
+    'REAP_EVIDENCE', 'FAILURE_ENVELOPE', 'PUBLICATION_READBACK'))
+RECOVERY_COMMON_FIELDS = frozenset(('schema_version', 'record_type', 'record_id',
+    'store_identity', 'authorization_digest', 'campaign_id', 'writer_generation',
+    'writer_incarnation_id', 'writer_session_id', 'writer_fence', 'authority_class',
+    'authorizes_execution'))
+
+
+def closed_canonical_bytes(value):
+    def validate(x):
+        if x is None or type(x) in (str, bool, int):
+            return
+        if type(x) in (list, tuple):
+            for child in x: validate(child)
+            return
+        if type(x) is dict and all(type(k) is str for k in x):
+            for child in x.values(): validate(child)
+            return
+        raise ContractError('closed canonical JSON value required')
+    validate(value)
+    return (json.dumps(value, sort_keys=True, separators=(',', ':'),
+        ensure_ascii=False, allow_nan=False) + '\n').encode('utf-8')
+
+
+def parse_closed_canonical(raw):
+    if type(raw) is not bytes:
+        raise ContractError('exact canonical bytes required')
+    def pairs(items):
+        out = {}
+        for k, v in items:
+            if k in out: raise ContractError('duplicate key')
+            out[k] = v
+        return out
+    try:
+        value = json.loads(raw, object_pairs_hook=pairs)
+        if closed_canonical_bytes(value) != raw:
+            raise ContractError('noncanonical encoding')
+        return value
+    except (ValueError, UnicodeError) as exc:
+        raise ContractError('invalid canonical JSON') from exc
+
+
+def _closed_reference(value, kind):
+    cls = JournalReference if kind == 'Ref' else ImmutableObjectReference
+    if type(value) is not dict or set(value) != set(cls.__dataclass_fields__):
+        raise ContractError('closed nonnull ' + kind)
+    return cls(**value)
+
+
+def validate_recovery_record(value):
+    if type(value) is not dict:
+        raise ContractError('closed recovery record')
+    kind = value.get('record_type')
+    fields = RECOVERY_RECORD_FIELDS.get(kind)
+    if (fields is None or set(value) != RECOVERY_COMMON_FIELDS | fields or
+            value['schema_version'] != 'u04-record/v1' or
+            value['authority_class'] != 'EVIDENCE' or value['authorizes_execution'] is not False):
+        raise ContractError('closed RW record/class/schema')
+    for n in ('record_id', 'store_identity', 'campaign_id', 'writer_incarnation_id', 'writer_session_id'):
+        _string(n, value[n])
+    _string('authorization_digest', value['authorization_digest'], digest=True)
+    for n in ('writer_generation', 'writer_fence'): _integer(n, value[n], minimum=1)
+    def refs(n):
+        if type(value[n]) is not list: raise ContractError('canonical reference tuple')
+        for r in value[n]: _closed_reference(r, 'Ref')
+    if kind == 'RECOVERY_ENTRY':
+        refs('entry_refs'); _closed_reference(value['checkpoint_ref'], 'Ref')
+        if value['health_at_entry'] != 'HEALTHY' or value['latch_state'] not in ('CLEAR', 'SET'):
+            raise ContractError('closed entry evidence state')
+    elif kind == 'RECOVERY_OBLIGATION':
+        _string('obligation_id', value['obligation_id']); refs('subject_refs')
+        if (value['status'] != 'OPEN' or value['reason_code'] not in
+                RECOVERY_OBLIGATION_REASONS.get(value['kind'], ())):
+            raise ContractError('closed obligation kind/reason')
+        target = value['target_ref']
+        if type(target) is not dict or set(target) != {'kind', 'identity', 'destination_id',
+                'object_key', 'subject_ref', 'subject_state', 'evidence_ref', 'evidence_state'}:
+            raise ContractError('closed recovery Target')
+        _string('target identity', target['identity'])
+        if target['kind'] not in ('DESTINATION', 'CUSTODIAN', 'EFFECT', 'LOCAL_EVIDENCE'):
+            raise ContractError('target kind')
+        if target['kind'] == 'DESTINATION':
+            _string('destination', target['destination_id']); _string('key', target['object_key'])
+        elif target['destination_id'] is not None or target['object_key'] is not None:
+            raise ContractError('target destination nullability')
+        for state, ref, positive, negative, typ in (
+                ('subject_state', 'subject_ref', 'KNOWN', 'UNKNOWN', 'Ref'),
+                ('evidence_state', 'evidence_ref', 'AVAILABLE', 'UNAVAILABLE', 'Obj')):
+            if target[state] == positive: _closed_reference(target[ref], typ)
+            elif target[state] != negative or target[ref] is not None:
+                raise ContractError('target reference nullability')
+    else:
+        _closed_reference(value['parent_ref'], 'Ref')
+        _string('parent_digest', value['parent_digest'], digest=True)
+        _closed_reference(value['evidence'], 'Obj')
+        for n in ('source_id', 'verifier_id'): _string(n, value[n])
+        if value['supplement_kind'] not in RECOVERY_SUPPLEMENT_KINDS:
+            raise ContractError('closed supplement kind')
+        if value['obligation_link'] == 'LINKED': _closed_reference(value['obligation_ref'], 'Ref')
+        elif value['obligation_link'] != 'NONE' or value['obligation_ref'] is not None:
+            raise ContractError('obligation link nullability')
+    return value
+
+
+SURVIVOR_DESCRIPTOR_FIELDS = frozenset(('schema_version', 'delegation_id', 'capability_id',
+    'store_identity', 'authorization_digest', 'campaign_id', 'source_custodian_id',
+    'source_custodian_incarnation', 'spawn_token', 'original_ownership_ref', 'original_creation_receipt',
+    'process_identity', 'handle_domain_id', 'factory_identity', 'factory_epoch',
+    'survivor_incarnation_number', 'original_generation', 'original_incarnation_id',
+    'original_session_id', 'original_fence', 'artifact_binding', 'containment_port_id',
+    'evidence_verifier_id', 'operation_id', 'action', 'may_wait', 'authorizes_execution'))
+SURVIVOR_TRIGGER_FIELDS = frozenset(('schema_version', 'trigger_id', 'trigger_type',
+    'store_identity', 'campaign_id', 'authorization_digest', 'spawn_token', 'target_identity_digest',
+    'descriptor_digest', 'delegation_id', 'operation_id', 'survivor_incarnation',
+    'source_custodian_id', 'source_custodian_incarnation', 'original_generation',
+    'original_incarnation_id', 'original_session_id', 'original_fence', 'producer_id',
+    'producer_epoch', 'trigger_sequence', 'observer_id', 'verifier_id', 'evidence_id',
+    'evidence_sequence', 'evidence_digest', 'authorizes_execution'))
+SURVIVOR_EVIDENCE_FIELDS = frozenset(('schema_version', 'evidence_id', 'evidence_sequence',
+    'producer_id', 'producer_epoch', 'observer_id', 'verifier_id', 'descriptor_digest',
+    'operation_id', 'event_kind', 'facts', 'authorizes_execution'))
+SURVIVOR_EVENT_FACTS = {
+    'SUPERVISOR_TERMINAL': frozenset(('lifetime_binding_id', 'lifetime_event_sequence',
+        'original_generation', 'original_incarnation_id', 'original_session_id',
+        'original_fence', 'terminal_state')),
+    'CUSTODIAN_TERMINAL': frozenset(('lifetime_binding_id', 'lifetime_event_sequence',
+        'source_custodian_id', 'source_custodian_incarnation', 'original_ownership_ref', 'terminal_state')),
+    'REQUIRED_OWNERSHIP_INVALIDATED': frozenset(('ownership_binding_id', 'ownership_event_sequence',
+        'source_custodian_id', 'source_custodian_incarnation', 'original_ownership_ref', 'binding_state')),
+    'ORIGINAL_CLEANUP_REQUEST': frozenset(('request_id', 'request_sequence', 'failure_ref',
+        'failure_payload_digest', 'original_generation', 'original_incarnation_id',
+        'original_session_id', 'original_fence', 'requested_action')),
+}
+
+
+def survivor_digest(label, value):
+    return hashlib.sha256(label.encode('ascii') + b'\0' + closed_canonical_bytes(value)).hexdigest()
+
+
+def _closed_dataclass_record(value, cls):
+    if type(value) is not dict or set(value) != set(cls.__dataclass_fields__):
+        raise ContractError('exact closed ' + cls.__name__)
+    value = dict(value)
+    if cls is ProcessIdentity:
+        if type(value['cgroup_members']) is not list:
+            raise ContractError('canonical cgroup member tuple')
+        value['cgroup_members'] = tuple(value['cgroup_members'])
+    return cls(**value)
+
+
+def validate_survivor_descriptor(raw):
+    d = parse_closed_canonical(raw)
+    if (type(d) is not dict or set(d) != SURVIVOR_DESCRIPTOR_FIELDS or
+            d['schema_version'] != 'b-survivor-binding/v1' or d['action'] != 'CONTAIN_TOKEN_DOMAIN' or
+            d['may_wait'] is not False or d['authorizes_execution'] is not False):
+        raise ContractError('closed survivor descriptor')
+    for n in SURVIVOR_DESCRIPTOR_FIELDS - {'spawn_token', 'process_identity', 'original_ownership_ref',
+            'original_creation_receipt', 'artifact_binding', 'survivor_incarnation_number',
+            'original_generation', 'original_fence', 'may_wait', 'authorizes_execution', 'schema_version'}:
+        _string(n, d[n], digest=n=='authorization_digest')
+    for n in ('survivor_incarnation_number', 'original_generation', 'original_fence'):
+        _integer(n, d[n], minimum=1)
+    token = _closed_dataclass_record(d['spawn_token'], SpawnToken)
+    process = _closed_dataclass_record(d['process_identity'], ProcessIdentity)
+    binding = _closed_dataclass_record(d['artifact_binding'], ArtifactBinding)
+    _closed_reference(d['original_ownership_ref'], 'Ref')
+    _closed_reference(d['original_creation_receipt'], 'Obj')
+    if (token.token_id != process.spawn_token or token.custodian_id != d['source_custodian_id'] or
+            process.custodian_id != token.custodian_id or token.campaign_id != d['campaign_id'] or
+            process.boot_id != token.boot_id or token.supervisor_generation != d['original_generation'] or
+            binding.authorization_digest != d['authorization_digest'] or binding.fence_epoch != d['original_fence'] or
+            binding.session_id != d['original_session_id']):
+        raise ContractError('descriptor subject/ownership/artifact substitution')
+    incarnation = [d['factory_identity'], d['factory_epoch'], d['survivor_incarnation_number']]
+    target = survivor_digest('b-survivor-target/v1', d['process_identity'])
+    if d['operation_id'] != survivor_digest('b-survivor-operation/v1',
+            [d['delegation_id'], incarnation, d['spawn_token'], target, d['action']]):
+        raise ContractError('exact fixed survivor operation identity required')
+    return d
+
+
+def validate_survivor_trigger(trigger_raw, evidence_raw, descriptor_raw):
+    d = validate_survivor_descriptor(descriptor_raw)
+    t, e = parse_closed_canonical(trigger_raw), parse_closed_canonical(evidence_raw)
+    if (type(t) is not dict or set(t) != SURVIVOR_TRIGGER_FIELDS or
+            type(e) is not dict or set(e) != SURVIVOR_EVIDENCE_FIELDS or
+            t['schema_version'] != 'b-survivor-trigger/v1' or
+            e['schema_version'] != 'b-survivor-trigger-evidence/v1' or
+            t['authorizes_execution'] is not False or e['authorizes_execution'] is not False):
+        raise ContractError('closed survivor trigger/evidence')
+    mapping = {'SUPERVISOR_TERMINAL': 'SUPERVISOR_LOSS', 'CUSTODIAN_TERMINAL': 'CUSTODIAN_LOSS',
+        'REQUIRED_OWNERSHIP_INVALIDATED': 'CUSTODIAN_LOSS', 'ORIGINAL_CLEANUP_REQUEST': 'ORIGINAL_CLEANUP'}
+    kind=e['event_kind']
+    if kind not in mapping or t['trigger_type'] != mapping[kind]:
+        raise ContractError('trigger/evidence discriminator')
+    incarnation=[d['factory_identity'],d['factory_epoch'],d['survivor_incarnation_number']]
+    producer=incarnation+['ORIGINAL_CLEANUP_BOUNDARY' if kind=='ORIGINAL_CLEANUP_REQUEST' else 'LIFECYCLE_OBSERVER']
+    for n in ('trigger_sequence', 'evidence_sequence'):
+        _integer(n,t[n],minimum=1)
+    _integer('evidence_sequence',e['evidence_sequence'],minimum=1)
+    for n in ('store_identity', 'campaign_id', 'authorization_digest', 'spawn_token', 'delegation_id',
+              'operation_id', 'source_custodian_id', 'source_custodian_incarnation', 'original_generation',
+              'original_incarnation_id', 'original_session_id', 'original_fence'):
+        if t[n] != d[n]: raise ContractError('trigger subject substitution: '+n)
+    for obj in (t,e):
+        if (obj['producer_id'] != producer or obj['producer_epoch'] != d['factory_epoch'] or
+                obj['observer_id'] != producer or obj['verifier_id'] != d['evidence_verifier_id'] or
+                obj['descriptor_digest'] != survivor_digest('b-survivor-descriptor/v1',d) or
+                obj['operation_id'] != d['operation_id']):
+            raise ContractError('trigger producer/descriptor binding')
+    if (t['survivor_incarnation'] != incarnation or
+            t['target_identity_digest'] != survivor_digest('b-survivor-target/v1',d['process_identity']) or
+            t['trigger_id'] != survivor_digest('b-survivor-trigger-id/v1',[producer,d['factory_epoch'],t['trigger_sequence']]) or
+            e['evidence_id'] != survivor_digest('b-survivor-evidence-id/v1',[producer,d['factory_epoch'],e['evidence_sequence']]) or
+            t['evidence_id'] != e['evidence_id'] or t['evidence_sequence'] != e['evidence_sequence'] or
+            t['evidence_digest'] != survivor_digest('b-survivor-trigger-evidence/v1',e)):
+        raise ContractError('trigger identity/evidence substitution')
+    facts=e['facts']
+    if type(facts) is not dict or set(facts) != SURVIVOR_EVENT_FACTS[kind]:
+        raise ContractError('closed positive evidence facts')
+    for n,v in facts.items():
+        if n.endswith('_sequence') or n in ('original_generation','original_fence'):
+            _integer(n,v,minimum=1)
+        elif n.endswith('_ref'): _closed_reference(v,'Ref')
+        else: _string(n,v)
+        if n in d and v != d[n]: raise ContractError('evidence subject substitution')
+    if kind in ('SUPERVISOR_TERMINAL','CUSTODIAN_TERMINAL') and facts['terminal_state'] != 'TERMINATED':
+        raise ContractError('positive terminal fact required')
+    if kind == 'REQUIRED_OWNERSHIP_INVALIDATED' and facts['binding_state'] != 'IRREVERSIBLY_INVALIDATED':
+        raise ContractError('positive irreversible ownership invalidation required')
+    if kind == 'ORIGINAL_CLEANUP_REQUEST' and (facts['requested_action'] != d['action'] or
+            facts['failure_payload_digest'] != facts['failure_ref']['payload_digest']):
+        raise ContractError('original exact failure proof required')
+    return t,e

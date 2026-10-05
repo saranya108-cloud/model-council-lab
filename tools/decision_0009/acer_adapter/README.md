@@ -416,3 +416,55 @@ mapping, deterministic fault cases, and remaining B/C work. Package checksums
 bind its contents. This is an implementation candidate package, not an Opus
 acceptance. It has not been sent to Opus; staging, commit, push and B/C remain
 outside this stop boundary.
+
+
+## Checkpoint B implementation candidate
+
+The Checkpoint A paragraphs above are historical delivery notes. B implementation
+starts from corrective commit `e5360a25dc01786302c7f22047c7d249379540ad`
+and implements accepted Checkpoint B Architecture Revision 3. Independent review
+and Human Chair acceptance of this candidate remain separate steps.
+
+Healthy RECOVERY and TERMINAL actors may obtain an opaque current
+`RecoveryWriterBinding` for the three closed RW evidence records. WAITING has no
+generic RW right. Pending tails require A's exact reconciliation; quarantine or
+unavailable W permits no new journal/object write, incarnation or establishment.
+Original execution results retain the versioned RESULT path and cannot redispatch.
+PUBLICATION_READBACK is reserved until a corresponding recovery publication
+result can exist. RP has no registered boundary; Checkpoint C remains closed.
+
+The trusted offline factory permanently reserves an original containment
+identity, stores its exact descriptor and acknowledged ORIGIN delegation,
+prepares the independent token-domain handle and C proof, then exposes one
+nonserializable survivor endpoint. Pre-exposure loss cannot finish through
+recovery. The independent lifecycle source must attest actual original controller
+or required-custody terminal/invalidation facts; the original cleanup boundary
+requires the captured current HISTORY actor and its exact ORIGIN failure Ref.
+Public evidence and copied wrappers confer neither producer nor call authority.
+
+C and the native token-domain port repeat endpoint, target, implementation and
+trigger checks. Consumption and CLAIMED publish atomically; CLAIMED is never
+retryable. Source containment, survivor containment and RELEASE share exclusion.
+Containment seals the domain before its one physical initiation. The actual worker
+permanently retains its first domain handle; loss of a factory index cannot bind
+a replacement port or reopen RELEASE. Lost proof means UNKNOWN. Original cleanup
+uses its retained admitted ownership binding even after fresh artifact verification
+fails, preserving A cleanup. Survivor dispatch still requires fresh artifact
+continuity. Original source joins retain the source's actual receipt and actor.
+Deferred source/authority loss reporting and arbitrary control dispatch callbacks
+run after C/port exclusion releases.
+
+Survivor receipts are immutable existing CustodianReceipt observations restricted
+to IN_PROGRESS, UNKNOWN and EXITED. Exit proves neither causation, reap nor residual
+clearance. New observations require their actual live observer; archived evidence
+can be reported after observer loss when independent provenance survives. Only the
+actual original parent can produce a genuine ReapReceipt. Closed FAILURE_ENVELOPE
+observations bind the original ORIGIN diagnostic and bounded exact Ref/Obj bytes
+(at most 16 references per tuple and 64 KiB raw evidence).
+
+This is a deterministic offline model. It creates no host processes, signals,
+cgroups, model/provider requests or destination writes. Fixture manifests and
+lifetime transitions model trusted services; they do not prove real OS handle
+transfer, process authentication, host/power-loss durability or live admission.
+The fixed Human Chair review package records exact source hashes, test/subcase
+results, requirements, field/site inventories and remaining proof limits.

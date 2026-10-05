@@ -21,7 +21,8 @@ from .contracts import (
     PUBLICATION_OPERATIONS, WINDOW_OPERATION,
     parse_state,
     AUTHORIZATION_V2_SCHEMA, JournalReference, ImmutableObjectReference,
-    U04EffectResultRecord, parse_effect_result_record,
+    U04EffectResultRecord, parse_effect_result_record, validate_recovery_record,
+    RECOVERY_RECORD_FIELDS, closed_canonical_bytes, parse_closed_canonical,
 )
 
 
@@ -591,7 +592,7 @@ class AppendReceipt:
 
 
 _U04_BOUNDARIES = {name: object() for name in (
-    "ENTRY", "INIT", "EXEC", "RESULT", "SHUTDOWN", "ADMIT", "DENY", "HISTORY",
+    "ENTRY", "INIT", "EXEC", "RESULT", "SHUTDOWN", "ADMIT", "DENY", "HISTORY", "RW",
 )}
 _U04_MODES = frozenset(("FRESH", "LIVE_PENDING", "LIVE", "RECOVERY", "WAITING", "TERMINAL",
                         "SHUTDOWN_ONLY", "EXITED"))
@@ -648,14 +649,14 @@ STORE_FIELD_DOMAINS = {
     "_acceptance_acks": "V",
     "_activation_authentication_service": "B/I",
     "_artifact_verifier": "B",
-    "_current_reconciler": "V",
+    "_current_reconciler": "V", "_recovery_writer": "V",
 }
 
 _STORE_AUTHORITY_GROUPS = {
     'durable authority': ('_durable',),
     'immutable provenance': ('identity', 'witness', '_custodian', '_objects',
         '_authentication_service', '_activation_authentication_service', '_artifact_verifier'),
-    'current volatile capability': ('_current_actor', '_current_reconciler'),
+    'current volatile capability': ('_current_actor', '_current_reconciler', '_recovery_writer'),
     'derived historical view': ('_receipts', '_event_bytes', '_effect_capabilities', '_effect_status',
         '_effect_results', '_effect_acceptance_counts', '_accepted_effects', '_invalidated_effects',
         '_taint', '_consumed', '_measurement_window', '_window_epoch', '_publication_grants',
@@ -681,6 +682,21 @@ STORE_FIELD_CLASSIFICATION = {
 }
 if set(STORE_FIELD_CLASSIFICATION) != set(STORE_FIELD_DOMAINS):
     raise RuntimeError('every store field needs explicit authority/reset classification')
+
+
+@dataclass(frozen=True, eq=False)
+class RecoveryWriterBinding:
+    """Current opaque RW registration. Copying fields never copies membership."""
+    actor: object
+    store_identity: str
+    authorization_digest: str
+    campaign_id: str
+    generation: int
+    incarnation_id: str
+    session_id: str
+    fence: int
+    registry: tuple
+    token: object
 
 
 @dataclass(frozen=True, eq=False)
@@ -876,6 +892,7 @@ class OfflineWitness:
             "SHUTDOWN": {"SHUTDOWN_ONLY"}, "ADMIT": {"WAITING", "LIVE_PENDING"},
             "DENY": {"LIVE", "RECOVERY", "WAITING", "TERMINAL", "FRESH", "LIVE_PENDING"},
             "HISTORY": {"LIVE", "FRESH", "LIVE_PENDING", "RECOVERY", "WAITING", "TERMINAL"},
+            "RW": {"RECOVERY", "TERMINAL"},
         }
         if actor.mode not in modes.get(boundary, set()):
             raise AuthorizationDenied("witness boundary/mode mismatch")
@@ -898,25 +915,36 @@ class OfflineWitness:
             return self._frontiers.get((actor.store_identity, actor.generation, actor.incarnation_id))
 
     def reserve_frame(self, actor, envelope, boundary_token):
-        with self._lock:
-            self.authenticate(actor, envelope.store_identity, envelope.boundary)
-            if _U04_BOUNDARIES.get(envelope.boundary) is not boundary_token:
-                raise AuthorizationDenied("dedicated witness boundary required")
-            if (envelope.schema_version != "u04-transaction/v1" or
-                    type(envelope.transaction_id) is not str or not envelope.transaction_id or
-                    envelope.transaction_id in self._commits or
-                    envelope.authorization_digest != actor.authorization_digest or
-                    envelope.campaign_id != actor.campaign_id or
-                    envelope.producer_bytes != _u04_canonical(actor.producer()) or
-                    envelope.predecessor_revision != self.high_revision or
-                    envelope.predecessor_hash != self.high_chain_digest or
-                    envelope.revision != self.high_revision + 1 or self.pending):
-                raise AuthorizationDenied("exact witnessed reservation binding")
-            reservation = WitnessReservation(envelope.store_identity, envelope.transaction_id,
-                envelope.revision, envelope.frame_digest, envelope.authorization_digest,
-                envelope.campaign_id, envelope.producer_bytes, envelope.boundary)
-            self.pending[envelope.revision] = reservation
-            return reservation
+        # Keep the core local: there is no second callable lower reservation port
+        # that can omit the B semantic check or reverse A -> journal -> W locks.
+        def reserve_exact():
+            with self._lock:
+                self.authenticate(actor, envelope.store_identity, envelope.boundary)
+                if _U04_BOUNDARIES.get(envelope.boundary) is not boundary_token:
+                    raise AuthorizationDenied("dedicated witness boundary required")
+                if (envelope.schema_version != "u04-transaction/v1" or
+                        type(envelope.transaction_id) is not str or not envelope.transaction_id or
+                        envelope.transaction_id in self._commits or
+                        envelope.authorization_digest != actor.authorization_digest or
+                        envelope.campaign_id != actor.campaign_id or
+                        envelope.producer_bytes != _u04_canonical(actor.producer()) or
+                        envelope.predecessor_revision != self.high_revision or
+                        envelope.predecessor_hash != self.high_chain_digest or
+                        envelope.revision != self.high_revision + 1 or self.pending):
+                    raise AuthorizationDenied("exact witnessed reservation binding")
+                reservation = WitnessReservation(envelope.store_identity, envelope.transaction_id,
+                    envelope.revision, envelope.frame_digest, envelope.authorization_digest,
+                    envelope.campaign_id, envelope.producer_bytes, envelope.boundary)
+                self.pending[envelope.revision] = reservation
+                return reservation
+
+        if envelope.boundary == 'RW':
+            if self._store is None:
+                raise AuthorizationDenied('RW requires its bound original store')
+            with self._store.authorization_lock, self._store._lock:
+                self._store._validate_rw_envelope(actor, envelope)
+                return reserve_exact()
+        return reserve_exact()
 
     def commit_frame(self, actor, envelope, reservation, boundary_token, readback_bytes):
         with self._lock:
@@ -1473,6 +1501,7 @@ class OfflineDurableStore:
         self._validated_boot_custody = {}
         self.torn_tail = b""
         self._current_actor = None
+        self._recovery_writer = None
         self._current_reconciler = None
         self._entry_mode = "INSPECTION"
         self._health = "HEALTHY"
@@ -1661,7 +1690,7 @@ class OfflineDurableStore:
             if self._current_actor is not actor:
                 raise AuthorizationDenied("captured current store actor required")
             self.witness.authenticate(actor, self.identity, boundary)
-            if facts is not None and (boundary in ('RESULT', 'SHUTDOWN', 'DENY', 'HISTORY') or
+            if facts is not None and (boundary in ('RESULT', 'SHUTDOWN', 'DENY', 'HISTORY', 'RW') or
                     boundary == 'INIT' and event.get('state') != 'CAMPAIGN_ADMITTED'):
                 raise AuthorizationDenied('this record admits no additional authority facts')
             if event.get('schema_version') == 'u04-record/v1':
@@ -1711,6 +1740,9 @@ class OfflineDurableStore:
                 self._validate_admission_payload(actor, event, facts)
             elif boundary == 'HISTORY':
                 self._validate_original_diagnostic(actor, event)
+            elif boundary == 'RW':
+                self._require_recovery_writer(self._recovery_writer, actor)
+                self._validate_recovery_payload(event)
             elif boundary == 'DENY':
                 denial = self.witness.denial(actor)
                 required = set(self._u04_common(actor, 'CAMPAIGN_EXECUTION_DENIED', 'DENIAL', False)) | {
@@ -2128,6 +2160,155 @@ class OfflineDurableStore:
                     [f['envelope'] for f in self._committed_frames()], _boundary=_U04_BOUNDARIES['DENY'])
                 self.mirror_denial(actor)
             return receipt
+
+    def recovery_writer_binding(self, actor):
+        with self.authorization_lock:
+            self.require_actor(actor, 'RW')
+            self._check_healthy()
+            self.read_verified(0)
+            if self._recovery_writer is None or self._recovery_writer.actor is not actor:
+                self._recovery_writer = RecoveryWriterBinding(actor, self.identity,
+                    actor.authorization_digest, actor.campaign_id, actor.generation,
+                    actor.incarnation_id, actor.session_id, actor.fence,
+                    tuple(RECOVERY_RECORD_FIELDS), object())
+            return self._recovery_writer
+
+    def _require_recovery_writer(self, binding, actor=None):
+        if (type(binding) is not RecoveryWriterBinding or binding is not self._recovery_writer or
+                binding.actor is not self._current_actor or actor is not None and binding.actor is not actor):
+            raise AuthorizationDenied('exact current opaque RW binding required')
+        self.require_actor(binding.actor, 'RW')
+        self._check_healthy()
+        return binding.actor
+
+    def record_recovery_entry(self, binding, *, fault=None):
+        with self.authorization_lock:
+            actor = self._require_recovery_writer(binding)
+            entries = [f for f in self._committed_frames() if
+                f['event'].get('record_type') == 'SUPERVISOR_INCARNATION' and
+                f['event'].get('incarnation_id') == actor.incarnation_id]
+            if len(entries) != 1:
+                raise AuthorizationDenied('exact current nonlive entry proof required')
+            event = self._u04_common(actor, 'RECOVERY_ENTRY', 'EVIDENCE', False)
+            event.update(entry_refs=entries[0]['event']['entry_refs'], health_at_entry='HEALTHY',
+                latch_state='SET' if self.witness.denial(actor) else 'CLEAR',
+                checkpoint_ref=self._reference(entries[0]['receipt']))
+            return self._commit_u04(actor, 'RW', event, fault=fault)
+
+    def record_recovery_obligation(self, binding, *, obligation_id, kind, reason_code,
+                                   subject_refs, target_ref, fault=None):
+        with self.authorization_lock:
+            actor = self._require_recovery_writer(binding)
+            event = self._u04_common(actor, 'RECOVERY_OBLIGATION', 'EVIDENCE', False)
+            event.update(obligation_id=obligation_id, kind=kind, reason_code=reason_code,
+                         subject_refs=copy.deepcopy(subject_refs), target_ref=copy.deepcopy(target_ref), status='OPEN')
+            return self._commit_u04(actor, 'RW', event, fault=fault)
+
+    def record_recovery_supplement(self, binding, *, parent_ref, supplement_kind,
+                                   evidence_bytes, source_id, verifier_id,
+                                   obligation_ref=None, fault=None):
+        with self.authorization_lock:
+            actor = self._require_recovery_writer(binding)
+            if type(evidence_bytes) is not bytes:
+                raise AuthorizationDenied('exact independently verified evidence bytes required')
+            event = self._u04_common(actor, 'RECOVERY_SUPPLEMENT', 'EVIDENCE', False)
+            object_id = 'recovery-evidence-' + _sha(evidence_bytes)
+            event.update(parent_ref=copy.deepcopy(parent_ref), parent_digest=parent_ref['payload_digest'],
+                obligation_ref=copy.deepcopy(obligation_ref), obligation_link='NONE' if obligation_ref is None else 'LINKED',
+                supplement_kind=supplement_kind,
+                evidence={'object_id': object_id, 'sha256': _sha(evidence_bytes), 'length': len(evidence_bytes)},
+                source_id=source_id, verifier_id=verifier_id)
+            # Validate provenance before any D mutation, and repeat at the lower writer.
+            self._validate_recovery_payload(event, evidence_bytes=evidence_bytes)
+            self.put_object(object_id, evidence_bytes, actor=actor, boundary='RW')
+            self._object_proof(event['evidence'])
+            return self._commit_u04(actor, 'RW', event, fault=fault)
+
+    def _validate_rw_envelope(self, actor, envelope):
+        self._require_recovery_writer(self._recovery_writer, actor)
+        self.read_verified(0)
+        event=parse_closed_canonical(envelope.payload_bytes)
+        if (envelope.authority_class!='EVIDENCE' or
+                envelope.authority_fact_bytes!=_u04_canonical({'producer':actor.producer()}) or
+                envelope.payload_digest!=_sha(envelope.payload_bytes) or
+                any(event.get(k)!=v for k,v in self._u04_common(actor,event.get('record_type'),'EVIDENCE',False).items())):
+            raise AuthorizationDenied('closed captured RW transaction binding required')
+        self._validate_recovery_payload(event)
+
+    def _validate_recovery_payload(self, event, *, evidence_bytes=None):
+        validate_recovery_record(event)
+        kind = event['record_type']
+        if kind == 'RECOVERY_ENTRY':
+            entry = self._exact_ref(event['checkpoint_ref'])
+            if (entry['event'].get('record_type') != 'SUPERVISOR_INCARNATION' or
+                    entry['event'].get('incarnation_id') != event['writer_incarnation_id'] or
+                    entry['event'].get('mode') not in ('RECOVERY', 'TERMINAL') or
+                    event['entry_refs'] != entry['event']['entry_refs']):
+                raise AuthorizationDenied('recovery entry must report its exact original entry')
+            for ref in event['entry_refs']: self._exact_ref(ref)
+            expected = 'SET' if self.witness.denial(self._current_actor) else 'CLEAR'
+            if event['latch_state'] != expected:
+                raise AuthorizationDenied('entry latch observation mismatch')
+        elif kind == 'RECOVERY_OBLIGATION':
+            if any(f['event'].get('obligation_id') == event['obligation_id'] for f in self._committed_frames()):
+                raise AuthorizationDenied('immutable obligation identity already used')
+            for ref in event['subject_refs']: self._exact_ref(ref)
+            target = event['target_ref']
+            if target['subject_ref'] is not None: self._exact_ref(target['subject_ref'])
+            if target['evidence_ref'] is not None: self._object_proof(target['evidence_ref'])
+            if target['kind'] == 'DESTINATION':
+                # B has no recovery destination observation/publication boundary.
+                # Membership alone cannot prove a kind, condition, port, key, or
+                # subject binding. Do not manufacture destination obligations.
+                raise AuthorizationDenied('DESTINATION recovery obligations unavailable in Checkpoint B')
+            if target['kind'] in ('CUSTODIAN','LOCAL_EVIDENCE'):
+                self._custodian.validate_containment_obligation(event)
+            if target['kind'] == 'EFFECT':
+                accepted = [f for f in self._committed_frames() if f['event'].get('record_type') ==
+                    'EFFECT_ACCEPTED' and f['event'].get('effect_id') == target['identity']]
+                if not accepted:
+                    self._custodian.validate_containment_obligation(event)
+                else:
+                    if (len(accepted)!=1 or event['kind']!='EFFECT_RESULT_UNRESOLVED' or
+                            target['subject_state']!='KNOWN' or target['subject_ref']!=self._reference(accepted[0]['receipt']) or
+                            target['subject_ref'] not in event['subject_refs']):
+                        raise AuthorizationDenied('exact original accepted effect obligation required')
+                    results=[f for f in self._committed_frames() if f['event'].get('record_type')=='EFFECT_RESULT' and
+                        f['event'].get('effect_id')==target['identity']]
+                    reason=event['reason_code']
+                    if reason=='OUTCOME_UNKNOWN':
+                        valid=not results
+                    elif reason=='RESULT_UNAVAILABLE':
+                        valid=bool(results) and results[0]['event']['result']['object_id'] not in self._objects
+                    else:
+                        # No caller assertion can invent independent no-start or
+                        # mismatch proof for an original execution port. The B C
+                        # operation branch separately verifies those observations.
+                        valid=False
+                    if not valid:raise AuthorizationDenied('truthful unresolved original effect result required')
+        else:
+            parent = self._exact_ref(event['parent_ref'])
+            if event['parent_digest'] != parent['receipt'].event_digest:
+                raise AuthorizationDenied('supplement parent digest substitution')
+            if event['obligation_ref'] is not None:
+                obligation = self._exact_ref(event['obligation_ref'])['event']
+                if (obligation.get('record_type') != 'RECOVERY_OBLIGATION' or
+                        event['parent_ref'] not in obligation['subject_refs']):
+                    raise AuthorizationDenied('exact matching OPEN obligation required')
+            raw = self._object_proof(event['evidence']) if evidence_bytes is None else evidence_bytes
+            if _sha(raw) != event['evidence']['sha256'] or len(raw) != event['evidence']['length']:
+                raise AuthorizationDenied('exact evidence object required')
+            if event['supplement_kind']=='PUBLICATION_READBACK':
+                raise AuthorizationDenied('recovery publication result is unavailable in Checkpoint B')
+            if event['supplement_kind'] == 'VERIFIED_EFFECT_RESULT':
+                parsed = parse_effect_result_record(_u04_canonical(parent['event']))
+                if (type(parsed) is not U04EffectResultRecord or
+                        raw != self._object_proof(asdict(parsed.result)) or
+                        event['verifier_id'] != parsed.verifier_id or event['source_id'] != parsed.verifier_id):
+                    raise AuthorizationDenied('explicit versioned exact verified result required')
+                self._validate_result_payload(self._current_actor, parsed)
+            else:
+                self._custodian.validate_recovery_supplement(parent, event, raw)
 
     def mirror_denial(self, actor):
         """A failed D mirror never changes the independent irreversible W latch."""
@@ -2632,7 +2813,7 @@ class OfflineDurableStore:
                     "_invalidated_effects", "_consumed_publication_grants", "_initial_window_operations"):
                 setattr(self, name, set())
             self._volatile = []
-            self._current_actor = self._current_reconciler = self._initialization_token = None
+            self._current_actor = self._current_reconciler = self._initialization_token = self._recovery_writer = None
             self._validated_campaign_closure = None
             self._entry_mode = "INSPECTION"
             self._supervisor_generation = self.witness.high_generation
@@ -2686,12 +2867,25 @@ class OfflineDurableStore:
         if type(envelope) is not JournalEnvelope:
             return False
         try:
+            if envelope.boundary=='RW':
+                event=validate_recovery_record(frame['event'])
+                producer=json.loads(envelope.producer_bytes)
+                if (producer.get('mode') not in ('RECOVERY','TERMINAL') or
+                        envelope.authority_class!='EVIDENCE' or
+                        envelope.authority_fact_bytes!=_u04_canonical({'producer':producer}) or
+                        event['store_identity']!=envelope.store_identity or
+                        event['authorization_digest']!=envelope.authorization_digest or
+                        event['campaign_id']!=envelope.campaign_id or
+                        any(event[k]!=producer[v] for k,v in (
+                            ('writer_generation','generation'),
+                            ('writer_incarnation_id','incarnation_id'),('writer_session_id','session_id'),('writer_fence','fence')))):
+                    return False
             return (envelope.canonical_bytes() == frame["bytes"] and
                     envelope.payload_bytes == _u04_canonical(frame["event"]) and
                     envelope.payload_digest == _sha(envelope.payload_bytes) and
                     frame["receipt"].event_digest == envelope.payload_digest and
                     frame["receipt"].chain_digest == envelope.frame_digest)
-        except (StoreError, ValueError, TypeError, KeyError):
+        except (StoreError, ValueError, TypeError, KeyError, ContractError):
             return False
 
     def _validate_reconciliation_frame(self, envelope):
@@ -3304,7 +3498,7 @@ class OfflineDurableStore:
     def crash(self):
         # A same-thread hook is revoke-only. Exhaustive reset must occur after
         # the interrupted stack unwinds; it cannot replace its captured token.
-        self._current_reconciler = None
+        self._current_reconciler = self._recovery_writer = None
         if self._current_actor is not None:
             actor = self._current_actor
             self._execution_revoked = self._publication_prohibited = True
@@ -3567,9 +3761,11 @@ class OfflineDurableStore:
             if self._authentication_service is None:
                 raise AuthorizationDenied('legacy history cannot authorize a new immutable object')
             if self._authentication_service is not None:
-                if boundary not in ('EXEC', 'RESULT', 'SHUTDOWN', 'ADMIT'):
+                if boundary not in ('EXEC', 'RESULT', 'SHUTDOWN', 'ADMIT', 'RW'):
                     raise AuthorizationDenied('immutable object writer is unavailable in this mode')
                 self.require_actor(actor, boundary)
+                if boundary == 'RW':
+                    self._require_recovery_writer(self._recovery_writer, actor)
                 self._check_healthy()
                 self.read_verified(0)
             if type(object_id) is not str or not object_id or type(bytes_value) is not bytes:

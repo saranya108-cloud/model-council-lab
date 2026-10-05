@@ -392,7 +392,25 @@ def independent_fault_world(seed):
         id(store._authentication_service): store._authentication_service,
         id(store._activation_authentication_service): store._activation_authentication_service,
     }
-    return copy.deepcopy(seed, memo)
+    # Fault worlds are harness bootstrap, never reconstruction of a capability.
+    # A seed with any B reservation must be exercised in its actual C world.
+    from tools.decision_0009.acer_adapter.custody import _CustodyExclusion
+    factory = seed.custodian._containment_factory
+    if factory is not None:
+        if factory._entries or factory._tokens:
+            raise RuntimeError('cannot clone reserved or exposed survivor authority')
+        memo[id(factory.lock)] = _CustodyExclusion()
+        memo[id(factory._lifecycle_port._lock)] = threading.RLock()
+        for domain in factory._domains.values():
+            memo[id(domain.lock)] = threading.RLock()
+    world = copy.deepcopy(seed, memo)
+    if factory is not None:
+        import uuid
+        fresh = world.custodian._containment_factory
+        fresh.epoch = uuid.uuid4().hex
+        B_LIFETIME_WORLDS[fresh] = fresh._lifecycle_port
+        B_READER_WORLDS[fresh] = fresh._reader_endpoint
+    return world
 
 
 class RecordingDispatch:
@@ -426,7 +444,7 @@ def inject_untrusted_record(store, fence_epoch, event_id, event):
     return receipt
 
 
-def make_supervisor():
+def make_supervisor(*, authorize_destination=False):
     from tools.decision_0009.acer_adapter.custody import OfflineCustodian
     from tools.decision_0009.acer_adapter.supervisor import (
         ArtifactVerificationPrimitive, OfflineDurableStore, OfflineWitness,
@@ -434,14 +452,26 @@ def make_supervisor():
     )
     artifacts = MutableArtifacts()
     auth = u04_authorization(artifacts)
+    if authorize_destination:
+        from tools.decision_0009.acer_adapter.contracts import DestinationRule, authorization_digest
+        auth = replace(auth, destination_rules=(DestinationRule('destination-rule-1',
+            'offline-destination', 'offline-destination-port', 'evidence',
+            'OBJECT_AND_NAMESPACE', 'ALL_LOWER_WRITERS'),))
+        auth = replace(auth, authorization_digest=authorization_digest(auth))
     witness = OfflineWitness("witness-1")
     store = OfflineDurableStore("store-1", witness, chair_verifier=offline_chair_service(auth),
                                 activation_verifier=offline_activation_service(auth))
     fence = 1
     verifier = ArtifactVerificationPrimitive("offline-root", auth, artifacts.read)
-    custodian = OfflineCustodian("custodian-1")
+    from tools.decision_0009.acer_adapter.custody import OfflineContainmentFactory
+    lifetimes = BIndependentLifetimes()
+    reader=object()
+    factory = OfflineContainmentFactory('offline-custody-factory', verifier, lifetimes, reader_endpoint=reader)
+    B_READER_WORLDS[factory]=reader
+    custodian = OfflineCustodian("custodian-1", containment_factory=factory)
+    B_LIFETIME_WORLDS[factory] = lifetimes
     supervisor = PersistentSupervisor(store, verifier, custodian, auth, session(fence))
-    supervisor.admit_campaign(activation())
+    supervisor.admit_campaign(replace(activation(), authorization_digest=auth.authorization_digest))
     supervisor.establish_boot_custody("custody-proof", observer_isolated=True,
                                       watchdog_ready=True)
     supervisor.complete_boot_custody()
@@ -487,3 +517,90 @@ def record_all_local_attempts(supervisor):
                         slot_id=slot.slot_id,
                         attempt_id=slot.attempt_id,
                         spawn_token_id=supervisor._slot_tokens[slot.slot_id].token_id))
+
+
+# Harness-only lifecycle source. Runtime actors receive no terminal hooks.
+# Factories retain authenticated read-only subscriptions to these exact domains.
+class BIndependentLifetimes:
+    def __init__(self):
+        import threading
+        self._lock = threading.RLock()
+        self._bindings = {}
+        self._events = {}
+        self._subscriptions = {}
+        self._sequence = 0
+        self._authority_exclusion = None
+        self.available = True
+
+    def bind_authority_exclusion(self,exclusion):
+        if self._authority_exclusion is not None:raise RuntimeError('lifetime exclusion already pinned')
+        self._authority_exclusion=exclusion
+
+    def bind_lifetime(self, subject):
+        with self._lock:
+            if subject not in self._bindings:
+                self._sequence += 1
+                self._bindings[subject] = ('lifetime-%d' % self._sequence, object())
+            return self._bindings[subject]
+
+    def subscribe(self, subject, binding, observer, callback):
+        with self._lock:
+            if self._bindings.get(subject) != binding or type(observer) is not object:
+                raise RuntimeError('actual prebound lifetime observation required')
+            key=(subject,observer)
+            self._subscriptions[key]=self._subscriptions.get(key,())+((binding,callback),)
+
+    def read_event(self, subject, binding):
+        with self._lock:
+            if not self.available or self._bindings.get(subject) != binding:
+                raise RuntimeError('lifetime provenance unavailable')
+            return copy.deepcopy(self._events.get(subject))
+
+    def terminate(self,subject):
+        with self._authority_exclusion:
+            callbacks=self._terminal_transition(subject)
+        for callback in callbacks:callback()
+
+    def _terminal_transition(self, subject):
+        with self._lock:
+            if subject not in self._bindings:
+                raise RuntimeError('unregistered lifetime cannot emit terminal notification')
+            if subject not in self._events:
+                self._sequence += 1
+                self._events[subject] = {'lifetime_binding_id':self._bindings[subject][0],
+                    'lifetime_event_sequence':self._sequence,'terminal_state':'TERMINATED'}
+            callbacks=[callback for (target,_),registrations in self._subscriptions.items() if target is subject
+                for _,callback in registrations]
+        return callbacks
+
+    def invalidate_ownership(self,source,token_id):
+        with self._authority_exclusion:
+            callbacks=self._ownership_transition(source,token_id)
+        for callback in callbacks:callback()
+
+    def _ownership_transition(self,source,token_id):
+        subject=(source,token_id)
+        with self._lock:
+            if subject not in self._bindings:
+                raise RuntimeError('unregistered required ownership cannot be invalidated')
+            if subject not in self._events:
+                self._sequence+=1
+                self._events[subject]={'ownership_binding_id':self._bindings[subject][0],
+                    'ownership_event_sequence':self._sequence,'binding_state':'IRREVERSIBLY_INVALIDATED'}
+            callbacks=[callback for (target,_),registrations in self._subscriptions.items() if target==subject
+                for _,callback in registrations]
+        return callbacks
+
+
+B_LIFETIME_WORLDS = {}
+
+
+def b_lifetimes(custodian):
+    return B_LIFETIME_WORLDS[custodian._containment_factory]
+
+
+B_READER_WORLDS = {}
+
+
+def b_reader(factory):
+    return B_READER_WORLDS[factory]

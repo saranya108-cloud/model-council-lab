@@ -1,6 +1,8 @@
 import threading
 import unittest
 
+from tools.decision_0009.acer_adapter.contracts import CustodyError
+
 from tools.decision_0009.acer_adapter.supervisor import (
     AuthorizationDenied, CASMismatch, DuplicateEvent, LostAcknowledgement, OfflineDurableStore,
     OfflineWitness, Quarantined, StaleRead, StoreError, TransactionPending,
@@ -22,6 +24,10 @@ class CheckpointBRecoveryTests(unittest.TestCase):
         actor = store.open_nonlive_entry(supervisor.authorization, 'terminal-result-observer')
         self.assertEqual(actor.mode, 'TERMINAL')
         self.assertIsNone(store.witness.denial(actor))
+        # B's positive terminal writer control uses this actual completed A
+        # campaign, rather than a synthetic mode-policy fixture.
+        rw=store.recovery_writer_binding(actor)
+        self.assertTrue(store.record_recovery_entry(rw).durable)
         closure_before = store.validated_campaign_closure()
         boot_four_before = store.validated_boot_closure(4)
         self.assertIsNotNone(closure_before)
@@ -1109,3 +1115,282 @@ class U04PersistenceKernelTests(unittest.TestCase):
         self.assertEqual(observed, ["revoked"])
         self.assertEqual(witness.high_revision, 2)
         self.assertIsNone(store._current_actor)
+
+
+class CheckpointBRecoveryWriterTests(unittest.TestCase):
+    def test_healthy_nonlive_entry_can_report_recovery_without_execution(self):
+        from acer_adapter_fakes import make_supervisor
+        supervisor, _, _ = make_supervisor()
+        store = supervisor.store
+        store.crash()
+        store.reset_volatile()
+        actor = store.open_nonlive_entry(supervisor.authorization, 'b-recovery-reader')
+        self.assertTrue(callable(getattr(store, 'recovery_writer_binding', None)),
+                        'accepted Checkpoint B RW boundary is missing')
+        binding = store.recovery_writer_binding(actor)
+        receipt = store.record_recovery_entry(binding)
+        event = store._exact_ref(store._reference(receipt))['event']
+        self.assertEqual(event['record_type'], 'RECOVERY_ENTRY')
+        self.assertIs(event['authorizes_execution'], False)
+        self.assertEqual(actor.mode, 'RECOVERY')
+        self.assertTrue(store.execution_revoked)
+
+
+class CheckpointBRWMatrixTests(unittest.TestCase):
+    def world(self, fault=None, *, authorize_destination=False):
+        from acer_adapter_fakes import make_supervisor,b_lifetimes
+        s,a,c=make_supervisor(authorize_destination=authorize_destination);s.make_slot_eligible('slot-1-1')
+        child=s.spawn_worker('slot-1-1',__import__('hashlib').sha256(b'b-launch').hexdigest())
+        d=c.establish_survivor_containment(child.spawn_token,s._actor);f=c._containment_factory
+        f._fault=fault;b_lifetimes(c).terminate(s._actor)
+        actor=s.store.open_nonlive_entry(s.authorization,'rw-matrix')
+        rw=s.store.recovery_writer_binding(actor)
+        return s,c,d,f,actor,rw
+
+    def obligation(self,s,d,f,rw,**kwargs):
+        entry=f._entries[d['delegation_id']]
+        target={'kind':'EFFECT','identity':d['operation_id'],'destination_id':None,'object_key':None,
+            'subject_ref':entry['transfer_ref'],'subject_state':'KNOWN','evidence_ref':None,'evidence_state':'UNAVAILABLE'}
+        values=dict(obligation_id='pending-containment',kind='EFFECT_RESULT_UNRESOLVED',
+            reason_code='ACCEPTED_NOT_STARTED',subject_refs=[d['original_ownership_ref'],entry['transfer_ref']],target_ref=target)
+        values.update(kwargs);return s.store.record_recovery_obligation(rw,**values)
+
+    def supplement(self,s,d,f,rw,**kwargs):
+        e=f._entries[d['delegation_id']]
+        values=dict(parent_ref=e['transfer_ref'],supplement_kind='CONTAINMENT_EVIDENCE',
+            evidence_bytes=e['receipt_bytes'],source_id=f._actor_id(d),verifier_id=d['evidence_verifier_id'])
+        values.update(kwargs);return s.store.record_recovery_supplement(rw,**values)
+
+    def test_rw_three_record_fault_matrix_exact_reconciliation(self):
+        stages=('before_reservation','reservation_response_lost','reserved_before_frame',
+            'frame_before_readback','readback_mismatch','readback_unavailable','validated_before_commit','commit_before_ack')
+        for record in ('ENTRY','OBLIGATION','SUPPLEMENT'):
+            for stage in stages:
+                with self.subTest(record=record,stage=stage):
+                    s,c,d,f,actor,rw=self.world('before_initiation' if record=='OBLIGATION' else None)
+                    before=s.store.revision
+                    call=(lambda:s.store.record_recovery_entry(rw,fault=stage)) if record=='ENTRY' else (
+                        lambda:self.obligation(s,d,f,rw,fault=stage)) if record=='OBLIGATION' else (
+                        lambda:self.supplement(s,d,f,rw,fault=stage))
+                    with self.assertRaises(StoreError):call()
+                    self.assertTrue(s.store.execution_revoked)
+                    if stage in ('frame_before_readback','validated_before_commit'):
+                        tail=s.store._durable[-1]['bytes']
+                        with self.assertRaises(StoreError):s.store.record_recovery_entry(rw)
+                        for recovery_stage in ('before_commit','lost_ack'):
+                            with self.subTest(reconcile=recovery_stage),self.assertRaises(StoreError):
+                                s.store.reconcile_pending(s.store._authentication_service,s.authorization,fault=recovery_stage)
+                        receipt=s.store.reconcile_pending(s.store._authentication_service,s.authorization)
+                        self.assertEqual(s.store._durable[-1]['bytes'],tail)
+                        self.assertEqual(s.store.witness.query_transaction(receipt.event_id)[1].completion_mode,'RECOVERY_RECONCILE')
+                        self.assertIsNone(s.store._recovery_writer)
+                    elif stage=='commit_before_ack':self.assertEqual(s.store.witness.high_revision,before+1)
+                    else:self.assertEqual(s.store.witness.high_revision,before)
+                    self.assertEqual(f._entries[d['delegation_id']]['domain'].initiations,0 if record=='OBLIGATION' else 1)
+
+    def test_rw_binding_copies_restart_and_health_record_cross_product(self):
+        import copy
+        for health in ('HEALTHY','RECONCILABLE','UNKNOWN','QUARANTINED','W_UNAVAILABLE'):
+            for record in ('ENTRY','OBLIGATION','SUPPLEMENT'):
+                with self.subTest(health=health,record=record):
+                    s,c,d,f,actor,rw=self.world('before_initiation' if record=='OBLIGATION' else None)
+                    for copied in (copy.copy(rw),copy.deepcopy(rw, {id(actor):actor})):
+                        with self.assertRaises(AuthorizationDenied):s.store.record_recovery_entry(copied)
+                    if health=='W_UNAVAILABLE':s.store.witness.available=False
+                    elif health=='QUARANTINED':s.store.quarantined=True
+                    elif health in ('RECONCILABLE','UNKNOWN'):
+                        stage='frame_before_readback' if health=='RECONCILABLE' else 'readback_unavailable'
+                        with self.assertRaises(StoreError):s.store.record_recovery_entry(rw,fault=stage)
+                    state=(s.store.revision,dict(s.store._objects),s.store.witness.high_generation)
+                    call=(lambda:s.store.record_recovery_entry(rw)) if record=='ENTRY' else (
+                        lambda:self.obligation(s,d,f,rw)) if record=='OBLIGATION' else (
+                        lambda:self.supplement(s,d,f,rw))
+                    if health=='HEALTHY':self.assertTrue(call().durable)
+                    else:
+                        with self.assertRaises(StoreError):call()
+                        self.assertEqual((s.store.revision,dict(s.store._objects),s.store.witness.high_generation),state)
+                    try:s.store.crash()
+                    except TransactionPending:pass
+                    with self.assertRaises(AuthorizationDenied):s.store.record_recovery_entry(rw)
+
+    def test_closed_rw_schema_nullability_and_invalid_input_noninterference(self):
+        import copy
+        from tools.decision_0009.acer_adapter.contracts import validate_recovery_record,ContractError
+        s,c,d,f,actor,rw=self.world('before_initiation')
+        receipts=[s.store.record_recovery_entry(rw),self.obligation(s,d,f,rw)]
+        f.observe_current_outcome(d['delegation_id'],reader=rw)
+        receipts.append(self.supplement(s,d,f,rw))
+        examples=[s.store._exact_ref(s.store._reference(r))['event'] for r in receipts]
+        for event in examples:
+            mutations=[dict(event,extra='forbidden'),dict(event,authorizes_execution=True),dict(event,authority_class='EXECUTION'),
+                dict(event,schema_version='unknown'),dict(event,writer_generation=True)]
+            for name in event:
+                changed=copy.deepcopy(event);del changed[name];mutations.append(changed)
+            if event['record_type']=='RECOVERY_OBLIGATION':
+                for key,value in (('subject_ref',None),('subject_state','UNKNOWN'),('evidence_state','AVAILABLE'),('destination_id','invented')):
+                    changed=copy.deepcopy(event);changed['target_ref'][key]=value;mutations.append(changed)
+                mutations.extend((dict(event,reason_code='invented'),dict(event,status='CLOSED'),dict(event,subject_refs=[None])))
+            elif event['record_type']=='RECOVERY_SUPPLEMENT':
+                mutations.extend((dict(event,obligation_ref=d['original_ownership_ref']),dict(event,obligation_link='LINKED'),
+                    dict(event,parent_ref=None),dict(event,evidence=dict(event['evidence'],extra='forged')),dict(event,supplement_kind='invented')))
+            state=(s.store.revision,dict(s.store._objects),s.store.health,s.store.witness.denial(actor))
+            for n,changed in enumerate(mutations):
+                with self.subTest(record=event['record_type'],mutation=n),self.assertRaises(ContractError):validate_recovery_record(changed)
+            self.assertEqual((s.store.revision,dict(s.store._objects),s.store.health,s.store.witness.denial(actor)),state)
+
+    def test_low_witness_port_cannot_reserve_noncanonical_rw_payload(self):
+        from tools.decision_0009.acer_adapter.supervisor import JournalEnvelope,_U04_BOUNDARIES,_u04_canonical,_sha
+        s,c,d,f,actor,rw=self.world();event=s.store._u04_common(actor,'RECOVERY_ENTRY','EVIDENCE',False)
+        event.update(extra='forged')
+        payload=_u04_canonical(event)
+        envelope=JournalEnvelope('u04-transaction/v1',event['record_id'],s.store.revision+1,s.store.revision,
+            s.store.chain_digest,s.store.identity,actor.authorization_digest,actor.campaign_id,
+            _u04_canonical(actor.producer()),'RW','EVIDENCE',payload,_sha(payload),_u04_canonical({'producer':actor.producer()}))
+        before=dict(s.store.witness.pending)
+        with self.assertRaises((StoreError,ValueError)):s.store.witness.reserve_frame(actor,envelope,_U04_BOUNDARIES['RW'])
+        self.assertEqual(s.store.witness.pending,before)
+
+    def test_obligation_truthfulness_and_exact_owner_and_evidence(self):
+        for state in ('READY','RESULT_AVAILABLE','CLAIMED'):
+            with self.subTest(operation=state):
+                s,c,d,f,actor,rw=self.world('before_claim' if state=='READY' else 'before_initiation' if state=='CLAIMED' else None)
+                if state=='CLAIMED':
+                    receipt=self.obligation(s,d,f,rw);self.assertTrue(receipt.durable)
+                    with self.assertRaises(StoreError):self.obligation(s,d,f,rw)
+                else:
+                    with self.assertRaises((StoreError,RuntimeError,CustodyError)):self.obligation(s,d,f,rw)
+                before=s.store.revision
+                wrong={'kind':'EFFECT','identity':d['operation_id'],'destination_id':None,'object_key':None,
+                    'subject_ref':d['original_ownership_ref'],'subject_state':'KNOWN','evidence_ref':None,'evidence_state':'UNAVAILABLE'}
+                with self.assertRaises((StoreError,RuntimeError,CustodyError)):self.obligation(s,d,f,rw,obligation_id='wrong-owner',target_ref=wrong)
+                self.assertEqual(s.store.revision,before)
+
+    def test_linked_supplement_keeps_obligation_open_and_rejects_unrelated_refs(self):
+        s,c,d,f,actor,rw=self.world('after_initiation')
+        obligation=self.obligation(s,d,f,rw,reason_code='OUTCOME_UNKNOWN')
+        ref=s.store._reference(obligation)
+        self.assertTrue(self.supplement(s,d,f,rw,obligation_ref=ref).durable)
+        self.assertEqual(s.store._exact_ref(ref)['event']['status'],'OPEN')
+        before=(s.store.revision,dict(s.store._objects))
+        with self.assertRaises((StoreError,RuntimeError,CustodyError)):
+            self.supplement(s,d,f,rw,obligation_ref=d['original_ownership_ref'])
+        self.assertEqual((s.store.revision,dict(s.store._objects)),before)
+
+    def test_rp_remains_absent_and_live_waiting_fresh_cannot_rw(self):
+        from dataclasses import replace
+        from tools.decision_0009.acer_adapter.supervisor import _U04_BOUNDARIES
+        self.assertNotIn('RP',_U04_BOUNDARIES)
+        for mode in ('FRESH','LIVE_PENDING','LIVE','RECOVERY','TERMINAL','WAITING'):
+            for writer in ('RW','RP','EXEC','RESULT'):
+                with self.subTest(mode=mode,writer=writer):
+                    from acer_adapter_fakes import make_supervisor
+                    s,_,_=make_supervisor();actor=s._actor;probe=replace(actor,mode=mode)
+                    # Isolated witness-policy fixture: register one actual opaque
+                    # actor to exercise the full mode policy, no store dispatch.
+                    s.store.witness._actors[s.store.identity]=probe
+                    s.store._current_actor=probe
+                    allowed=(writer=='RW' and mode in ('RECOVERY','TERMINAL') or
+                        writer=='EXEC' and mode=='LIVE' or writer=='RESULT' and mode in ('LIVE','RECOVERY','TERMINAL'))
+                    if allowed:self.assertIs(s.store.witness.authenticate(probe,s.store.identity,writer),probe)
+                    else:
+                        with self.assertRaises(AuthorizationDenied):s.store.witness.authenticate(probe,s.store.identity,writer)
+
+
+class CheckpointBClosedRegistryCartesianTests(CheckpointBRWMatrixTests):
+    # Suppress inherited test collection; reuse only its genuine-world helpers.
+    test_rw_three_record_fault_matrix_exact_reconciliation=None
+    test_rw_binding_copies_restart_and_health_record_cross_product=None
+    test_closed_rw_schema_nullability_and_invalid_input_noninterference=None
+    test_low_witness_port_cannot_reserve_noncanonical_rw_payload=None
+    test_obligation_truthfulness_and_exact_owner_and_evidence=None
+    test_linked_supplement_keeps_obligation_open_and_rejects_unrelated_refs=None
+    test_rp_remains_absent_and_live_waiting_fresh_cannot_rw=None
+
+    def test_writer_mode_health_record_cartesian_registry(self):
+        from dataclasses import replace
+        from tools.decision_0009.acer_adapter.contracts import closed_canonical_bytes
+        from tools.decision_0009.acer_adapter.supervisor import _sha
+        for writer in ('RW','RP','RESULT','HISTORY','EXEC'):
+            for mode in ('FRESH','LIVE_PENDING','LIVE','RECOVERY','WAITING','TERMINAL'):
+                for health in ('HEALTHY','RECONCILABLE','UNKNOWN','QUARANTINED','W_UNAVAILABLE'):
+                    for record in ('RECOVERY_ENTRY','RECOVERY_OBLIGATION','RECOVERY_SUPPLEMENT'):
+                        with self.subTest(writer=writer,mode=mode,health=health,record=record):
+                            s,c,d,f,original,rw=self.world('before_initiation' if record=='RECOVERY_OBLIGATION' else None)
+                            entry=f._entries[d['delegation_id']]
+                            actor=replace(original,mode=mode);s.store._current_actor=actor;s.store.witness._actors[s.store.identity]=actor
+                            # Trusted fixture probes opaque mode policy only; it
+                            # cannot invent a production entry or execution session.
+                            if mode in ('RECOVERY','TERMINAL'):rw=s.store.recovery_writer_binding(actor)
+                            event=s.store._u04_common(actor,record,'EVIDENCE',False)
+                            if record=='RECOVERY_ENTRY':
+                                checkpoint=[x for x in s.store._committed_frames() if x['event'].get('record_type')=='SUPERVISOR_INCARNATION'][-1]
+                                event.update(entry_refs=checkpoint['event']['entry_refs'],health_at_entry='HEALTHY',
+                                    latch_state='SET',checkpoint_ref=s.store._reference(checkpoint['receipt']))
+                            elif record=='RECOVERY_OBLIGATION':
+                                event.update(obligation_id='cartesian-obligation',kind='EFFECT_RESULT_UNRESOLVED',reason_code='ACCEPTED_NOT_STARTED',
+                                    subject_refs=[d['original_ownership_ref'],entry['transfer_ref']],status='OPEN',
+                                    target_ref={'kind':'EFFECT','identity':d['operation_id'],'destination_id':None,'object_key':None,
+                                        'subject_ref':entry['transfer_ref'],'subject_state':'KNOWN','evidence_ref':None,'evidence_state':'UNAVAILABLE'})
+                            else:
+                                raw=entry['receipt_bytes'];obj='cartesian-evidence-'+_sha(raw)
+                                # Immutable fixture evidence is installed before
+                                # the rejected writer/health boundary is exercised.
+                                s.store._objects[obj]=raw
+                                event.update(parent_ref=entry['transfer_ref'],parent_digest=entry['transfer_ref']['payload_digest'],
+                                    obligation_ref=None,obligation_link='NONE',supplement_kind='CONTAINMENT_EVIDENCE',
+                                    evidence={'object_id':obj,'sha256':_sha(raw),'length':len(raw)},source_id=f._actor_id(d),verifier_id=d['evidence_verifier_id'])
+                            if health=='W_UNAVAILABLE':s.store.witness.available=False
+                            elif health=='QUARANTINED':s.store.quarantined=True
+                            elif health in ('RECONCILABLE','UNKNOWN'):
+                                s.store.witness.pending[s.store.revision+1]=object()
+                                s.store._health=health
+                            before=(s.store.revision,dict(s.store._objects),s.store.witness.high_generation)
+                            allowed=writer=='RW' and mode in ('RECOVERY','TERMINAL') and health=='HEALTHY'
+                            if allowed:self.assertTrue(s.store._commit_u04(actor,writer,event).durable)
+                            else:
+                                with self.assertRaises((StoreError,CustodyError)):
+                                    s.store._commit_u04(actor,writer,event)
+                                self.assertEqual((s.store.revision,dict(s.store._objects),s.store.witness.high_generation),before)
+
+
+class CheckpointBDestinationObligationTests(unittest.TestCase):
+    world = CheckpointBRWMatrixTests.world
+    obligation = CheckpointBRWMatrixTests.obligation
+
+    def test_B1_destination_authorization_preserves_truthful_effect_obligation(self):
+        s,c,d,f,actor,rw=self.world('before_initiation',authorize_destination=True)
+        self.assertEqual(s.store._admitted_payload().destination_rules[0].port_identity,
+                         'offline-destination-port')
+        receipt=self.obligation(s,d,f,rw)
+        self.assertTrue(receipt.durable)
+        self.assertEqual(s.store._exact_ref(s.store._reference(receipt))['event']['target_ref']['identity'],
+                         d['operation_id'])
+
+    def test_B1_destination_obligations_refused_before_durable_recording(self):
+        from tools.decision_0009.acer_adapter.contracts import RECOVERY_OBLIGATION_REASONS
+        from tools.decision_0009.acer_adapter.supervisor import AuthorizationDenied
+        s,c,d,f,actor,rw=self.world('before_initiation',authorize_destination=True)
+        ref=f._entries[d['delegation_id']]['transfer_ref']
+        target={'kind':'DESTINATION','identity':'offline-destination-port',
+            'destination_id':'offline-destination','object_key':'/evidence/object-1',
+            'subject_ref':ref,'subject_state':'KNOWN','evidence_ref':None,'evidence_state':'UNAVAILABLE'}
+        # All kind/reason pairs are syntactically closed. None may use a
+        # destination membership check to manufacture a true B obligation.
+        cases=[(kind,reason,{},[d['original_ownership_ref'],ref])
+               for kind,reasons in RECOVERY_OBLIGATION_REASONS.items() for reason in sorted(reasons)]
+        cases.extend(('PUBLICATION_UNVERIFIED','OUTCOME_UNKNOWN',change,subjects) for change,subjects in (
+            ({'identity':'fabricated-port'},[ref]),
+            ({'object_key':'/outside/object-1'},[ref]),
+            ({'subject_ref':d['original_ownership_ref']},[ref]),
+            ({'subject_state':'UNKNOWN','subject_ref':None},[ref]),
+            ({},[d['original_ownership_ref']]),
+            ({'destination_id':'unauthorized-destination'},[ref])))
+        for n,(kind,reason,change,subjects) in enumerate(cases):
+            with self.subTest(kind=kind,reason=reason,target_change=change,subjects=subjects):
+                before=(s.store.revision,dict(s.store._objects),dict(s.store.witness.pending),
+                        s.store.witness.high_revision)
+                with self.assertRaisesRegex(AuthorizationDenied,'DESTINATION.*unavailable in Checkpoint B'):
+                    s.store.record_recovery_obligation(rw,obligation_id='destination-refused-'+str(n),
+                        kind=kind,reason_code=reason,subject_refs=subjects,target_ref=dict(target,**change))
+                self.assertEqual((s.store.revision,dict(s.store._objects),dict(s.store.witness.pending),
+                                  s.store.witness.high_revision),before)
