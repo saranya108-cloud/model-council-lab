@@ -1,14 +1,15 @@
 # Decision 0009 Acer adapter — offline tranche
 
-**U-04 Checkpoint A implementation candidate — independent review pending.**
-Tasks 1–6 are integrated and the implementation completion gate passes.
-The nine original behavioral characterization triggers and uninterrupted
-controls pass on the final source. The fixed review package supplies the exact
-diff, source bytes, inventories and executed evidence for independent
-ACCEPT/BLOCK review. Independent acceptance and live admission have not occurred.
+**U-04 Checkpoint C local implementation candidate — independent review pending.**
+The accepted A/B foundation remains in place. C adds only deterministic offline
+recovery publication and its migration/validation evidence. The A/B delivery
+sections below retain their historical status statements; current C behavior is
+described in the final section. Implementation is not Human Chair acceptance or
+live admission. Source-bound results, rather than this document, establish which
+checks passed.
 
 This directory implements the accepted Revision 4 behavioral contracts and
-Revision 6 Checkpoint A foundation as deterministic offline models. It grants
+Revision 6 A/B/C mechanisms as deterministic offline models. It grants
 no Acer, CUDA, NVML, process, cgroup, filesystem
 publication, reboot, model, GGUF, tokenizer, inference, provider, or Tranche B
 authority. Importing these modules performs no host action and loads no vendor
@@ -418,7 +419,7 @@ acceptance. It has not been sent to Opus; staging, commit, push and B/C remain
 outside this stop boundary.
 
 
-## Checkpoint B implementation candidate
+## Checkpoint B implementation candidate (historical delivery)
 
 The Checkpoint A paragraphs above are historical delivery notes. B implementation
 starts from corrective commit `e5360a25dc01786302c7f22047c7d249379540ad`
@@ -468,3 +469,90 @@ lifetime transitions model trusted services; they do not prove real OS handle
 transfer, process authentication, host/power-loss durability or live admission.
 The fixed Human Chair review package records exact source hashes, test/subcase
 results, requirements, field/site inventories and remaining proof limits.
+
+## Checkpoint C offline recovery publication
+
+Trusted test setup may supply exact `OfflinePublicationDestination` instances to
+`OfflineDurableStore(publication_destinations=...)`, together with the original
+producer/normalizer instances. The normal publication path and RP path consult
+that same independent destination. `ImmutablePublication.intent(source_proof=...)`
+captures the actual originally produced EvidenceObject, not a caller's producer
+name or coincidentally matching bytes. Existing history without that original
+proof cannot acquire it through recovery. No destination is enabled by default.
+
+`recovery_publication_binding` requires the exact current healthy RECOVERY or
+TERMINAL actor, its allowed publisher identity, canonical admitted v2 approval,
+the pinned verifier, and `exact_byte_recovery_authorized=True`. Its opaque binding
+and grants are separate from normal publication, EXEC, RW and survivor authority.
+Subject builders resolve the original witnessed publication INTENT transaction
+and exact object/supplement rule. No copied identifier or historical grant can
+become a current capability.
+
+| RP action | Required permission |
+|---|---|
+| ENSURE_EXACT_OBJECT or CONTINUE_RESERVED_EXACT | WRITE_EXACT |
+| ESTABLISH_DURABILITY | ESTABLISH_DURABILITY |
+| VERIFY_EXACT_OBJECT or destination query/readback | VERIFY_EXACT |
+| Any supplement action | The above permission plus PUBLISH_RECOVERY_SUPPLEMENT |
+
+`perform_recovery_publication` is a compound operation that also queries and
+persists its destination result, so it requires VERIFY_EXACT in addition to the
+named operation's permission. `query_recovery_publication` obtains no effect
+grant. Both write only the four closed R6 RP record types. Validation precedes
+the RP intent; exact witnessed acceptance and independent acknowledgement precede
+the lower-port claim. The lower port rechecks authority, all source/precondition
+proofs and writer exclusion while sharing authorization exclusion with reset.
+
+An independently absent key permits one exact create. A positively proven
+original owned-empty reservation permits one full-byte continuation under the
+same owner, intent and key. Empty intended bytes need no append. Exact existing
+bytes need only missing durability and independent verification. Stable partial
+bytes, wrong bytes and wrong owners are preserved. In-flight, CLAIMED or UNKNOWN
+operations are query-only; missing registry entries never mean NOT_STARTED.
+Only positively proven NOT_STARTED permits a replacement grant for the same
+logical operation. Controller loss never resets destination claims or counts.
+
+Verification requires actual independent exact readback, length/digest, object
+durability, namespace durability and linked authenticated results. Receipts are
+authenticated against the pinned destination's retained original observations;
+a checksum or constructed receipt is insufficient. Verified history may be
+returned without replay and remains historical evidence when a service is lost.
+
+C replaces B's temporary blanket DESTINATION rejection with a semantic verifier.
+A truthful obligation identifies an actual original destination and supported
+condition, or a precisely proven authorization failure for that actual object.
+Membership or an arbitrary target remains insufficient (B-1). PUBLICATION_READBACK
+requires its corresponding committed VERIFIED RP result and exact independently
+authenticated source/verifier evidence. Supplement publication uses only the R6
+deterministic child key and preserves original evidence. UNKNOWN/in-flight
+precedence prevents transient samples from becoming integrity-conflict triggers.
+Only independently stable conflicting evidence can set the existing irreversible
+PUBLICATION_INTEGRITY_CONFLICT latch; failed journal mirroring cannot clear it.
+
+The journal and immutable proof objects are D; checkpoints, reservations,
+generations and denial are W; original production proof, destination registry,
+bytes, durability, claims, counts and archived receipts are C-domain facts.
+Pinned service identities/references and synchronization are B (the trust root
+remains I). RP bindings, grants, transient proof authorization, pending original
+source bindings and eligible-grant indexes are V and are cleared on loss.
+`STORE_FIELD_DOMAINS` and `DESTINATION_FIELD_DOMAINS` enumerate those fields.
+Missing C evidence cannot be restored from D labels. Quarantine, unavailable W
+and reconcilable tails permit no new RP effect or record; A's exact reconciliation
+of an already reserved frame remains available under its existing conditions.
+
+Publication neither cancels nor strengthens B survivor containment. It does not
+prove original-parent reap, residual clearance, custody, execution, a resumed
+measurement window, or a new closure. Successful publication cannot remove
+consumption, taint or the W execution-denial latch.
+
+C evidence is retained only in `logs/u04-checkpoint-c-20261007/`. The original R6
+44-field and 85-site inventories remain separate historical populations from the
+broader current A/B/C inventories. The candidate package identifies the final
+source hashes, all changed paths, classified fields/routes, requirement mappings,
+raw test/subcase results and deterministic fault observations. Intermediate logs
+are not final-candidate proof. Final validation includes the complete adapter
+suite and unchanged startup-characterization suite with bytecode disabled.
+
+This model proves no real storage durability, protected provisioning/signing,
+process/host fencing, reboot survival, provider behavior, GPU/CUDA/NVML operation,
+or production readiness. No live recovery publication port is provided.

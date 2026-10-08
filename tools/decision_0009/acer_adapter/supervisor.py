@@ -23,6 +23,8 @@ from .contracts import (
     AUTHORIZATION_V2_SCHEMA, JournalReference, ImmutableObjectReference,
     U04EffectResultRecord, parse_effect_result_record, validate_recovery_record,
     RECOVERY_RECORD_FIELDS, closed_canonical_bytes, parse_closed_canonical,
+    require_recovery_permission, validate_rp_record, RP_PUBLICATION_FIELDS,
+    RP_RECORD_FIELDS, RP_GRANT_FIELDS,
 )
 
 
@@ -592,7 +594,7 @@ class AppendReceipt:
 
 
 _U04_BOUNDARIES = {name: object() for name in (
-    "ENTRY", "INIT", "EXEC", "RESULT", "SHUTDOWN", "ADMIT", "DENY", "HISTORY", "RW",
+    "ENTRY", "INIT", "EXEC", "RESULT", "SHUTDOWN", "ADMIT", "DENY", "HISTORY", "RW", "RP",
 )}
 _U04_MODES = frozenset(("FRESH", "LIVE_PENDING", "LIVE", "RECOVERY", "WAITING", "TERMINAL",
                         "SHUTDOWN_ONLY", "EXITED"))
@@ -650,13 +652,16 @@ STORE_FIELD_DOMAINS = {
     "_activation_authentication_service": "B/I",
     "_artifact_verifier": "B",
     "_current_reconciler": "V", "_recovery_writer": "V",
+    "_publication_destinations": "B/C", "_rp_binding": "V", "_rp_grants": "V", "_rp_proofs": "V",
 }
 
 _STORE_AUTHORITY_GROUPS = {
     'durable authority': ('_durable',),
     'immutable provenance': ('identity', 'witness', '_custodian', '_objects',
-        '_authentication_service', '_activation_authentication_service', '_artifact_verifier'),
-    'current volatile capability': ('_current_actor', '_current_reconciler', '_recovery_writer'),
+        '_authentication_service', '_activation_authentication_service', '_artifact_verifier',
+        '_publication_destinations'),
+    'current volatile capability': ('_current_actor', '_current_reconciler', '_recovery_writer',
+        '_rp_binding', '_rp_grants', '_rp_proofs'),
     'derived historical view': ('_receipts', '_event_bytes', '_effect_capabilities', '_effect_status',
         '_effect_results', '_effect_acceptance_counts', '_accepted_effects', '_invalidated_effects',
         '_taint', '_consumed', '_measurement_window', '_window_epoch', '_publication_grants',
@@ -675,7 +680,7 @@ STORE_FIELD_CLASSIFICATION = {
            'reset': ('preserve exact D bytes or pinned B/I/W/C service reference'
                      if name in ('identity', 'witness', '_custodian', '_objects', '_durable', 'torn_tail',
                                  '_authentication_service', '_activation_authentication_service',
-                                 '_artifact_verifier',
+                                 '_artifact_verifier', '_publication_destinations',
                                  '_lock', '_authorization_lock', 'authorization_lock') else
                      'discard; rebuild only validated history, never execution membership')}
     for category, names in _STORE_AUTHORITY_GROUPS.items() for name in names
@@ -696,6 +701,21 @@ class RecoveryWriterBinding:
     session_id: str
     fence: int
     registry: tuple
+    token: object
+
+
+@dataclass(frozen=True, eq=False)
+class RecoveryPublicationBinding:
+    actor: object
+    authorization: object
+    token: object
+
+
+@dataclass(frozen=True, eq=False)
+class RecoveryPublicationGrant:
+    """Opaque store registration; canonical bytes contain only R6 G fields."""
+    binding: RecoveryPublicationBinding
+    canonical_bytes: bytes
     token: object
 
 
@@ -893,6 +913,7 @@ class OfflineWitness:
             "DENY": {"LIVE", "RECOVERY", "WAITING", "TERMINAL", "FRESH", "LIVE_PENDING"},
             "HISTORY": {"LIVE", "FRESH", "LIVE_PENDING", "RECOVERY", "WAITING", "TERMINAL"},
             "RW": {"RECOVERY", "TERMINAL"},
+            "RP": {"RECOVERY", "TERMINAL"},
         }
         if actor.mode not in modes.get(boundary, set()):
             raise AuthorizationDenied("witness boundary/mode mismatch")
@@ -938,11 +959,14 @@ class OfflineWitness:
                 self.pending[envelope.revision] = reservation
                 return reservation
 
-        if envelope.boundary == 'RW':
+        if envelope.boundary in ('RW', 'RP'):
             if self._store is None:
                 raise AuthorizationDenied('RW requires its bound original store')
             with self._store.authorization_lock, self._store._lock:
-                self._store._validate_rw_envelope(actor, envelope)
+                if envelope.boundary == 'RP':
+                    self._store._validate_rp_envelope(actor, envelope)
+                else:
+                    self._store._validate_rw_envelope(actor, envelope)
                 return reserve_exact()
         return reserve_exact()
 
@@ -1235,7 +1259,7 @@ class OfflineWitness:
             return changed
 
     def deny_campaign(self, actor, code, envelopes, *, _boundary):
-        with self._lock:
+        with self._allocation_context(), self._lock:
             self.authenticate(actor, actor.store_identity, 'DENY')
             return self._deny_from_complete_frontier(actor, code, envelopes, _boundary=_boundary)
 
@@ -1312,6 +1336,9 @@ class OfflineWitness:
                 any(a.get('record_type') == 'EFFECT_ACCEPTED' and
                     a.get('effect_id') == e.get('operation_id') for a in events) and
                 self._custodian.confirms_publication_conflict(e) for e in events)
+            if complete and not valid and self._store is not None:
+                valid = any(self._store._independent_rp_conflict(e) for e in events
+                            if e.get('record_type') == 'RECOVERY_PUBLICATION_RESULT')
         else:
             # Remaining positive predicates stay unavailable until their
             # exact independent proof verifier is integrated.
@@ -1436,12 +1463,13 @@ class OfflineDurableStore:
     """Append-only framed-journal model with independent witness semantics."""
 
     def __setattr__(self, name, value):
-        if (name in ('identity', 'witness', '_custodian', '_authentication_service', '_activation_authentication_service', '_artifact_verifier') and
+        if (name in ('identity', 'witness', '_custodian', '_authentication_service', '_activation_authentication_service', '_artifact_verifier', '_publication_destinations') and
                 name in self.__dict__ and self.__dict__[name] is not value):
             raise AuthorizationDenied('bootstrap identity and authentication references are pinned for this store lifetime')
         object.__setattr__(self, name, value)
 
-    def __init__(self, identity, witness, *, chair_verifier=None, activation_verifier=None):
+    def __init__(self, identity, witness, *, chair_verifier=None, activation_verifier=None,
+                 publication_destinations=()):
         if witness._store is not None:
             raise AuthorizationDenied('independent witness is already bound to its original store')
         self.identity = identity
@@ -1512,6 +1540,17 @@ class OfflineDurableStore:
         self._historical_producers = {}
         self._acceptance_acks = {}
         self._activation_authentication_service = activation_verifier
+        self._publication_destinations = tuple(publication_destinations)
+        self._rp_binding = None
+        self._rp_grants = {}
+        self._rp_proofs = {}
+        from .evidence import OfflinePublicationDestination
+        if (any(type(p) is not OfflinePublicationDestination for p in self._publication_destinations) or
+                len({p.destination_id for p in self._publication_destinations}) != len(self._publication_destinations) or
+                len({p.port_identity for p in self._publication_destinations}) != len(self._publication_destinations)):
+            raise AuthorizationDenied('unique exact offline destination setup required')
+        for port in self._publication_destinations:
+            port.bind_store(self)
 
     @property
     def health(self):
@@ -1690,7 +1729,7 @@ class OfflineDurableStore:
             if self._current_actor is not actor:
                 raise AuthorizationDenied("captured current store actor required")
             self.witness.authenticate(actor, self.identity, boundary)
-            if facts is not None and (boundary in ('RESULT', 'SHUTDOWN', 'DENY', 'HISTORY', 'RW') or
+            if facts is not None and (boundary in ('RESULT', 'SHUTDOWN', 'DENY', 'HISTORY', 'RW', 'RP') or
                     boundary == 'INIT' and event.get('state') != 'CAMPAIGN_ADMITTED'):
                 raise AuthorizationDenied('this record admits no additional authority facts')
             if event.get('schema_version') == 'u04-record/v1':
@@ -1743,6 +1782,9 @@ class OfflineDurableStore:
             elif boundary == 'RW':
                 self._require_recovery_writer(self._recovery_writer, actor)
                 self._validate_recovery_payload(event)
+            elif boundary == 'RP':
+                self._require_rp_binding(self._rp_binding, actor)
+                self._validate_rp_payload(event)
             elif boundary == 'DENY':
                 denial = self.witness.denial(actor)
                 required = set(self._u04_common(actor, 'CAMPAIGN_EXECUTION_DENIED', 'DENIAL', False)) | {
@@ -2173,6 +2215,476 @@ class OfflineDurableStore:
                     tuple(RECOVERY_RECORD_FIELDS), object())
             return self._recovery_writer
 
+    def recovery_publication_binding(self, actor, authorization):
+        with self.authorization_lock:
+            self.require_actor(actor, 'RP')
+            self._check_healthy()
+            self.read_verified(0)
+            self.validate_admitted_authorization(authorization)
+            if (actor.authorization_digest != authorization.authorization_digest or
+                    actor.owner_identity not in authorization.recovery_publisher_ids or
+                    not authorization.exact_byte_recovery_authorized):
+                raise AuthorizationDenied('current authorized recovery publisher required')
+            if self._rp_binding is None or self._rp_binding.actor is not actor:
+                self._rp_binding = RecoveryPublicationBinding(actor, authorization, object())
+            return self._rp_binding
+
+    def _require_rp_binding(self, binding, actor=None):
+        if (type(binding) is not RecoveryPublicationBinding or binding is not self._rp_binding or
+                binding.actor is not self._current_actor or
+                actor is not None and actor is not binding.actor):
+            raise AuthorizationDenied('exact current opaque RP binding required')
+        self.require_actor(binding.actor, 'RP')
+        self._check_healthy()
+        self.validate_admitted_authorization(binding.authorization)
+        if (binding.actor.owner_identity not in binding.authorization.recovery_publisher_ids or
+                binding.actor.authorization_digest != binding.authorization.authorization_digest or
+                not binding.authorization.exact_byte_recovery_authorized):
+            raise AuthorizationDenied('recovery publisher identity/policy mismatch')
+        return binding.actor
+
+    def _rp_port(self, authorization, destination_id):
+        rules = [r for r in authorization.destination_rules if r.destination_id == destination_id]
+        ports = [p for p in self._publication_destinations if p.destination_id == destination_id]
+        if (len(rules) != 1 or len(ports) != 1 or ports[0]._store is not self or
+                ports[0].port_identity != rules[0].port_identity):
+            raise AuthorizationDenied('exact configured authorized destination port required')
+        return ports[0]
+
+    @staticmethod
+    def _rp_object_identity(subject):
+        return {name: subject[name] for name in RP_PUBLICATION_FIELDS - {'logical_operation_id'}}
+
+    def _validate_rp_subject(self, binding, subject, operation):
+        self._require_rp_binding(binding)
+        auth = binding.authorization
+        supplement = subject.get('original_or_supplement') == 'SUPPLEMENT'
+        require_recovery_permission(auth, operation, supplement=supplement)
+        original = self._exact_ref(subject['original_intent_ref'])
+        event = original['event']
+        if (event.get('record_type') != 'PUBLICATION' or event.get('operation') != 'intent' or
+                not self.publication_record_provenanced(original, phase='INTENT') or
+                event.get('authorization_digest') != auth.authorization_digest or
+                event.get('campaign_id') != auth.campaign_id):
+            raise AuthorizationDenied('exact original witnessed INTENT-phase transaction required')
+        if supplement:
+            return self._validate_rp_supplement_subject(auth, subject, operation, original)
+        if (subject.get('original_or_supplement') != 'ORIGINAL' or subject.get('supplement_ref') is not None or
+                event.get('destination') != subject['destination_id'] or event.get('object_key') != subject['object_key']):
+            raise AuthorizationDenied('original publication branch substitution')
+        port = self._rp_port(auth, subject['destination_id'])
+        source = port.source(subject['original_intent_ref'], subject['object_key'])
+        for field in RP_PUBLICATION_FIELDS - {'logical_operation_id'}:
+            if subject[field] != source[field]:
+                raise AuthorizationDenied('exact independently retained source/subject binding required')
+        raw = self._object_proof(subject['source_object'])
+        if (raw != source['source_bytes'] or source['authorization_digest'] != auth.authorization_digest or
+                subject['source_object']['object_id'] != event['source_object_id'] or
+                subject['source_object']['sha256'] != event['object_digest'] or
+                subject['source_object']['length'] != event['length']):
+            raise AuthorizationDenied('source object/bytes/admitted authority substitution')
+        rules = [r for r in auth.object_rules if r.rule_id == subject['policy_rule_id']]
+        if (len(rules) != 1 or rules[0].subject_id != subject['subject_id'] or
+                rules[0].destination_id != subject['destination_id'] or rules[0].object_key != subject['object_key'] or
+                rules[0].evidence_kind != source['evidence_kind']):
+            raise AuthorizationDenied('exact object policy rule required')
+        rule = rules[0]
+        if rule.evidence_kind in ('CAMPAIGN_EVIDENCE', 'FAILURE_EVIDENCE'):
+            if rule.subject_id != event['campaign_id']:
+                raise AuthorizationDenied('original campaign evidence subject mismatch')
+        elif rule.evidence_kind == 'BOOT_CLOSURE_EVIDENCE':
+            candidates = [f for f in self.provenanced_frames('BOOT_CLOSURE_CANDIDATE_FINALIZED')
+                if f['event'].get('boot_id') == rule.subject_id and
+                f['event'].get('candidate_digest') == subject['source_object']['sha256'] and
+                f['event'].get('candidate_bytes') == raw.hex()]
+            if len(candidates) != 1:
+                raise AuthorizationDenied('original boot evidence subject mismatch')
+        else:
+            matches = [f for f in self._committed_frames() if f['event'].get('state') == 'ATTEMPT_COMPLETE' and
+                rule.subject_id in (f['event'].get('slot_id'), f['event'].get('attempt_id')) and
+                f['event'].get('core_digest') == subject['source_object']['sha256']]
+            if len(matches) != 1:
+                raise AuthorizationDenied('original attempt evidence provenance required')
+        allowed_ids = {port.operation_id(source, op) for op in (
+            'ENSURE_EXACT_OBJECT', 'ESTABLISH_DURABILITY', 'VERIFY_EXACT_OBJECT')}
+        if subject['logical_operation_id'] not in allowed_ids or (
+                operation != 'QUERY' and subject['logical_operation_id'] != port.operation_id(source, operation)):
+            raise AuthorizationDenied('exact original logical operation identity required')
+        return port, source
+
+    def _validate_rp_supplement_subject(self, auth, subject, operation, original):
+        # Historical semantic proof is also used by RW reporting. Only the RP
+        # caller supplies current publication authority; this helper grants none.
+        if subject.get('original_or_supplement') != 'SUPPLEMENT' or subject.get('supplement_ref') is None:
+            raise AuthorizationDenied('exact supplement branch required')
+        supplement = self._exact_ref(subject['supplement_ref'])['event']
+        if supplement.get('record_type') != 'RECOVERY_SUPPLEMENT':
+            raise AuthorizationDenied('committed original recovery supplement required')
+        self._validate_recovery_payload(supplement)
+        parent_port = self._rp_port(auth, original['event']['destination'])
+        parent_source = parent_port.source(subject['original_intent_ref'], original['event']['object_key'])
+        parent = self._exact_ref(supplement['parent_ref'])['event']
+        linked = (supplement['parent_ref'] == subject['original_intent_ref'] or
+            parent.get('record_type') == 'RECOVERY_PUBLICATION_RESULT' and
+            parent.get('original_intent_ref') == subject['original_intent_ref'] or
+            _u04_canonical(parent) == parent_source['source_bytes'] or
+            parent.get('core_digest') == parent_source['source_object']['sha256'])
+        if not linked:
+            raise AuthorizationDenied('supplement parent lacks original evidence publication provenance')
+        rules = [r for r in auth.supplement_rules if r.rule_id == subject['policy_rule_id']]
+        if (len(rules) != 1 or rules[0].destination_id != subject['destination_id'] or
+                parent_source['evidence_kind'] not in rules[0].parent_evidence_kinds or
+                supplement['supplement_kind'] not in rules[0].supplement_kinds):
+            raise AuthorizationDenied('exact supplement parent/kind/policy required')
+        raw = self._object_proof(supplement['evidence'])
+        key = '%s/recovery/%s/%s/%s/%s' % (rules[0].namespace_prefix,
+            _sha(auth.campaign_id.encode('utf-8')), parent_source['source_object']['sha256'],
+            supplement['supplement_kind'], _sha(raw))
+        if (subject['object_key'] != key or subject['source_object'] != supplement['evidence'] or
+                subject['subject_id'] != parent_source['subject_id'] or
+                subject['producer_refs'] != [subject['supplement_ref']]):
+            raise AuthorizationDenied('immutable supplement key/source/subject substitution')
+        port = self._rp_port(auth, subject['destination_id'])
+        source = {k: copy.deepcopy(subject[k]) for k in RP_PUBLICATION_FIELDS - {'logical_operation_id'}}
+        source.update(source_bytes=raw, evidence_kind=parent_source['evidence_kind'],
+            authorization_digest=auth.authorization_digest, campaign_id=auth.campaign_id,
+            boot_id=parent_source['boot_id'], original_owner='supplement-' + subject['supplement_ref']['event_id'],
+            original_create_ref=None)
+        ids = {port.operation_id(source, op) for op in (
+            'ENSURE_EXACT_OBJECT', 'ESTABLISH_DURABILITY', 'VERIFY_EXACT_OBJECT')}
+        if subject['logical_operation_id'] not in ids or (
+                operation != 'QUERY' and subject['logical_operation_id'] != port.operation_id(source, operation)):
+            raise AuthorizationDenied('exact supplement logical operation required')
+        return port, source
+
+    def recovery_supplement_subject(self, binding, original_intent_ref, supplement_ref, operation, *, policy_rule_id):
+        with self.authorization_lock:
+            self._require_rp_binding(binding)
+            require_recovery_permission(binding.authorization, operation, supplement=True)
+            original = self._exact_ref(original_intent_ref)['event']
+            parent = self._rp_port(binding.authorization, original.get('destination')).source(
+                original_intent_ref, original.get('object_key'))
+            supplement = self._exact_ref(supplement_ref)['event']
+            rules = [r for r in binding.authorization.supplement_rules if r.rule_id == policy_rule_id]
+            if len(rules) != 1 or supplement.get('record_type') != 'RECOVERY_SUPPLEMENT':
+                raise AuthorizationDenied('exact supplement and policy required')
+            raw = self._object_proof(supplement['evidence'])
+            subject = dict(original_intent_ref=copy.deepcopy(original_intent_ref), subject_id=parent['subject_id'],
+                producer_refs=[copy.deepcopy(supplement_ref)], source_object=copy.deepcopy(supplement['evidence']),
+                destination_id=rules[0].destination_id,
+                object_key='%s/recovery/%s/%s/%s/%s' % (rules[0].namespace_prefix,
+                    _sha(binding.authorization.campaign_id.encode('utf-8')), parent['source_object']['sha256'],
+                    supplement['supplement_kind'], _sha(raw)), original_or_supplement='SUPPLEMENT',
+                supplement_ref=copy.deepcopy(supplement_ref), policy_rule_id=policy_rule_id)
+            port = self._rp_port(binding.authorization, subject['destination_id'])
+            subject['logical_operation_id'] = port.operation_id(subject,
+                'ENSURE_EXACT_OBJECT' if operation == 'QUERY' else operation)
+            self._validate_rp_subject(binding, subject, operation)
+            return subject
+
+    def recovery_publication_subject(self, binding, original_intent_ref, operation):
+        with self.authorization_lock:
+            self._require_rp_binding(binding)
+            event = self._exact_ref(original_intent_ref)['event']
+            port = self._rp_port(binding.authorization, event.get('destination'))
+            source = port.source(original_intent_ref, event.get('object_key'))
+            rules = [r for r in binding.authorization.object_rules if r.destination_id == source['destination_id'] and
+                     r.object_key == source['object_key']]
+            if len(rules) != 1:
+                raise AuthorizationDenied('exact original object rule required')
+            subject = {k: copy.deepcopy(source[k]) for k in RP_PUBLICATION_FIELDS - {'logical_operation_id'}}
+            subject.update(logical_operation_id=port.operation_id(source,
+                'ENSURE_EXACT_OBJECT' if operation == 'QUERY' else operation),
+                original_or_supplement='ORIGINAL', supplement_ref=None, policy_rule_id=rules[0].rule_id)
+            self._validate_rp_subject(binding, subject, operation)
+            return subject
+
+    def _rp_intent_for(self, event):
+        if event['record_type'] == 'RECOVERY_PUBLICATION_INTENT':
+            return event
+        if event['record_type'] == 'RECOVERY_PUBLICATION_ACCEPTED':
+            candidates = [self._exact_ref(event['recovery_intent_ref'])]
+        else:
+            candidates = [f for f in self._committed_frames() if
+                f['event'].get('record_type') == 'RECOVERY_PUBLICATION_INTENT' and
+                all(f['event'].get(k) == event[k] for k in RP_PUBLICATION_FIELDS)]
+        if not candidates:
+            raise AuthorizationDenied('committed exact RP intent required')
+        intent = candidates[-1]['event']
+        if intent.get('record_type') != 'RECOVERY_PUBLICATION_INTENT' or any(
+                intent.get(k) != event[k] for k in RP_PUBLICATION_FIELDS):
+            raise AuthorizationDenied('RP intent reference substitution')
+        return intent
+
+    def _validate_rp_envelope(self, actor, envelope):
+        self._require_rp_binding(self._rp_binding, actor)
+        event = parse_closed_canonical(envelope.payload_bytes)
+        if (envelope.authority_fact_bytes != _u04_canonical({'producer': actor.producer()}) or
+                envelope.authority_class != event['authority_class'] or
+                envelope.payload_digest != _sha(envelope.payload_bytes) or
+                any(event.get(k) != v for k, v in self._u04_common(actor, event['record_type'],
+                    event['authority_class'], False).items())):
+            raise AuthorizationDenied('exact closed captured RP envelope required')
+        self._validate_rp_payload(event)
+
+    def _validate_rp_payload(self, event):
+        validate_rp_record(event)
+        binding = self._rp_binding
+        kind = event['record_type']
+        subject = self._rp_intent_for(event)
+        operation = event['operation'] if kind == 'RECOVERY_PUBLICATION_ACCEPTED' else 'QUERY'
+        port, source = self._validate_rp_subject(binding, subject, operation)
+        if kind == 'RECOVERY_PUBLICATION_INTENT':
+            return
+        if kind == 'RECOVERY_PUBLICATION_ACCEPTED':
+            grant = self._rp_grants.get(event['grant_id'])
+            if (grant is None or grant.binding is not binding or
+                    parse_closed_canonical(grant.canonical_bytes) != {k: event[k] for k in RP_GRANT_FIELDS} or
+                    event['boot_id'] != source['boot_id'] or
+                    any(f['event'].get('grant_id') == event['grant_id'] for f in self._committed_frames())):
+                raise AuthorizationDenied('registered unconsumed exact RP grant required')
+            port.validate_precondition(binding, subject, event['operation'])
+            if event['previous_result_ref'] is not None:
+                prior = self._exact_ref(event['previous_result_ref'])['event']
+                if (prior.get('record_type') != 'RECOVERY_PUBLICATION_RESULT' or
+                        self._rp_object_identity(prior) != self._rp_object_identity(subject)):
+                    raise AuthorizationDenied('exact same-object prior result required')
+            if event['continuation_owner_receipt'] is not None:
+                receipt, _ = port.authenticate_receipt(self._object_proof(event['continuation_owner_receipt']))
+                if receipt['outcome'] != 'OWNED_EMPTY_RESERVED' or receipt['original_intent_ref'] != subject['original_intent_ref']:
+                    raise AuthorizationDenied('exact original owned-empty proof required')
+        elif kind == 'RECOVERY_PUBLICATION_RESULT':
+            if event['query_or_grant'] == 'GRANT':
+                accepted = self._exact_ref(event['acceptance_ref'])['event']
+                if (accepted.get('record_type') != 'RECOVERY_PUBLICATION_ACCEPTED' or
+                        any(accepted[k] != event[k] for k in RP_PUBLICATION_FIELDS)):
+                    raise AuthorizationDenied('exact committed RP acceptance required')
+                actual = (self._object_proof(event['destination_receipt'])
+                          if event['destination_receipt'] is not None else None)
+                if port._grant_results.get(accepted['grant_id']) != (actual, event['reason_code']):
+                    raise AuthorizationDenied('destination result must belong to this exact consumed grant')
+            if event['destination_receipt'] is None:
+                missing = (not port.available or subject['object_key'] not in port._subjects or
+                    subject.get('original_or_supplement') == 'SUPPLEMENT' and
+                    subject['object_key'] not in port._reserved_subjects or
+                    subject['logical_operation_id'] not in port._operations or
+                    port.operation_id(source, 'ENSURE_EXACT_OBJECT') not in port._operations)
+                unavailable = (missing and event['reason_code'] == 'DESTINATION_REGISTRY_UNAVAILABLE' or
+                    not port.readback_available and event['reason_code'] == 'READBACK_UNAVAILABLE')
+                if not unavailable:
+                    raise AuthorizationDenied('independent destination unavailability required')
+            else:
+                proof_bytes = self._object_proof(event['destination_receipt'])
+                receipt, raw = port.authenticate_receipt(proof_bytes)
+                if event['reason_code'] != port.observation_reason(proof_bytes):
+                    raise AuthorizationDenied('exact independently supported observation reason required')
+                for k in ('original_intent_ref', 'destination_id', 'object_key', 'logical_operation_id',
+                          'authorization_digest', 'campaign_id', 'outcome'):
+                    if receipt[k] != event[k]:
+                        raise AuthorizationDenied('destination result substitution')
+                if event['outcome'] == 'VERIFIED' and (raw != source['source_bytes'] or
+                        not receipt['object_durable'] or not receipt['namespace_durable']):
+                    raise AuthorizationDenied('exact independent bytes and both durability proofs required')
+        else:
+            for ref in event['result_refs']:
+                result = self._exact_ref(ref)['event']
+                if (result.get('record_type') != 'RECOVERY_PUBLICATION_RESULT' or
+                        result.get('outcome') != 'VERIFIED' or
+                        any(result[k] != event[k] for k in RP_PUBLICATION_FIELDS)):
+                    raise AuthorizationDenied('exact verified linked destination result required')
+            for name in ('durability_receipt', 'independent_readback', 'namespace_ack'):
+                receipt, raw = port.authenticate_receipt(self._object_proof(event[name]))
+                if (receipt['outcome'] != 'VERIFIED' or raw != source['source_bytes'] or
+                        not receipt['object_durable'] or not receipt['namespace_durable'] or
+                        receipt['object_key'] != subject['object_key'] or
+                        receipt['original_intent_ref'] != subject['original_intent_ref']):
+                    raise AuthorizationDenied('independent same-object complete publication proof required')
+
+    def validate_rp_initiation(self, grant):
+        with self.authorization_lock:
+            if type(grant) is not RecoveryPublicationGrant:
+                raise AuthorizationDenied('opaque RP grant required')
+            actor = self._require_rp_binding(grant.binding)
+            payload = parse_closed_canonical(grant.canonical_bytes)
+            if self._rp_grants.get(payload['grant_id']) is not grant:
+                raise AuthorizationDenied('historical or copied grant cannot initiate')
+            frames = [f for f in self._committed_frames() if f['event'].get('record_type') ==
+                      'RECOVERY_PUBLICATION_ACCEPTED' and f['event'].get('grant_id') == payload['grant_id']]
+            if len(frames) != 1 or not self.witness.acknowledged_current(actor, frames[0]['event_id']):
+                raise AuthorizationDenied('exact independent RP acceptance acknowledgement required')
+            event = frames[0]['event']
+            intents = [f for f in self._committed_frames() if
+                f['event'].get('record_type') == 'RECOVERY_PUBLICATION_INTENT' and
+                f['event'].get('logical_operation_id') == payload['logical_operation_id']]
+            if not intents or self._reference(intents[-1]['receipt']) != payload['recovery_intent_ref']:
+                raise AuthorizationDenied('superseded recovery operation cannot initiate')
+            if {k: event[k] for k in RP_GRANT_FIELDS} != payload:
+                raise AuthorizationDenied('accepted grant bytes differ')
+            subject = self._rp_intent_for(event)
+            port, source = self._validate_rp_subject(grant.binding, subject, payload['operation'])
+            return actor, payload, subject, port, source, self._reference(frames[0]['receipt'])
+
+    def _retain_rp_receipt(self, binding, subject, raw):
+        actor = self._require_rp_binding(binding)
+        port, _ = self._validate_rp_subject(binding, subject, 'QUERY')
+        receipt, _ = port.authenticate_receipt(raw)
+        if any(receipt[k] != subject[k] for k in ('original_intent_ref', 'destination_id',
+                                                'object_key', 'logical_operation_id')):
+            raise AuthorizationDenied('exact requested destination receipt required')
+        object_id = 'rp-proof-' + _sha(raw)
+        self._rp_proofs[object_id] = (binding, subject, raw)
+        try:
+            self.put_object(object_id, raw, actor=actor, boundary='RP')
+        finally:
+            self._rp_proofs.pop(object_id, None)
+        return {'object_id': object_id, 'sha256': _sha(raw), 'length': len(raw)}
+
+    def _record_rp_result(self, binding, subject, raw, reason, accepted_ref=None, *, fault=None):
+        actor = self._require_rp_binding(binding)
+        port, source = self._validate_rp_subject(binding, subject, 'QUERY')
+        # This lower result entry point validates the complete observation
+        # before its first immutable object write, not only at journal commit.
+        if raw is None:
+            missing = (not port.available or subject['object_key'] not in port._subjects or
+                subject.get('original_or_supplement') == 'SUPPLEMENT' and
+                subject['object_key'] not in port._reserved_subjects or
+                subject['logical_operation_id'] not in port._operations or
+                port.operation_id(source, 'ENSURE_EXACT_OBJECT') not in port._operations)
+            if not (missing and reason == 'DESTINATION_REGISTRY_UNAVAILABLE' or
+                    not port.readback_available and reason == 'READBACK_UNAVAILABLE'):
+                raise AuthorizationDenied('independently proven observation unavailability required')
+        else:
+            observed, content = port.authenticate_receipt(raw)
+            if (reason != port.observation_reason(raw) or
+                    any(observed[k] != subject[k] for k in ('original_intent_ref', 'destination_id',
+                        'object_key', 'logical_operation_id')) or
+                    observed['authorization_digest'] != actor.authorization_digest or
+                    observed['campaign_id'] != actor.campaign_id or
+                    observed['outcome'] == 'VERIFIED' and (content != source['source_bytes'] or
+                        not observed['object_durable'] or not observed['namespace_durable'])):
+                raise AuthorizationDenied('exact authenticated destination observation required')
+        if accepted_ref is not None:
+            accepted = self._exact_ref(accepted_ref)['event']
+            if (accepted.get('record_type') != 'RECOVERY_PUBLICATION_ACCEPTED' or
+                    any(accepted[k] != subject[k] for k in RP_PUBLICATION_FIELDS) or
+                    port._grant_results.get(accepted['grant_id']) != (raw, reason)):
+                raise AuthorizationDenied('exact accepted original destination initiation/result required')
+        proof = self._retain_rp_receipt(binding, subject, raw) if raw is not None else None
+        event = self._u04_common(actor, 'RECOVERY_PUBLICATION_RESULT', 'EVIDENCE', False)
+        event.update({k: copy.deepcopy(subject[k]) for k in RP_PUBLICATION_FIELDS})
+        event.update(acceptance_ref=accepted_ref, query_or_grant='GRANT' if accepted_ref else 'QUERY',
+            outcome=json.loads(raw)['outcome'] if raw is not None else 'UNKNOWN',
+            destination_receipt=proof, reason_code=reason)
+        receipt = self._commit_u04(actor, 'RP', event, fault=fault)
+        conflict = self._independent_rp_conflict(event)
+        if conflict:
+            self.witness.deny_campaign(actor, 'PUBLICATION_INTEGRITY_CONFLICT',
+                [f['envelope'] for f in self._committed_frames()], _boundary=_U04_BOUNDARIES['DENY'])
+        if event['outcome'] in ('UNKNOWN', 'PARTIAL', 'CONTENT_CONFLICT', 'OWNER_CONFLICT', 'EXACT_PRESENT'):
+            writer = self.recovery_writer_binding(actor)
+            self.record_recovery_obligation(writer, obligation_id='publication-obligation-' + receipt.event_id,
+                kind='PUBLICATION_UNVERIFIED', reason_code=reason or 'DURABILITY_UNPROVEN',
+                subject_refs=[subject['original_intent_ref'], self._reference(receipt)],
+                target_ref={'kind': 'DESTINATION', 'identity': self._rp_port(binding.authorization,
+                    subject['destination_id']).port_identity, 'destination_id': subject['destination_id'],
+                    'object_key': subject['object_key'], 'subject_ref': subject['original_intent_ref'],
+                    'subject_state': 'KNOWN', 'evidence_ref': proof,
+                    'evidence_state': 'AVAILABLE' if proof is not None else 'UNAVAILABLE'})
+        if conflict:
+            self.mirror_denial(actor)
+        return receipt
+
+    def query_recovery_publication(self, binding, subject, *, intent_fault=None, result_fault=None):
+        with self.authorization_lock:
+            actor = self._require_rp_binding(binding)
+            port, _ = self._validate_rp_subject(binding, subject, 'QUERY')
+            event = self._u04_common(actor, 'RECOVERY_PUBLICATION_INTENT', 'EVIDENCE', False)
+            event.update(copy.deepcopy(subject))
+            # Exact key closure rejects arbitrary request fields before D mutation.
+            validate_rp_record(event)
+            committed = self._commit_u04(actor, 'RP', event, fault=intent_fault)
+            if subject['original_or_supplement'] == 'SUPPLEMENT' and port.available:
+                port.register_supplement(binding, subject, self._reference(committed))
+            if port.available and subject['object_key'] in port._subjects:
+                port.exclude_original_writers(binding, subject)
+            raw, reason = port.observe(binding, subject)
+            return self._record_rp_result(binding, subject, raw, reason, fault=result_fault)
+
+    def perform_recovery_publication(self, binding, subject, operation, *, fault_at=None, fault=None):
+        with self.authorization_lock:
+            actor = self._require_rp_binding(binding)
+            port, source = self._validate_rp_subject(binding, subject, operation)
+            # This compound operation also observes and persists its result.
+            self._validate_rp_subject(binding, subject, 'QUERY')
+            intent = self._u04_common(actor, 'RECOVERY_PUBLICATION_INTENT', 'EVIDENCE', False)
+            intent.update(copy.deepcopy(subject))
+            validate_rp_record(intent)
+            if operation in ('ESTABLISH_DURABILITY', 'VERIFY_EXACT_OBJECT'):
+                verified = [f for f in self._committed_frames() if f['event'].get('record_type') ==
+                    'RECOVERY_PUBLICATION_VERIFIED' and
+                    self._rp_object_identity(f['event']) == self._rp_object_identity(subject)]
+                if verified:
+                    return verified[-1]['receipt']
+                old = port._operations.get(subject['logical_operation_id'])
+                if old is not None and old['status'] == 'COMPLETE':
+                    result = self.query_recovery_publication(binding, subject)
+                    if (operation == 'VERIFY_EXACT_OBJECT' and
+                            self._exact_ref(self._reference(result))['event']['outcome'] == 'VERIFIED'):
+                        return self._complete_rp_verification(binding, subject, result,
+                            fault=fault if fault_at == 'verified' else None)
+                    return result
+            port.validate_precondition(binding, subject, operation)
+            intent_ref = self._reference(self._commit_u04(actor, 'RP', intent,
+                fault=fault if fault_at == 'intent' else None))
+            if subject['original_or_supplement'] == 'SUPPLEMENT':
+                port.register_supplement(binding, subject, intent_ref)
+            port.exclude_original_writers(binding, subject)
+            before, _ = port.observe(binding, subject)
+            owner_ref = self._retain_rp_receipt(binding, subject, before) if operation == 'CONTINUE_RESERVED_EXACT' else None
+            prior = [f for f in self._committed_frames() if
+                f['event'].get('record_type') == 'RECOVERY_PUBLICATION_RESULT' and
+                self._rp_object_identity(f['event']) == self._rp_object_identity(subject)]
+            accepted = self._u04_common(actor, 'RECOVERY_PUBLICATION_ACCEPTED', 'EVIDENCE_RECOVERY', False)
+            accepted.update({k: copy.deepcopy(subject[k]) for k in RP_PUBLICATION_FIELDS})
+            identity = '%s-rp-%d' % (actor.incarnation_id, self.revision + 1)
+            accepted.update(grant_id=identity, consumption_id=identity + '-consumption',
+                recovery_intent_ref=intent_ref, boot_id=source['boot_id'], operation=operation,
+                recovery_writer_id=actor.owner_identity, chain_position='FOLLOWUP' if prior else 'INITIAL',
+                previous_result_ref=self._reference(prior[-1]['receipt']) if prior else None,
+                continuation_owner_receipt=owner_ref)
+            grant = RecoveryPublicationGrant(binding,
+                _u04_canonical({k: accepted[k] for k in RP_GRANT_FIELDS}), object())
+            self._rp_grants[identity] = grant
+            accepted_ref = self._reference(self._commit_u04(actor, 'RP', accepted,
+                fault=fault if fault_at == 'accepted' else None))
+            port.arm_recovery_grant(grant)
+            raw, reason = port.initiate_recovery(grant, fault=fault if fault_at == 'destination' else None)
+            result = self._record_rp_result(binding, subject, raw, reason, accepted_ref,
+                fault=fault if fault_at == 'result' else None)
+            if operation != 'VERIFY_EXACT_OBJECT':
+                return result
+            return self._complete_rp_verification(binding, subject, result,
+                fault=fault if fault_at == 'verified' else None)
+
+    def _complete_rp_verification(self, binding, subject, result, *, fault=None):
+        """Commit independently verified history, including a lost effect response.
+
+        This path never claims or starts a destination operation. The RP writer
+        repeats all result/receipt validation before committing the closed record.
+        """
+        with self.authorization_lock:
+            actor = self._require_rp_binding(binding)
+            self._validate_rp_subject(binding, subject, 'VERIFY_EXACT_OBJECT')
+            shape = self._u04_common(actor, 'RECOVERY_PUBLICATION_INTENT', 'EVIDENCE', False)
+            shape.update(copy.deepcopy(subject))
+            validate_rp_record(shape)
+            proof = self._exact_ref(self._reference(result))['event']['destination_receipt']
+            verified = self._u04_common(actor, 'RECOVERY_PUBLICATION_VERIFIED', 'EVIDENCE', False)
+            verified.update({k: copy.deepcopy(subject[k]) for k in RP_PUBLICATION_FIELDS})
+            verified.update(result_refs=[self._reference(result)], durability_receipt=proof,
+                independent_readback=proof, namespace_ack=proof)
+            return self._commit_u04(actor, 'RP', verified, fault=fault)
+
     def _require_recovery_writer(self, binding, actor=None):
         if (type(binding) is not RecoveryWriterBinding or binding is not self._recovery_writer or
                 binding.actor is not self._current_actor or actor is not None and binding.actor is not actor):
@@ -2257,10 +2769,7 @@ class OfflineDurableStore:
             if target['subject_ref'] is not None: self._exact_ref(target['subject_ref'])
             if target['evidence_ref'] is not None: self._object_proof(target['evidence_ref'])
             if target['kind'] == 'DESTINATION':
-                # B has no recovery destination observation/publication boundary.
-                # Membership alone cannot prove a kind, condition, port, key, or
-                # subject binding. Do not manufacture destination obligations.
-                raise AuthorizationDenied('DESTINATION recovery obligations unavailable in Checkpoint B')
+                self._validate_destination_obligation(event)
             if target['kind'] in ('CUSTODIAN','LOCAL_EVIDENCE'):
                 self._custodian.validate_containment_obligation(event)
             if target['kind'] == 'EFFECT':
@@ -2299,8 +2808,20 @@ class OfflineDurableStore:
             if _sha(raw) != event['evidence']['sha256'] or len(raw) != event['evidence']['length']:
                 raise AuthorizationDenied('exact evidence object required')
             if event['supplement_kind']=='PUBLICATION_READBACK':
-                raise AuthorizationDenied('recovery publication result is unavailable in Checkpoint B')
-            if event['supplement_kind'] == 'VERIFIED_EFFECT_RESULT':
+                result = parent['event']
+                if (result.get('record_type') != 'RECOVERY_PUBLICATION_RESULT' or
+                        result.get('outcome') != 'VERIFIED' or
+                        result.get('destination_receipt') is None or
+                        raw != self._object_proof(result['destination_receipt'])):
+                    raise AuthorizationDenied('exact corresponding committed RP readback result required')
+                port = self._rp_port(self._admitted_payload(), result['destination_id'])
+                receipt, readback = port.authenticate_receipt(raw)
+                if (event['source_id'] != port.port_identity or event['verifier_id'] != port.port_identity or
+                        receipt['outcome'] != 'VERIFIED' or not receipt['object_durable'] or
+                        not receipt['namespace_durable'] or
+                        readback != self._object_proof(result['source_object'])):
+                    raise AuthorizationDenied('exact independently authenticated publication readback required')
+            elif event['supplement_kind'] == 'VERIFIED_EFFECT_RESULT':
                 parsed = parse_effect_result_record(_u04_canonical(parent['event']))
                 if (type(parsed) is not U04EffectResultRecord or
                         raw != self._object_proof(asdict(parsed.result)) or
@@ -2309,6 +2830,97 @@ class OfflineDurableStore:
                 self._validate_result_payload(self._current_actor, parsed)
             else:
                 self._custodian.validate_recovery_supplement(parent, event, raw)
+
+    def _validate_destination_obligation(self, event):
+        target = event['target_ref']
+        auth = self._admitted_payload()
+        ports = [p for p in self._publication_destinations if p.destination_id == target['destination_id']]
+        if len(ports) != 1 or ports[0]._store is not self:
+            raise AuthorizationDenied('actual pinned destination required even for authorization failure')
+        port = ports[0]
+        original = self._exact_ref(target['subject_ref']) if target['subject_ref'] is not None else None
+        if (event['kind'] != 'PUBLICATION_UNVERIFIED' or target['identity'] != port.port_identity or
+                target['subject_state'] != 'KNOWN' or original is None or
+                original['event'].get('operation') != 'intent' or
+                not self.publication_record_provenanced(original, phase='INTENT')):
+            raise AuthorizationDenied('actual authorized destination and exact original subject required')
+        if event['reason_code'] in ('AUTHORIZATION_MISSING', 'DESTINATION_UNAUTHORIZED'):
+            # A proven failure concerns an actual original object, never an
+            # arbitrary target named by a caller or allowlist membership alone.
+            source = port._known(target['subject_ref'], target['object_key'])
+            actual = (original['event'].get('destination') == target['destination_id'] and
+                original['event'].get('object_key') == target['object_key'] and
+                source['authorization_digest'] == auth.authorization_digest and
+                event['subject_refs'] == [target['subject_ref']] and
+                target['evidence_state'] == 'UNAVAILABLE' and target['evidence_ref'] is None)
+            destination_allowed = any(r.destination_id == target['destination_id'] and
+                r.port_identity == port.port_identity for r in auth.destination_rules)
+            object_allowed = any(r.destination_id == target['destination_id'] and
+                r.object_key == target['object_key'] and r.subject_id == source['subject_id'] and
+                r.evidence_kind == source['evidence_kind'] for r in auth.object_rules)
+            missing = (not auth.exact_byte_recovery_authorized or
+                self._current_actor.owner_identity not in auth.recovery_publisher_ids or
+                'VERIFY_EXACT' not in auth.evidence_operations)
+            if not actual or not (missing if event['reason_code'] == 'AUTHORIZATION_MISSING'
+                                  else not destination_allowed or not object_allowed):
+                raise AuthorizationDenied('precisely proven original publication authorization failure required')
+            return
+        self._rp_port(auth, target['destination_id'])
+        results = [self._exact_ref(r)['event'] for r in event['subject_refs']]
+        results = [r for r in results if r.get('record_type') == 'RECOVERY_PUBLICATION_RESULT' and
+            r.get('original_intent_ref') == target['subject_ref'] and
+            r.get('destination_id') == target['destination_id'] and r.get('object_key') == target['object_key']]
+        if len(results) != 1 or target['subject_ref'] not in event['subject_refs']:
+            raise AuthorizationDenied('one exact committed destination observation required')
+        result = results[0]
+        subject = self._rp_intent_for(result)
+        if subject['original_or_supplement'] == 'SUPPLEMENT':
+            self._validate_rp_supplement_subject(auth, subject, 'QUERY', original)
+        else:
+            rules = [r for r in auth.object_rules if r.rule_id == subject['policy_rule_id'] and
+                     r.subject_id == subject['subject_id'] and r.destination_id == target['destination_id'] and
+                     r.object_key == target['object_key']]
+            if len(rules) != 1:
+                raise AuthorizationDenied('exact destination object policy required')
+        if result['destination_receipt'] is None:
+            missing = (not port.available or target['object_key'] not in port._subjects or
+                subject.get('original_or_supplement') == 'SUPPLEMENT' and
+                target['object_key'] not in port._reserved_subjects or
+                result['logical_operation_id'] not in port._operations)
+            unavailable = (missing and result['reason_code'] == 'DESTINATION_REGISTRY_UNAVAILABLE' or
+                not port.readback_available and result['reason_code'] == 'READBACK_UNAVAILABLE')
+            valid = (unavailable and result['outcome'] == 'UNKNOWN' and
+                result['reason_code'] == event['reason_code'] and
+                target['evidence_state'] == 'UNAVAILABLE' and target['evidence_ref'] is None)
+        else:
+            receipt, _ = port.authenticate_receipt(self._object_proof(result['destination_receipt']))
+            reason = {'PARTIAL': 'PARTIAL_OBJECT', 'CONTENT_CONFLICT': 'CONTENT_MISMATCH',
+                'OWNER_CONFLICT': 'RESERVATION_OWNER_MISMATCH', 'UNKNOWN': result['reason_code'],
+                'EXACT_PRESENT': 'DURABILITY_UNPROVEN'}.get(receipt['outcome'])
+            valid = (reason is not None and event['reason_code'] == reason and
+                target['evidence_state'] == 'AVAILABLE' and target['evidence_ref'] == result['destination_receipt'] and
+                all(receipt[k] == result[k] for k in ('original_intent_ref', 'destination_id',
+                    'object_key', 'logical_operation_id', 'authorization_digest', 'campaign_id', 'outcome')))
+        if not valid:
+            raise AuthorizationDenied('independently supported destination condition required')
+
+    def _independent_rp_conflict(self, event):
+        if event.get('outcome') not in ('PARTIAL', 'CONTENT_CONFLICT', 'OWNER_CONFLICT'):
+            return False
+        try:
+            proof = event['destination_receipt']
+            raw = self._object_proof(proof)
+            # Caller holds authorization exclusion, including direct W entry.
+            ports = [p for p in self._publication_destinations if p.destination_id == event['destination_id']]
+            if len(ports) != 1:
+                return False
+            receipt, _ = ports[0].authenticate_receipt(raw)
+            return (receipt['outcome'] == event['outcome'] and
+                receipt['operation_status'] in ('NOT_STARTED', 'COMPLETE') and
+                all(receipt[k] == event[k] for k in ('original_intent_ref', 'destination_id',
+                    'object_key', 'logical_operation_id', 'authorization_digest', 'campaign_id')))
+        except (ContractError, StoreError, KeyError, TypeError):
+            return False
 
     def mirror_denial(self, actor):
         """A failed D mirror never changes the independent irreversible W latch."""
@@ -2807,13 +3419,14 @@ class OfflineDurableStore:
                     "_effect_status", "_effect_results", "_effect_acceptance_counts",
                     "_publication_grants", "_publication_grant_records", "_window_operations",
                     "_window_results", "_slot_grants", "_validated_completions",
-                    "_validated_boot_closures", "_validated_boot_custody", "_historical_producers", "_acceptance_acks"):
+                    "_validated_boot_closures", "_validated_boot_custody", "_historical_producers", "_acceptance_acks", "_rp_grants", "_rp_proofs"):
                 setattr(self, name, {})
             for name in ("_taint", "_consumed", "_active_creation_grants", "_accepted_effects",
                     "_invalidated_effects", "_consumed_publication_grants", "_initial_window_operations"):
                 setattr(self, name, set())
             self._volatile = []
             self._current_actor = self._current_reconciler = self._initialization_token = self._recovery_writer = None
+            self._rp_binding = None
             self._validated_campaign_closure = None
             self._entry_mode = "INSPECTION"
             self._supervisor_generation = self.witness.high_generation
@@ -3498,7 +4111,14 @@ class OfflineDurableStore:
     def crash(self):
         # A same-thread hook is revoke-only. Exhaustive reset must occur after
         # the interrupted stack unwinds; it cannot replace its captured token.
-        self._current_reconciler = self._recovery_writer = None
+        self._current_reconciler = self._recovery_writer = self._rp_binding = None
+        self._rp_grants.clear()
+        self._rp_proofs.clear()
+        for destination in self._publication_destinations:
+            # These two indexes are V, unlike the destination's retained C
+            # bytes/claims. Revocation cannot erase an already-started effect.
+            destination._source_bindings.clear()
+            destination._eligible_grants.clear()
         if self._current_actor is not None:
             actor = self._current_actor
             self._execution_revoked = self._publication_prohibited = True
@@ -3761,11 +4381,22 @@ class OfflineDurableStore:
             if self._authentication_service is None:
                 raise AuthorizationDenied('legacy history cannot authorize a new immutable object')
             if self._authentication_service is not None:
-                if boundary not in ('EXEC', 'RESULT', 'SHUTDOWN', 'ADMIT', 'RW'):
+                if boundary not in ('EXEC', 'RESULT', 'SHUTDOWN', 'ADMIT', 'RW', 'RP'):
                     raise AuthorizationDenied('immutable object writer is unavailable in this mode')
                 self.require_actor(actor, boundary)
                 if boundary == 'RW':
                     self._require_recovery_writer(self._recovery_writer, actor)
+                elif boundary == 'RP':
+                    self._require_rp_binding(self._rp_binding, actor)
+                    proof = self._rp_proofs.get(object_id)
+                    if proof is None or proof[0] is not self._rp_binding or proof[2] != bytes_value:
+                        raise AuthorizationDenied('RP has no generic metadata/object writer')
+                    self._validate_rp_subject(proof[0], proof[1], 'QUERY')
+                    receipt = parse_closed_canonical(bytes_value)
+                    port = self._rp_port(self._rp_binding.authorization, receipt.get('destination_id'))
+                    port.authenticate_receipt(bytes_value)
+                    if object_id != 'rp-proof-' + _sha(bytes_value):
+                        raise AuthorizationDenied('closed immutable destination proof object required')
                 self._check_healthy()
                 self.read_verified(0)
             if type(object_id) is not str or not object_id or type(bytes_value) is not bytes:

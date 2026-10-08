@@ -444,7 +444,7 @@ def inject_untrusted_record(store, fence_epoch, event_id, event):
     return receipt
 
 
-def make_supervisor(*, authorize_destination=False):
+def make_supervisor(*, authorize_destination=False, publication_setup=None, chair_service_factory=None):
     from tools.decision_0009.acer_adapter.custody import OfflineCustodian
     from tools.decision_0009.acer_adapter.supervisor import (
         ArtifactVerificationPrimitive, OfflineDurableStore, OfflineWitness,
@@ -458,9 +458,14 @@ def make_supervisor(*, authorize_destination=False):
             'offline-destination', 'offline-destination-port', 'evidence',
             'OBJECT_AND_NAMESPACE', 'ALL_LOWER_WRITERS'),))
         auth = replace(auth, authorization_digest=authorization_digest(auth))
+    destinations = ()
+    if publication_setup is not None:
+        auth, destinations = publication_setup(auth)
     witness = OfflineWitness("witness-1")
-    store = OfflineDurableStore("store-1", witness, chair_verifier=offline_chair_service(auth),
-                                activation_verifier=offline_activation_service(auth))
+    store = OfflineDurableStore("store-1", witness,
+                                chair_verifier=(chair_service_factory or offline_chair_service)(auth),
+                                activation_verifier=offline_activation_service(auth),
+                                publication_destinations=destinations)
     fence = 1
     verifier = ArtifactVerificationPrimitive("offline-root", auth, artifacts.read)
     from tools.decision_0009.acer_adapter.custody import OfflineContainmentFactory

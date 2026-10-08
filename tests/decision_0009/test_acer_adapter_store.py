@@ -1276,10 +1276,10 @@ class CheckpointBRWMatrixTests(unittest.TestCase):
             self.supplement(s,d,f,rw,obligation_ref=d['original_ownership_ref'])
         self.assertEqual((s.store.revision,dict(s.store._objects)),before)
 
-    def test_rp_remains_absent_and_live_waiting_fresh_cannot_rw(self):
+    def test_C_rp_registration_preserves_B_nonlive_writer_mode_boundary(self):
         from dataclasses import replace
         from tools.decision_0009.acer_adapter.supervisor import _U04_BOUNDARIES
-        self.assertNotIn('RP',_U04_BOUNDARIES)
+        self.assertIn('RP',_U04_BOUNDARIES)
         for mode in ('FRESH','LIVE_PENDING','LIVE','RECOVERY','TERMINAL','WAITING'):
             for writer in ('RW','RP','EXEC','RESULT'):
                 with self.subTest(mode=mode,writer=writer):
@@ -1289,7 +1289,7 @@ class CheckpointBRWMatrixTests(unittest.TestCase):
                     # actor to exercise the full mode policy, no store dispatch.
                     s.store.witness._actors[s.store.identity]=probe
                     s.store._current_actor=probe
-                    allowed=(writer=='RW' and mode in ('RECOVERY','TERMINAL') or
+                    allowed=(writer in ('RW','RP') and mode in ('RECOVERY','TERMINAL') or
                         writer=='EXEC' and mode=='LIVE' or writer=='RESULT' and mode in ('LIVE','RECOVERY','TERMINAL'))
                     if allowed:self.assertIs(s.store.witness.authenticate(probe,s.store.identity,writer),probe)
                     else:
@@ -1304,7 +1304,7 @@ class CheckpointBClosedRegistryCartesianTests(CheckpointBRWMatrixTests):
     test_low_witness_port_cannot_reserve_noncanonical_rw_payload=None
     test_obligation_truthfulness_and_exact_owner_and_evidence=None
     test_linked_supplement_keeps_obligation_open_and_rejects_unrelated_refs=None
-    test_rp_remains_absent_and_live_waiting_fresh_cannot_rw=None
+    test_C_rp_registration_preserves_B_nonlive_writer_mode_boundary=None
 
     def test_writer_mode_health_record_cartesian_registry(self):
         from dataclasses import replace
@@ -1389,7 +1389,10 @@ class CheckpointBDestinationObligationTests(unittest.TestCase):
             with self.subTest(kind=kind,reason=reason,target_change=change,subjects=subjects):
                 before=(s.store.revision,dict(s.store._objects),dict(s.store.witness.pending),
                         s.store.witness.high_revision)
-                with self.assertRaisesRegex(AuthorizationDenied,'DESTINATION.*unavailable in Checkpoint B'):
+                # C replaces the temporary blanket prohibition with semantic
+                # proof. Membership alone still rejects every row before D/W
+                # mutation; the old B-only error text is no longer the contract.
+                with self.assertRaises(AuthorizationDenied):
                     s.store.record_recovery_obligation(rw,obligation_id='destination-refused-'+str(n),
                         kind=kind,reason_code=reason,subject_refs=subjects,target_ref=dict(target,**change))
                 self.assertEqual((s.store.revision,dict(s.store._objects),dict(s.store.witness.pending),

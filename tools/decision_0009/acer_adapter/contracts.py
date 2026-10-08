@@ -975,8 +975,14 @@ class PublicationIdentity:
     length: int
 
     def __post_init__(self):
-        for name in ("intent_id", "destination", "object_key"):
+        for name in ("intent_id", "destination"):
             _string(name, getattr(self, name))
+        # Preserve historical absolute keys; v2 policy additionally admits
+        # canonical logical namespace keys. Neither is a filesystem operation.
+        if type(self.object_key) is str and self.object_key.startswith('/'):
+            _string('object_key', self.object_key)
+        else:
+            _logical_key(self.object_key)
         _string("object_digest", self.object_digest, digest=True)
         _integer("length", self.length)
 
@@ -1282,8 +1288,12 @@ class PublicationReceipt:
     readback_digest: str
 
     def __post_init__(self):
-        for name in ("receipt_id", "destination", "object_key"):
+        for name in ("receipt_id", "destination"):
             _string(name, getattr(self, name))
+        if type(self.object_key) is str and self.object_key.startswith('/'):
+            _string('object_key', self.object_key)
+        else:
+            _logical_key(self.object_key)
         for name in ("object_digest", "readback_digest"):
             _string(name, getattr(self, name), digest=True)
         _integer("length", self.length)
@@ -1419,6 +1429,148 @@ RECOVERY_COMMON_FIELDS = frozenset(('schema_version', 'record_type', 'record_id'
     'writer_incarnation_id', 'writer_session_id', 'writer_fence', 'authority_class',
     'authorizes_execution'))
 
+# R6 sections 7.1-7.3: these schemas carry evidence authority only. Syntax
+# validation is never receipt authentication or store-owned grant membership.
+RP_OPERATIONS = frozenset(RECOVERY_PERMISSION_MAP) - {'QUERY'}
+RP_PUBLICATION_FIELDS = frozenset(('original_intent_ref', 'subject_id', 'producer_refs',
+    'source_object', 'destination_id', 'object_key', 'logical_operation_id'))
+RP_GRANT_FIELDS = RP_PUBLICATION_FIELDS | frozenset(('schema_version', 'grant_id',
+    'recovery_intent_ref', 'store_identity', 'authorization_digest', 'campaign_id',
+    'boot_id', 'operation', 'recovery_writer_id', 'writer_generation',
+    'writer_incarnation_id', 'writer_session_id', 'writer_fence', 'previous_result_ref',
+    'chain_position', 'consumption_id', 'authority_class', 'authorizes_execution'))
+RP_RECORD_FIELDS = {
+    'RECOVERY_PUBLICATION_INTENT': RP_PUBLICATION_FIELDS | {
+        'original_or_supplement', 'supplement_ref', 'policy_rule_id'},
+    'RECOVERY_PUBLICATION_ACCEPTED': RP_GRANT_FIELDS | {'continuation_owner_receipt'},
+    'RECOVERY_PUBLICATION_RESULT': RP_PUBLICATION_FIELDS | {
+        'acceptance_ref', 'query_or_grant', 'outcome', 'destination_receipt', 'reason_code'},
+    'RECOVERY_PUBLICATION_VERIFIED': RP_PUBLICATION_FIELDS | {
+        'result_refs', 'durability_receipt', 'independent_readback', 'namespace_ack'},
+}
+DESTINATION_RECEIPT_FIELDS = frozenset(('port_identity', 'destination_id', 'object_key',
+    'original_intent_ref', 'authorization_digest', 'campaign_id', 'reservation_owner_id',
+    'logical_operation_id', 'operation_status', 'bytes_digest', 'length', 'writer_fence',
+    'outcome', 'object_durable', 'namespace_durable', 'port_attestation'))
+RP_POSITIVE_OUTCOMES = frozenset(('ABSENT_PROVEN', 'OWNED_EMPTY_RESERVED',
+    'EXACT_PRESENT', 'DURABILITY_ESTABLISHED', 'VERIFIED'))
+RP_CONFLICT_REASONS = {'PARTIAL': 'PARTIAL_OBJECT', 'CONTENT_CONFLICT': 'CONTENT_MISMATCH',
+    'OWNER_CONFLICT': 'RESERVATION_OWNER_MISMATCH'}
+
+
+def validate_destination_receipt(value):
+    if type(value) is not dict or set(value) != DESTINATION_RECEIPT_FIELDS:
+        raise ContractError('closed destination receipt')
+    for name in ('port_identity', 'destination_id', 'campaign_id',
+                 'logical_operation_id'):
+        _string(name, value[name])
+    _logical_key(value['object_key'])
+    for name in ('authorization_digest', 'port_attestation'):
+        _string(name, value[name], digest=True)
+    _closed_reference(value['original_intent_ref'], 'Ref')
+    _integer('writer_fence', value['writer_fence'], minimum=1)
+    for name in ('object_durable', 'namespace_durable'):
+        _boolean(name, value[name])
+    if value['operation_status'] not in ('NOT_STARTED', 'IN_FLIGHT', 'COMPLETE', 'UNKNOWN'):
+        raise ContractError('closed destination operation status')
+    if value['outcome'] not in RP_POSITIVE_OUTCOMES | set(RP_CONFLICT_REASONS) | {'UNKNOWN'}:
+        raise ContractError('closed destination outcome')
+    nullable = (value['outcome'] == 'ABSENT_PROVEN' or
+                value['outcome'] == 'UNKNOWN' and value['operation_status'] == 'UNKNOWN')
+    for name in ('bytes_digest', 'length', 'reservation_owner_id'):
+        if nullable and value[name] is not None:
+            raise ContractError('destination absence/unknown fields must be null')
+        if value[name] is None:
+            if not nullable:
+                raise ContractError('destination receipt nullability')
+        elif name == 'length':
+            _integer(name, value[name])
+        else:
+            _string(name, value[name], digest=name == 'bytes_digest')
+    if (value['bytes_digest'] is None) != (value['length'] is None):
+        raise ContractError('destination digest and length null together')
+    return value
+
+
+def _validate_rp_subject(value):
+    _closed_reference(value['original_intent_ref'], 'Ref')
+    _closed_reference(value['source_object'], 'Obj')
+    if type(value['producer_refs']) is not list or not value['producer_refs']:
+        raise ContractError('nonempty original producer references')
+    for ref in value['producer_refs']:
+        _closed_reference(ref, 'Ref')
+    for name in ('subject_id', 'destination_id', 'logical_operation_id'):
+        _string(name, value[name])
+    _logical_key(value['object_key'])
+
+
+def validate_rp_record(value):
+    if type(value) is not dict:
+        raise ContractError('closed RP record')
+    kind = value.get('record_type')
+    fields = RP_RECORD_FIELDS.get(kind)
+    accepted = kind == 'RECOVERY_PUBLICATION_ACCEPTED'
+    if (fields is None or set(value) != RECOVERY_COMMON_FIELDS | fields or
+            value['schema_version'] != 'u04-record/v1' or
+            value['authority_class'] != ('EVIDENCE_RECOVERY' if accepted else 'EVIDENCE') or
+            value['authorizes_execution'] is not False):
+        raise ContractError('closed RP record/class/schema')
+    for name in ('record_id', 'store_identity', 'campaign_id', 'writer_incarnation_id',
+                 'writer_session_id'):
+        _string(name, value[name])
+    _string('authorization_digest', value['authorization_digest'], digest=True)
+    for name in ('writer_generation', 'writer_fence'):
+        _integer(name, value[name], minimum=1)
+    _validate_rp_subject(value)
+    if kind == 'RECOVERY_PUBLICATION_INTENT':
+        _string('policy_rule_id', value['policy_rule_id'])
+        if value['original_or_supplement'] == 'SUPPLEMENT':
+            _closed_reference(value['supplement_ref'], 'Ref')
+        elif value['original_or_supplement'] != 'ORIGINAL' or value['supplement_ref'] is not None:
+            raise ContractError('original/supplement reference discriminator')
+    elif accepted:
+        _closed_reference(value['recovery_intent_ref'], 'Ref')
+        for name in ('grant_id', 'boot_id', 'recovery_writer_id', 'consumption_id'):
+            _string(name, value[name])
+        if value['operation'] not in RP_OPERATIONS:
+            raise ContractError('closed recovery operation')
+        if value['chain_position'] == 'FOLLOWUP':
+            _closed_reference(value['previous_result_ref'], 'Ref')
+        elif value['chain_position'] != 'INITIAL' or value['previous_result_ref'] is not None:
+            raise ContractError('recovery operation chain discriminator')
+        if value['operation'] == 'CONTINUE_RESERVED_EXACT':
+            _closed_reference(value['continuation_owner_receipt'], 'Obj')
+        elif value['continuation_owner_receipt'] is not None:
+            raise ContractError('continuation owner reference discriminator')
+    elif kind == 'RECOVERY_PUBLICATION_RESULT':
+        if value['query_or_grant'] == 'GRANT':
+            _closed_reference(value['acceptance_ref'], 'Ref')
+        elif value['query_or_grant'] != 'QUERY' or value['acceptance_ref'] is not None:
+            raise ContractError('query/grant acceptance discriminator')
+        outcome, reason = value['outcome'], value['reason_code']
+        if outcome in RP_POSITIVE_OUTCOMES:
+            if reason is not None:
+                raise ContractError('positive result reason must be null')
+        elif outcome in RP_CONFLICT_REASONS:
+            if reason != RP_CONFLICT_REASONS[outcome]:
+                raise ContractError('conflict reason discriminator')
+        elif outcome != 'UNKNOWN' or reason not in RECOVERY_OBLIGATION_REASONS['PUBLICATION_UNVERIFIED']:
+            raise ContractError('closed result outcome/reason')
+        if value['destination_receipt'] is None:
+            if outcome != 'UNKNOWN' or reason not in ('DESTINATION_UNKNOWN',
+                    'DESTINATION_REGISTRY_UNAVAILABLE', 'READBACK_UNAVAILABLE', 'OUTCOME_UNKNOWN'):
+                raise ContractError('result receipt nullability')
+        else:
+            _closed_reference(value['destination_receipt'], 'Obj')
+    else:
+        if type(value['result_refs']) is not list or not value['result_refs']:
+            raise ContractError('linked exact destination results required')
+        for ref in value['result_refs']:
+            _closed_reference(ref, 'Ref')
+        for name in ('durability_receipt', 'independent_readback', 'namespace_ack'):
+            _closed_reference(value[name], 'Obj')
+    return value
+
 
 def closed_canonical_bytes(value):
     def validate(x):
@@ -1494,7 +1646,11 @@ def validate_recovery_record(value):
         if target['kind'] not in ('DESTINATION', 'CUSTODIAN', 'EFFECT', 'LOCAL_EVIDENCE'):
             raise ContractError('target kind')
         if target['kind'] == 'DESTINATION':
-            _string('destination', target['destination_id']); _string('key', target['object_key'])
+            _string('destination', target['destination_id'])
+            if type(target['object_key']) is str and target['object_key'].startswith('/'):
+                _string('key', target['object_key'])
+            else:
+                _logical_key(target['object_key'])
         elif target['destination_id'] is not None or target['object_key'] is not None:
             raise ContractError('target destination nullability')
         for state, ref, positive, negative, typ in (

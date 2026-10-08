@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 import hashlib
 import json
+import copy
+import threading
 
 from .contracts import (
     ClosureCandidate, ContractError, EvidenceObject, GPUAttribution,
@@ -29,6 +31,462 @@ class PublicationAcknowledgementLost(EvidenceError):
     def __init__(self, receipt):
         super().__init__("publication verification acknowledgement lost")
         self.receipt = receipt
+
+
+DESTINATION_FIELD_DOMAINS = {
+    'port_identity': 'B', 'destination_id': 'B', '_producers': 'B/C', '_store': 'B', '_lock': 'B',
+    'available': 'C', 'readback_available': 'C', '_sources': 'C', '_subjects': 'C',
+    '_objects': 'C', '_operations': 'C', '_receipts': 'C', '_exclusions': 'C',
+    '_claims': 'C', '_grant_results': 'C', '_counts': 'C', '_reserved_subjects': 'C',
+    '_source_bindings': 'V', '_eligible_grants': 'V',
+}
+
+
+class OfflinePublicationDestination:
+    """Independent deterministic C-domain destination, provisioned before entry.
+
+    Registry bytes, writer exclusions, operation claims and receipts belong to
+    this service; neither the controller's cache nor D reconstructs them.
+    Producer instances are pinned setup references, not runtime identity names.
+    This class performs no filesystem, network or process operation.
+    """
+
+    def __setattr__(self, name, value):
+        if name in ('port_identity', 'destination_id', '_producers', '_store') and name in self.__dict__:
+            if name != '_store' or self.__dict__[name] is not None:
+                if self.__dict__[name] is not value:
+                    raise PublicationAuthorityDenied('destination bootstrap identity is pinned')
+        object.__setattr__(self, name, value)
+
+    def __init__(self, port_identity, destination_id, *, producers=()):
+        from .contracts import _string
+        _string('port_identity', port_identity)
+        _string('destination_id', destination_id)
+        self.port_identity = port_identity
+        self.destination_id = destination_id
+        self._producers = tuple(producers)
+        if (len({p[0] for p in self._producers}) != len(self._producers) or
+                any(type(p[0]) is not str or type(p[1]) is not EvidencePipeline for p in self._producers)):
+            raise EvidenceError('exact setup producer instances required')
+        self._store = None
+        self._lock = threading.RLock()
+        self.available = True
+        self.readback_available = True
+        self._subjects = {}
+        self._sources = {}
+        self._objects = {}
+        self._operations = {}
+        self._receipts = {}
+        self._exclusions = {}
+        self._claims = set()
+        self._grant_results = {}
+        self._eligible_grants = {}
+        self._counts = {}
+        self._source_bindings = {}
+        self._reserved_subjects = set()
+
+    def bind_store(self, store):
+        with self._lock:
+            if self._store is not None or store._durable or store.witness.high_generation:
+                raise PublicationAuthorityDenied('destination setup must precede runtime entry')
+            self._store = store
+
+    @staticmethod
+    def operation_id(subject, operation):
+        from .contracts import closed_canonical_bytes
+        operation = 'CONTENT' if operation in ('ENSURE_EXACT_OBJECT', 'CONTINUE_RESERVED_EXACT') else operation
+        return 'rp-operation-' + _sha(closed_canonical_bytes([
+            subject['original_intent_ref'], subject['destination_id'], subject['object_key'],
+            subject['source_object'], operation]))
+
+    def _known(self, original_ref, key):
+        subject = self._subjects.get(key)
+        if subject is None or subject['original_intent_ref'] != original_ref:
+            raise PublicationAuthorityDenied('independent original destination provenance unavailable')
+        return subject
+
+    def bind_original_source(self, actor, intent, proof):
+        with self._store.authorization_lock, self._lock:
+            self._store.require_actor(actor)
+            self._store.assert_healthy_authority()
+            if type(proof) is not tuple or len(proof) != 2:
+                raise PublicationAuthorityDenied('actual original producer proof required')
+            producer, obj = proof
+            auth = self._store._admitted_payload()
+            from .contracts import PublicationIdentity
+            PublicationIdentity(intent.intent_id, intent.destination, intent.object_key, intent.object_digest, intent.length)
+            if (not any(p is self for p in self._store._publication_destinations) or
+                    not any(r.destination_id == self.destination_id and r.object_key == intent.object_key
+                            for r in auth.object_rules)):
+                raise PublicationAuthorityDenied('exact configured source destination/object required')
+            names = [name for name, registered in self._producers if registered is producer and
+                     name in auth.evidence_source_ids]
+            if (len(names) != 1 or type(obj) is not EvidenceObject or
+                    producer._objects.get(obj.digest) is not obj or obj.bytes != intent.bytes or
+                    obj.digest != intent.object_digest or obj.length != intent.length or
+                    intent.destination != self.destination_id):
+                raise PublicationAuthorityDenied('copied source identity or matching bytes is insufficient')
+            binding = (actor, producer, obj, names[0])
+            old = self._source_bindings.get(intent.intent_id)
+            if old is not None and old != binding:
+                raise PublicationAuthorityDenied('original source binding is immutable')
+            self._source_bindings[intent.intent_id] = binding
+
+    def observe_original(self, actor, grant, planned, payload):
+        """Called by the original port only after exact EXEC acceptance/ack."""
+        store = self._store
+        with store.authorization_lock, self._lock:
+            original = store.validate_publication_initiation(actor, grant, planned)
+            if (not any(p is self for p in store._publication_destinations) or
+                    grant.grant_id in self._counts or not self.available or
+                    grant.binding.identity.destination != self.destination_id):
+                raise PublicationAuthorityDenied('original destination unavailable')
+            request = grant.binding
+            key = request.identity.object_key
+            op = request.operation
+            if key in self._exclusions:
+                raise PublicationAuthorityDenied('original writer independently excluded')
+            if op == 'intent':
+                if key in self._reserved_subjects:
+                    raise PublicationAuthorityDenied('independent original object identity already reserved')
+                request.identity.verify_source(payload)
+                auth = store._admitted_payload()
+                bound = self._source_bindings.get(request.identity.intent_id)
+                producers = []
+                if bound is not None:
+                    producer_actor, producer, produced, identity = bound
+                    if (producer_actor is not actor or producer._objects.get(produced.digest) is not produced or
+                            produced.bytes != payload or identity not in auth.evidence_source_ids):
+                        raise PublicationAuthorityDenied('original production binding differs from accepted source')
+                    producers.append((identity, producer))
+                # Missing source provenance remains missing. Normal publication
+                # can retain its original behavior, but RP cannot retrofit it.
+                rules = [r for r in auth.object_rules if
+                         r.destination_id == self.destination_id and r.object_key == key]
+                source = {'object_id': planned['source_object_id'], 'sha256': _sha(payload), 'length': len(payload)}
+                subject = dict(original_intent_ref=store._reference(original['receipt']),
+                    subject_id=rules[0].subject_id if len(rules) == 1 else None,
+                    evidence_kind=rules[0].evidence_kind if len(rules) == 1 else None,
+                    producer_refs=[store._reference(original['receipt'])], source_object=source,
+                    destination_id=self.destination_id, object_key=key,
+                    source_bytes=bytes(payload), producers=tuple(producers),
+                    authorization_digest=actor.authorization_digest, campaign_id=actor.campaign_id,
+                    boot_id=request.boot_id, original_owner=request.identity.intent_id,
+                    original_create_ref=None)
+                self._subjects[key] = subject
+                self._sources[key] = dict(subject)
+                self._source_bindings.pop(request.identity.intent_id, None)
+                self._reserved_subjects.add(key)
+                for operation in ('ENSURE_EXACT_OBJECT', 'ESTABLISH_DURABILITY', 'VERIFY_EXACT_OBJECT'):
+                    self._operations[self.operation_id(subject, operation)] = {'status': 'NOT_STARTED', 'result': None}
+            else:
+                subject = self._subjects.get(key)
+                if subject is None or subject['original_owner'] != request.identity.intent_id:
+                    raise PublicationAuthorityDenied('original destination intent unavailable')
+                obj = self._objects.get(key)
+                if op == 'create':
+                    if obj is not None:
+                        raise PublicationAuthorityDenied('destination exclusive create collision')
+                    self._objects[key] = {'owner': subject['original_owner'], 'bytes': b'',
+                        'object_durable': False, 'namespace_durable': False, 'written': False}
+                    subject['original_create_ref'] = store._reference(original['receipt'])
+                elif op == 'write':
+                    operation = self._operations.get(self.operation_id(subject, 'ENSURE_EXACT_OBJECT'))
+                    if obj is None or obj['written'] or operation is None or operation['status'] != 'NOT_STARTED':
+                        raise PublicationAuthorityDenied('original content write may not restart')
+                    operation['status'] = 'COMPLETE'
+                    obj['bytes'], obj['written'] = bytes(payload), True
+                elif op == 'durable':
+                    if obj is None or not obj['written']:
+                        raise PublicationAuthorityDenied('destination bytes not independently written')
+                    obj['object_durable'] = obj['namespace_durable'] = True
+                elif op == 'verify':
+                    if (obj is None or obj['bytes'] != subject['source_bytes'] or
+                            not obj['object_durable'] or not obj['namespace_durable'] or not self.readback_available):
+                        raise PublicationAuthorityDenied('independent original destination verification failed')
+                else:
+                    raise PublicationAuthorityDenied('closed original publication operation')
+            self._counts[grant.grant_id] = self._counts.get(grant.grant_id, 0) + 1
+
+    def source(self, original_ref, key):
+        with self._lock:
+            if self._store is None or not any(p is self for p in self._store._publication_destinations):
+                raise PublicationAuthorityDenied('exact pinned source/destination instance required')
+            s = self._sources.get(key)
+            if s is None or s['original_intent_ref'] != original_ref:
+                raise PublicationAuthorityDenied('original production proof unavailable')
+            if not s['producers']:
+                raise PublicationAuthorityDenied('independent original source unavailable')
+            if not all(p.has_original_bytes(s['source_bytes']) for _, p in s['producers']):
+                raise PublicationAuthorityDenied('original producer bytes unavailable')
+            return {k: copy.deepcopy(v) for k, v in s.items()
+                    if k != 'producers'}
+
+    def _supplement_never_registered(self, subject, source):
+        """Prove first registration from available C facts and committed D history.
+
+        Called with both locks held. An absent reservation marker alone says
+        nothing about prior registration or acceptance of the logical operation.
+        """
+        key = subject['object_key']
+        operations = {self.operation_id(source, op) for op in (
+            'ENSURE_EXACT_OBJECT', 'ESTABLISH_DURABILITY', 'VERIFY_EXACT_OBJECT')}
+        if (not self.available or key in self._reserved_subjects or
+                any(key in registry for registry in (
+                    self._subjects, self._sources, self._objects, self._exclusions)) or
+                any(op in registry for op in operations for registry in (
+                    self._operations, self._eligible_grants)) or
+                any(fact[0]['object_key'] == key for fact in self._receipts.values())):
+            return False
+        for frame in self._store._committed_frames():
+            event = frame['event']
+            if (event.get('destination_id') != self.destination_id or
+                    event.get('object_key') != key):
+                continue
+            # Acceptance is immutable no-freshness evidence even when every
+            # destination fact is lost. A retained destination result also
+            # proves registration; an unavailable query without a receipt does not.
+            if (event.get('record_type') == 'RECOVERY_PUBLICATION_ACCEPTED' or
+                    event.get('record_type') == 'RECOVERY_PUBLICATION_VERIFIED' or
+                    event.get('record_type') == 'RECOVERY_PUBLICATION_RESULT' and
+                    event.get('destination_receipt') is not None):
+                return False
+        return True
+
+    def register_supplement(self, binding, subject, intent_ref):
+        store = self._store
+        with store.authorization_lock, self._lock:
+            actor = store._require_rp_binding(binding)
+            port, source = store._validate_rp_subject(binding, subject, 'QUERY')
+            committed = store._exact_ref(intent_ref)
+            if (port is not self or not self.available or
+                    committed['event'].get('record_type') != 'RECOVERY_PUBLICATION_INTENT' or
+                    any(committed['event'].get(k) != v for k, v in subject.items()) or
+                    not store.witness.acknowledged_current(actor, committed['event_id'])):
+                raise PublicationAuthorityDenied('exact acknowledged supplement intent required')
+            key = subject['object_key']
+            if key in self._reserved_subjects:
+                return
+            if not self._supplement_never_registered(subject, source):
+                # Query will report registry loss. Do not reconstruct C facts
+                # or reset an existing operation, including NOT_STARTED.
+                return
+            self._reserved_subjects.add(key)
+            self._subjects[key] = dict(source, producers=())
+            for op in ('ENSURE_EXACT_OBJECT', 'ESTABLISH_DURABILITY', 'VERIFY_EXACT_OBJECT'):
+                self._operations[self.operation_id(source, op)] = {'status': 'NOT_STARTED', 'result': None}
+
+    def exclude_original_writers(self, binding, subject):
+        store = self._store
+        with store.authorization_lock, self._lock:
+            port, _ = store._validate_rp_subject(binding, subject, 'QUERY')
+            if port is not self:
+                raise PublicationAuthorityDenied('copied destination cannot exclude writers')
+            s = self._known(subject['original_intent_ref'], subject['object_key'])
+            if not self.available:
+                raise PublicationAuthorityDenied('destination registry unavailable')
+            if (subject.get('original_or_supplement') == 'SUPPLEMENT' and
+                    subject['object_key'] not in self._reserved_subjects):
+                return s
+            # Every original call and RP claim shares this lock. An uncertain
+            # claim may still settle; exclusion cannot convert it to no-start.
+            self._exclusions[subject['object_key']] = binding.actor.fence
+            self._eligible_grants[subject['logical_operation_id']] = None
+            return s
+
+    def observe(self, binding, subject):
+        from .contracts import closed_canonical_bytes, validate_destination_receipt
+        store = self._store
+        with store.authorization_lock, self._lock:
+            port, _ = store._validate_rp_subject(binding, subject, 'QUERY')
+            if port is not self:
+                raise PublicationAuthorityDenied('exact pinned destination query port required')
+            if not self.available:
+                return None, 'DESTINATION_REGISTRY_UNAVAILABLE'
+            if (subject.get('original_or_supplement') == 'SUPPLEMENT' and
+                    subject['object_key'] not in self._reserved_subjects):
+                return None, 'DESTINATION_REGISTRY_UNAVAILABLE'
+            if subject['object_key'] not in self._subjects:
+                return None, 'DESTINATION_REGISTRY_UNAVAILABLE'
+            s = self._known(subject['original_intent_ref'], subject['object_key'])
+            operation = self._operations.get(subject['logical_operation_id'])
+            content = self._operations.get(self.operation_id(s, 'ENSURE_EXACT_OBJECT'))
+            if operation is None or content is None:
+                return None, 'DESTINATION_REGISTRY_UNAVAILABLE'
+            obj = self._objects.get(subject['object_key'])
+            if obj is not None and not self.readback_available:
+                return None, 'READBACK_UNAVAILABLE'
+            excluded = self._exclusions.get(subject['object_key']) == binding.actor.fence
+            related = [self._operations.get(self.operation_id(s, op)) for op in (
+                'ENSURE_EXACT_OBJECT', 'ESTABLISH_DURABILITY', 'VERIFY_EXACT_OBJECT')]
+            uncertain = (any(p is None or p['status'] in ('CLAIMED', 'IN_FLIGHT', 'UNKNOWN') for p in related) or
+                         operation is None or content is None or
+                         operation['status'] in ('CLAIMED', 'IN_FLIGHT', 'UNKNOWN') or
+                         content['status'] in ('CLAIMED', 'IN_FLIGHT', 'UNKNOWN') or not excluded or
+                         obj is not None and obj['owner'] is None or
+                         obj is None and content['status'] != 'NOT_STARTED')
+            status = 'UNKNOWN' if uncertain else operation['status']
+            outcome, reason = 'UNKNOWN', 'OUTCOME_UNKNOWN'
+            if not uncertain:
+                if obj is None:
+                    outcome, reason = 'ABSENT_PROVEN', None
+                elif obj['owner'] != s['original_owner']:
+                    outcome, reason = 'OWNER_CONFLICT', 'RESERVATION_OWNER_MISMATCH'
+                elif obj['bytes'] == s['source_bytes']:
+                    if obj['object_durable'] and obj['namespace_durable']:
+                        outcome, reason = 'DURABILITY_ESTABLISHED', None
+                        prior = operation.get('result')
+                        if prior is not None and json.loads(prior)['outcome'] == 'VERIFIED':
+                            outcome = 'VERIFIED'
+                    else:
+                        outcome, reason = 'EXACT_PRESENT', None
+                elif obj['bytes'] == b'' and not obj['written'] and s['original_create_ref'] is not None:
+                    outcome, reason = 'OWNED_EMPTY_RESERVED', None
+                elif obj['bytes'] == b'' and not obj['written']:
+                    outcome, reason = 'UNKNOWN', 'INTENT_UNPROVEN'
+                elif 0 < len(obj['bytes']) < len(s['source_bytes']):
+                    outcome, reason = 'PARTIAL', 'PARTIAL_OBJECT'
+                else:
+                    outcome, reason = 'CONTENT_CONFLICT', 'CONTENT_MISMATCH'
+            receipt = dict(port_identity=self.port_identity, destination_id=self.destination_id,
+                object_key=subject['object_key'], original_intent_ref=subject['original_intent_ref'],
+                authorization_digest=s['authorization_digest'], campaign_id=s['campaign_id'],
+                reservation_owner_id=None if obj is None or uncertain else obj['owner'],
+                logical_operation_id=subject['logical_operation_id'], operation_status=status,
+                bytes_digest=None if obj is None or uncertain else _sha(obj['bytes']),
+                length=None if obj is None or uncertain else len(obj['bytes']),
+                writer_fence=binding.actor.fence, outcome=outcome,
+                object_durable=bool(obj is not None and obj['object_durable']),
+                namespace_durable=bool(obj is not None and obj['namespace_durable']))
+            receipt['port_attestation'] = _sha(closed_canonical_bytes(receipt))
+            validate_destination_receipt(receipt)
+            raw = closed_canonical_bytes(receipt)
+            self._receipts[raw] = (copy.deepcopy(receipt), None if obj is None else bytes(obj['bytes']), reason)
+            return raw, reason
+
+    def authenticate_receipt(self, raw):
+        from .contracts import validate_destination_receipt, parse_closed_canonical
+        with self._lock:
+            if self._store is None or not any(p is self for p in self._store._publication_destinations):
+                raise PublicationAuthorityDenied('exact original retained receipt service required')
+            retained = self._receipts.get(raw)
+            if retained is None or retained[0] != validate_destination_receipt(parse_closed_canonical(raw)):
+                raise PublicationAuthorityDenied('receipt not independently retained by original port')
+            return copy.deepcopy(retained[0]), retained[1]
+
+    def observation_reason(self, raw):
+        with self._lock:
+            self.authenticate_receipt(raw)
+            return self._receipts[raw][2]
+
+    def validate_precondition(self, binding, subject, operation):
+        store = self._store
+        with store.authorization_lock, self._lock:
+            port, source = store._validate_rp_subject(binding, subject, operation)
+            if port is not self:
+                raise PublicationAuthorityDenied('exact pinned destination precondition port required')
+            # A first child source is authenticated by its existing B supplement.
+            # Namespace truth remains C-owned; a lost prior registration is never fresh.
+            if (subject.get('original_or_supplement') == 'SUPPLEMENT' and
+                    subject['object_key'] not in self._reserved_subjects):
+                if (operation != 'ENSURE_EXACT_OBJECT' or
+                        not self._supplement_never_registered(subject, source)):
+                    raise PublicationAuthorityDenied('supplement destination registry unavailable: query only')
+                return source
+            s = self._known(subject['original_intent_ref'], subject['object_key'])
+            state = self._operations.get(subject['logical_operation_id'])
+            content = self._operations.get(self.operation_id(s, 'ENSURE_EXACT_OBJECT'))
+            obj = self._objects.get(subject['object_key'])
+            if not self.available or state is None or content is None:
+                raise PublicationAuthorityDenied('destination operation registry unavailable')
+            related = [self._operations.get(self.operation_id(s, op)) for op in (
+                'ENSURE_EXACT_OBJECT', 'ESTABLISH_DURABILITY', 'VERIFY_EXACT_OBJECT')]
+            if any(p is None or p['status'] in ('CLAIMED', 'IN_FLIGHT', 'UNKNOWN') for p in related):
+                raise PublicationAuthorityDenied('unknown or initiated destination operation: query only')
+            if operation in ('ENSURE_EXACT_OBJECT', 'CONTINUE_RESERVED_EXACT'):
+                if state['status'] != 'NOT_STARTED':
+                    raise PublicationAuthorityDenied('content write cannot restart')
+                if operation == 'ENSURE_EXACT_OBJECT':
+                    if obj is not None:
+                        raise PublicationAuthorityDenied('exact absent key required')
+                elif (obj is None or obj['bytes'] != b'' or obj['written'] or
+                        obj['owner'] != s['original_owner'] or s['original_create_ref'] is None or
+                        len(s['source_bytes']) == 0 or not self.readback_available):
+                    raise PublicationAuthorityDenied('exact original unused owned-empty reservation required')
+            elif operation in ('ESTABLISH_DURABILITY', 'VERIFY_EXACT_OBJECT'):
+                if obj is None or obj['owner'] != s['original_owner'] or obj['bytes'] != s['source_bytes']:
+                    raise PublicationAuthorityDenied('exact original owned destination bytes required')
+                if operation == 'VERIFY_EXACT_OBJECT' and (not obj['object_durable'] or
+                        not obj['namespace_durable'] or not self.readback_available):
+                    raise PublicationAuthorityDenied('independent readback and both durability proofs required')
+            else:
+                raise PublicationAuthorityDenied('closed recovery destination operation required')
+            return s
+
+    def initiate_recovery(self, grant, *, fault=None):
+        from .contracts import closed_canonical_bytes, validate_destination_receipt
+        store = self._store
+        with store.authorization_lock, self._lock:
+            actor, payload, subject, port, source, accepted_ref = store.validate_rp_initiation(grant)
+            if port is not self:
+                raise PublicationAuthorityDenied('destination port substitution')
+            self.validate_precondition(grant.binding, subject, payload['operation'])
+            if self._exclusions.get(subject['object_key']) != actor.fence:
+                raise PublicationAuthorityDenied('all original writers must be excluded before claim')
+            if self._eligible_grants.get(subject['logical_operation_id']) != payload['grant_id']:
+                raise PublicationAuthorityDenied('prior recovery writer independently revoked')
+            if payload['consumption_id'] in self._claims:
+                raise PublicationAuthorityDenied('single-use destination grant already claimed')
+            store.require_actor(actor, 'RP')
+            store.assert_healthy_authority()
+            if fault == 'before_claim':
+                raise PublicationAcknowledgementLost(accepted_ref)
+            state = self._operations[subject['logical_operation_id']]
+            self._claims.add(payload['consumption_id'])
+            state['status'] = 'CLAIMED'
+            if fault == 'after_claim':
+                raise PublicationAcknowledgementLost(accepted_ref)
+            state['status'] = 'IN_FLIGHT'
+            self._counts[payload['grant_id']] = 1
+            if fault == 'after_initiation':
+                raise PublicationAcknowledgementLost(accepted_ref)
+            op, key = payload['operation'], subject['object_key']
+            if op == 'ENSURE_EXACT_OBJECT':
+                self._objects[key] = {'owner': source['original_owner'], 'bytes': bytes(source['source_bytes']),
+                    'written': True, 'object_durable': False, 'namespace_durable': False}
+            elif op == 'CONTINUE_RESERVED_EXACT':
+                self._objects[key]['bytes'] = bytes(source['source_bytes'])
+                self._objects[key]['written'] = True
+            elif op == 'ESTABLISH_DURABILITY':
+                self._objects[key]['object_durable'] = True
+                if fault == 'after_object_durability':
+                    raise PublicationAcknowledgementLost(accepted_ref)
+                self._objects[key]['namespace_durable'] = True
+            if fault in ('after_bytes', 'after_namespace_durability', 'before_readback'):
+                raise PublicationAcknowledgementLost(accepted_ref)
+            state['status'] = 'COMPLETE'
+            raw, reason = self.observe(grant.binding, subject)
+            if op == 'VERIFY_EXACT_OBJECT':
+                receipt = json.loads(raw)
+                receipt['outcome'] = 'VERIFIED'
+                receipt.pop('port_attestation')
+                receipt['port_attestation'] = _sha(closed_canonical_bytes(receipt))
+                validate_destination_receipt(receipt)
+                raw = closed_canonical_bytes(receipt)
+                self._receipts[raw] = (copy.deepcopy(receipt), bytes(self._objects[key]['bytes']), None)
+            state['result'] = raw
+            self._grant_results[payload['grant_id']] = (raw, reason)
+            if fault == 'after_readback':
+                raise PublicationAcknowledgementLost(accepted_ref)
+            return raw, reason
+
+    def arm_recovery_grant(self, grant):
+        with self._store.authorization_lock, self._lock:
+            actor, payload, subject, port, _, _ = self._store.validate_rp_initiation(grant)
+            if port is not self or self._exclusions.get(subject['object_key']) != actor.fence:
+                raise PublicationAuthorityDenied('exact excluded destination port required')
+            self.validate_precondition(grant.binding, subject, payload['operation'])
+            self._eligible_grants[subject['logical_operation_id']] = payload['grant_id']
 
 
 def _sha(value):
@@ -223,11 +681,30 @@ class EvidencePipeline:
         self._objects[digest] = obj
         return obj
 
+    def freeze_raw(self, reference):
+        """Retain exact original raw evidence; never label it normalized core."""
+        raw = self.raw.read(reference)
+        if reference.truncated:
+            raise EvidenceError('truncated source cannot establish exact intended bytes')
+        digest = _sha(raw)
+        obj = self._objects.get(digest)
+        if obj is None:
+            obj = EvidenceObject('raw-' + digest[:16], digest, len(raw), raw)
+            self._objects[digest] = obj
+        if obj.bytes != raw:
+            raise EvidenceError('original raw digest collision')
+        return obj
+
     def readback(self, digest):
         obj = self._objects.get(digest)
         if obj is None or _sha(obj.bytes) != obj.digest:
             raise EvidenceError("local immutable readback failed")
         return obj.bytes
+
+    def has_original_bytes(self, raw):
+        """Pinned producer inspection, not a digest-only authority lookup."""
+        return (type(raw) is bytes and
+                any(value.bytes == raw for value in self._objects.values()))
 
 
 def _same_incarnation(left, right):
@@ -417,7 +894,7 @@ class ImmutablePublication:
             raise EvidenceError("authorized publication intent required")
         return key
 
-    def intent(self, destination, object_key, bytes_value, interlock=None):
+    def intent(self, destination, object_key, bytes_value, interlock=None, *, source_proof=None):
         if type(destination) is not str or type(object_key) is not str or type(bytes_value) is not bytes:
             raise EvidenceError("publication intent")
         digest = _sha(bytes_value)
@@ -429,6 +906,12 @@ class ImmutablePublication:
             raise EvidenceError("publication intent collision")
         if previous is not None:
             return previous
+        if source_proof is not None:
+            authority = self._authority
+            with authority.store.authorization_lock:
+                authority._assert_publication_binding(self._authority_binding, mutation=True)
+                port = authority.store._rp_port(authority.authorization, destination)
+                port.bind_original_source(authority._actor, intent, source_proof)
         self._operate("intent", intent, interlock=interlock,
                       payload=bytes_value)
         return intent

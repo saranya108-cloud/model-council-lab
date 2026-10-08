@@ -483,6 +483,10 @@ class OfflineCustodian:
             # No counters or modeled object effects advance before this second
             # currentness check, immediately before independent initiation.
             self._store.validate_publication_initiation(actor, grant, planned)
+            destinations = [p for p in self._store._publication_destinations
+                            if p.destination_id == request.identity.destination]
+            if destinations:
+                destinations[0].observe_original(actor, grant, planned, payload)
             self._publication_counts[grant.grant_id] = 1
             if operation == 'intent':
                 self._store.put_object(event['source_object_id'], payload, actor=actor)
