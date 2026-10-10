@@ -5,6 +5,16 @@ import hashlib
 import json
 import copy
 import threading
+import weakref
+
+_PROCESS_DESTINATIONS = weakref.WeakKeyDictionary()
+_PROCESS_DESTINATION_OBSERVERS = weakref.WeakKeyDictionary()
+
+
+def _process_destination_stage(port, stage, operation_id):
+    observer = _PROCESS_DESTINATION_OBSERVERS.get(port)
+    if observer is not None:
+        observer(stage, operation_id)
 
 from .contracts import (
     ClosureCandidate, ContractError, EvidenceObject, GPUAttribution,
@@ -86,6 +96,9 @@ class OfflinePublicationDestination:
         self._reserved_subjects = set()
 
     def bind_store(self, store):
+        transport = _PROCESS_DESTINATIONS.get(self)
+        if transport is not None:
+            return transport.bind_store(store)
         with self._lock:
             if self._store is not None or store._durable or store.witness.high_generation:
                 raise PublicationAuthorityDenied('destination setup must precede runtime entry')
@@ -106,6 +119,9 @@ class OfflinePublicationDestination:
         return subject
 
     def bind_original_source(self, actor, intent, proof):
+        transport = _PROCESS_DESTINATIONS.get(self)
+        if transport is not None:
+            return transport.bind_original_source(actor, intent, proof)
         with self._store.authorization_lock, self._lock:
             self._store.require_actor(actor)
             self._store.assert_healthy_authority()
@@ -209,6 +225,9 @@ class OfflinePublicationDestination:
             self._counts[grant.grant_id] = self._counts.get(grant.grant_id, 0) + 1
 
     def source(self, original_ref, key):
+        transport = _PROCESS_DESTINATIONS.get(self)
+        if transport is not None:
+            return transport.source(original_ref, key)
         with self._lock:
             if self._store is None or not any(p is self for p in self._store._publication_destinations):
                 raise PublicationAuthorityDenied('exact pinned source/destination instance required')
@@ -254,6 +273,9 @@ class OfflinePublicationDestination:
         return True
 
     def register_supplement(self, binding, subject, intent_ref):
+        transport = _PROCESS_DESTINATIONS.get(self)
+        if transport is not None:
+            return transport.register_supplement(binding, subject, intent_ref)
         store = self._store
         with store.authorization_lock, self._lock:
             actor = store._require_rp_binding(binding)
@@ -277,6 +299,9 @@ class OfflinePublicationDestination:
                 self._operations[self.operation_id(source, op)] = {'status': 'NOT_STARTED', 'result': None}
 
     def exclude_original_writers(self, binding, subject):
+        transport = _PROCESS_DESTINATIONS.get(self)
+        if transport is not None:
+            return transport.exclude_original_writers(binding, subject)
         store = self._store
         with store.authorization_lock, self._lock:
             port, _ = store._validate_rp_subject(binding, subject, 'QUERY')
@@ -295,6 +320,9 @@ class OfflinePublicationDestination:
             return s
 
     def observe(self, binding, subject):
+        transport = _PROCESS_DESTINATIONS.get(self)
+        if transport is not None:
+            return transport.observe(binding, subject)
         from .contracts import closed_canonical_bytes, validate_destination_receipt
         store = self._store
         with store.authorization_lock, self._lock:
@@ -365,6 +393,9 @@ class OfflinePublicationDestination:
             return raw, reason
 
     def authenticate_receipt(self, raw):
+        transport = _PROCESS_DESTINATIONS.get(self)
+        if transport is not None:
+            return transport.authenticate_receipt(raw)
         from .contracts import validate_destination_receipt, parse_closed_canonical
         with self._lock:
             if self._store is None or not any(p is self for p in self._store._publication_destinations):
@@ -375,11 +406,17 @@ class OfflinePublicationDestination:
             return copy.deepcopy(retained[0]), retained[1]
 
     def observation_reason(self, raw):
+        transport = _PROCESS_DESTINATIONS.get(self)
+        if transport is not None:
+            return transport.observation_reason(raw)
         with self._lock:
             self.authenticate_receipt(raw)
             return self._receipts[raw][2]
 
     def validate_precondition(self, binding, subject, operation):
+        transport = _PROCESS_DESTINATIONS.get(self)
+        if transport is not None:
+            return transport.validate_precondition(binding, subject, operation)
         store = self._store
         with store.authorization_lock, self._lock:
             port, source = store._validate_rp_subject(binding, subject, operation)
@@ -424,6 +461,9 @@ class OfflinePublicationDestination:
             return s
 
     def initiate_recovery(self, grant, *, fault=None):
+        transport = _PROCESS_DESTINATIONS.get(self)
+        if transport is not None:
+            return transport.initiate_recovery(grant, fault=fault)
         from .contracts import closed_canonical_bytes, validate_destination_receipt
         store = self._store
         with store.authorization_lock, self._lock:
@@ -444,10 +484,12 @@ class OfflinePublicationDestination:
             state = self._operations[subject['logical_operation_id']]
             self._claims.add(payload['consumption_id'])
             state['status'] = 'CLAIMED'
+            _process_destination_stage(self, 'claimed_before_initiation', subject['logical_operation_id'])
             if fault == 'after_claim':
                 raise PublicationAcknowledgementLost(accepted_ref)
             state['status'] = 'IN_FLIGHT'
             self._counts[payload['grant_id']] = 1
+            _process_destination_stage(self, 'initiated_before_result', subject['logical_operation_id'])
             if fault == 'after_initiation':
                 raise PublicationAcknowledgementLost(accepted_ref)
             op, key = payload['operation'], subject['object_key']
@@ -476,11 +518,15 @@ class OfflinePublicationDestination:
                 self._receipts[raw] = (copy.deepcopy(receipt), bytes(self._objects[key]['bytes']), None)
             state['result'] = raw
             self._grant_results[payload['grant_id']] = (raw, reason)
+            _process_destination_stage(self, 'authentic_result_before_reply', subject['logical_operation_id'])
             if fault == 'after_readback':
                 raise PublicationAcknowledgementLost(accepted_ref)
             return raw, reason
 
     def arm_recovery_grant(self, grant):
+        transport = _PROCESS_DESTINATIONS.get(self)
+        if transport is not None:
+            return transport.arm_recovery_grant(grant)
         with self._store.authorization_lock, self._lock:
             actor, payload, subject, port, _, _ = self._store.validate_rp_initiation(grant)
             if port is not self or self._exclusions.get(subject['object_key']) != actor.fence:
@@ -1019,3 +1065,90 @@ def complete_closure(candidate, publication_receipt, revision, fence_epoch, tain
             "publication_receipt_id": candidate_receipt.receipt_id,
             "publication_manifest": sorted(digests),
             "revision": revision, "fence_epoch": fence_epoch}
+
+
+
+class _ProcessDestinationTransport:
+    """Closed service facade; publication truth stays in original accepted C."""
+    def __init__(self, controller, port):
+        self.controller, self.port = controller, port
+        self.source_proof = object()
+
+    def bind_store(self, store):
+        # This object is a newly authorized local view of original C, not
+        # another destination service. The original C bind_store predicate is
+        # executed once in C before entry and remains unchanged.
+        if self.port._store is not None or store.identity != self.controller.store_identity:
+            raise PublicationAuthorityDenied('one exact Controller-local original-service view binding required')
+        self.controller.channels['w'].request('VERIFY_SERVICE_CONTINUITY', {})
+        self.port._store = store
+
+    def _call(self, opcode, **body):
+        from .supervisor import _process_data_read
+        from .local_ipc import ACTOR_C_OPERATIONS
+        if opcode in ACTOR_C_OPERATIONS:
+            body['actor_handle'] = self.controller.store.witness._proof(self.controller.store._current_actor)
+        reply = self.controller.channels['c'].request(opcode, body)
+        if 'registries' in reply:
+            view = _process_data_read(reply['registries'])
+            self.port._subjects = view['subjects']
+            self.port._operations = view['operations']
+            self.port._grant_results = {k: tuple(v) for k, v in view['grant_results'].items()}
+            self.port._reserved_subjects = frozenset(view['reserved_subjects'])
+            self.port._objects = view['objects']
+            self.port.available = view['available']
+            self.port.readback_available = view['readback_available']
+        return reply
+
+    def _binding(self, binding):
+        self.controller.store._require_rp_binding(binding)
+
+    def bind_original_source(self, actor, intent, proof):
+        self.controller.store.require_actor(actor)
+        if proof is not self.source_proof:
+            raise PublicationAuthorityDenied('original bootstrap producer call capability required')
+        from .supervisor import _process_kernel_call
+        carrier = dict(intent_id=intent.intent_id, destination=intent.destination,
+            object_key=intent.object_key, object_digest=intent.object_digest, length=intent.length,
+            bytes_hex=intent.bytes.hex())
+        with _process_kernel_call(self.controller.store, 'original_source', (actor, intent, proof, carrier)):
+            self._call('BIND_SOURCE', intent=carrier)
+
+    def source(self, original_ref, key):
+        from .supervisor import _process_data_read
+        return _process_data_read(self._call('SOURCE', original_ref=original_ref, object_key=key)['source'])
+
+    def register_supplement(self, binding, subject, intent_ref):
+        self._binding(binding)
+        self._call('RP_REGISTER_SUPPLEMENT', subject=subject, intent_ref=intent_ref)
+
+    def exclude_original_writers(self, binding, subject):
+        self._binding(binding)
+        from .supervisor import _process_data_read
+        return _process_data_read(self._call('RP_EXCLUDE', subject=subject)['source'])
+
+    def observe(self, binding, subject):
+        self._binding(binding)
+        result = self._call('RP_OBSERVE', subject=subject)
+        return (None if result['raw_hex'] is None else bytes.fromhex(result['raw_hex']), result['reason'])
+
+    def authenticate_receipt(self, raw):
+        result = self._call('AUTHENTICATE_RECEIPT', raw_hex=raw.hex())
+        return result['receipt'], None if result['bytes_hex'] is None else bytes.fromhex(result['bytes_hex'])
+
+    def observation_reason(self, raw):
+        return self._call('OBSERVATION_REASON', raw_hex=raw.hex())['reason']
+
+    def validate_precondition(self, binding, subject, operation):
+        self._binding(binding)
+        from .supervisor import _process_data_read
+        return _process_data_read(self._call('RP_PRECONDITION', subject=subject, operation=operation)['source'])
+
+    def arm_recovery_grant(self, grant):
+        handle = self.controller._grant_handle(grant)
+        self._call('RP_ARM', grant_handle=handle)
+
+    def initiate_recovery(self, grant, *, fault=None):
+        handle = self.controller._grant_handle(grant)
+        result = self._call('RP_INITIATE', grant_handle=handle, fault=fault or '')
+        return None if result['raw_hex'] is None else bytes.fromhex(result['raw_hex']), result['reason']

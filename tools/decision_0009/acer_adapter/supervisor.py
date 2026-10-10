@@ -1573,8 +1573,10 @@ class OfflineDurableStore:
                     self.witness._actors):
                 raise AuthorizationDenied("witness-backed genuine freshness required")
             self._check_healthy()
-            generation = self.witness.allocate_generation(self.identity)
-            fence = self.witness.acquire_fence(owner_identity)
+            with _process_kernel_call(self, 'entry_allocation', (authorization, owner_identity)):
+                generation = self.witness.allocate_generation(self.identity)
+            with _process_kernel_call(self, 'entry_fence', (authorization, owner_identity)):
+                fence = self.witness.acquire_fence(owner_identity)
             actor = IncarnationActor(self.identity, authorization.authorization_digest,
                 authorization.campaign_id, generation,
                 "%s-incarnation-%d" % (self.identity, generation),
@@ -1813,7 +1815,8 @@ class OfflineDurableStore:
             exact = envelope.canonical_bytes()
             if fault == "before_reservation":
                 raise TransactionPending(envelope.transaction_id, fault, "ABSENT")
-            reservation = self.witness.reserve_frame(actor, envelope, _U04_BOUNDARIES[boundary])
+            with _process_kernel_call(self, 'reservation', (actor, envelope, _U04_BOUNDARIES[boundary])):
+                reservation = self.witness.reserve_frame(actor, envelope, _U04_BOUNDARIES[boundary])
             if fault == "reservation_response_lost":
                 self._health = "UNKNOWN"
                 raise TransactionPending(envelope.transaction_id, fault, "UNKNOWN")
@@ -1844,8 +1847,9 @@ class OfflineDurableStore:
                 raise Quarantined("independent retained frame validation failed")
             if fault == "validated_before_commit":
                 raise TransactionPending(envelope.transaction_id, fault)
-            commit = self.witness.commit_frame(actor, envelope, reservation,
-                                               _U04_BOUNDARIES[boundary], retained)
+            with _process_kernel_call(self, 'commitment', (actor, envelope, reservation, retained)):
+                commit = self.witness.commit_frame(actor, envelope, reservation,
+                                                   _U04_BOUNDARIES[boundary], retained)
             if boundary == 'SHUTDOWN':
                 self._current_actor = None
                 self._sessions.clear()
@@ -1871,7 +1875,8 @@ class OfflineDurableStore:
             if self._current_actor is not actor:
                 raise TransactionPending(envelope.transaction_id, "actor-lost-before-ack", "UNKNOWN")
             self.witness.authenticate(actor, self.identity, boundary)
-            self.witness.acknowledge_frame(actor, frame['receipt'], _boundary=_U04_BOUNDARIES[boundary])
+            with _process_kernel_call(self, 'acknowledgement', (actor, frame['receipt'], _U04_BOUNDARIES[boundary])):
+                self.witness.acknowledge_frame(actor, frame['receipt'], _boundary=_U04_BOUNDARIES[boundary])
             return frame["receipt"]
 
     def require_actor(self, actor, boundary='EXEC'):
@@ -3266,7 +3271,8 @@ class OfflineDurableStore:
                     'canonical_bytes_hex': verified.canonical_bytes.hex(), 'digest': verified.digest}})
             if self._current_actor is not None:
                 self.witness.freeze_actor(self._current_actor)
-            generation = self.witness.allocate_generation(self.identity)
+            with _process_kernel_call(self, 'entry_allocation', (authorization, owner_identity)):
+                generation = self.witness.allocate_generation(self.identity)
             actor = IncarnationActor(self.identity, authorization.authorization_digest, authorization.campaign_id,
                 generation, '%s-incarnation-%d' % (self.identity, generation),
                 '%s-session-%d' % (self.identity, generation), owner_identity, self.witness.current_fence,
@@ -3282,7 +3288,8 @@ class OfflineDurableStore:
             reservation = self._commit_u04(actor, 'ADMIT', reserved, fault=reservation_fault,
                 facts={'consumptions': [['boot_activation', activation.activation_id]],
                        'incarnation': actor.producer()})
-            fence = self.witness.acquire_fence(owner_identity)
+            with _process_kernel_call(self, 'entry_fence', (authorization, owner_identity)):
+                fence = self.witness.acquire_fence(owner_identity)
             actor = self.witness.advance_admission_fence(actor, reservation, fence)
             self._current_actor = actor
             ack = self._custodian.revoke_all_lower_fences(actor)
@@ -3322,8 +3329,10 @@ class OfflineDurableStore:
             if self._current_actor is not None:
                 self.crash()
             mode = self._derived_nonlive_mode(authorization)
-            generation = self.witness.allocate_generation(self.identity)
-            fence = self.witness.acquire_fence(owner_identity)
+            with _process_kernel_call(self, 'entry_allocation', (authorization, owner_identity)):
+                generation = self.witness.allocate_generation(self.identity)
+            with _process_kernel_call(self, 'entry_fence', (authorization, owner_identity)):
+                fence = self.witness.acquire_fence(owner_identity)
             actor = IncarnationActor(self.identity, authorization.authorization_digest,
                 authorization.campaign_id, generation, '%s-incarnation-%d' % (self.identity, generation),
                 '%s-session-%d' % (self.identity, generation), owner_identity, fence, mode, object())
@@ -7353,3 +7362,1119 @@ class _HistoricalEvidenceVerifier:
     _validate_boot_closure = PersistentSupervisor._validate_boot_closure
     _validate_campaign_candidate = PersistentSupervisor._validate_campaign_candidate
     _validate_campaign_closure = PersistentSupervisor._validate_campaign_closure
+
+
+# Checkpoint D's process transport keeps the existing immutable envelope,
+# reservation, commitment and reconciliation kernels. The W-side read view
+# below has no Controller, session registry, grants, dispatcher or custodian.
+def process_envelope(record):
+    """Closed data decoding; this never reconstructs an actor or capability."""
+    names = {'schema_version', 'transaction_id', 'revision', 'predecessor_revision',
+        'predecessor_hash', 'store_identity', 'authorization_digest', 'campaign_id',
+        'producer', 'boundary', 'authority_class', 'payload', 'payload_digest', 'authority_facts'}
+    if type(record) is not dict or set(record) != names:
+        raise AuthorizationDenied('closed process journal envelope required')
+    envelope = JournalEnvelope(record['schema_version'], record['transaction_id'],
+        record['revision'], record['predecessor_revision'], record['predecessor_hash'],
+        record['store_identity'], record['authorization_digest'], record['campaign_id'],
+        _u04_canonical(record['producer']), record['boundary'], record['authority_class'],
+        _u04_canonical(record['payload']), record['payload_digest'],
+        _u04_canonical(record['authority_facts']))
+    if (envelope.schema_version != 'u04-transaction/v1' or
+            envelope.payload_digest != _sha(envelope.payload_bytes) or
+            type(envelope.revision) is not int or envelope.revision < 1 or
+            type(envelope.predecessor_revision) is not int or
+            envelope.predecessor_revision != envelope.revision - 1):
+        raise AuthorizationDenied('process envelope binding differs')
+    envelope.frame_digest
+    return envelope
+
+
+def _process_authorization(record, store_identity):
+    """Trusted bootstrap only: original exact enrollment, never runtime enrollment."""
+    from .contracts import (authorization_from_record, canonical_authorization_bytes,
+                            OfflineChairApproval, OfflineChairTrustRoot)
+    from .authorization import OfflineChairAuthorizationVerifier
+    authorization = authorization_from_record(record)
+    raw = canonical_authorization_bytes(authorization)
+    approval = OfflineChairApproval(authorization.chair_identity, authorization.trust_domain,
+        store_identity, authorization.campaign_id, authorization.authorization_id,
+        authorization.schema_version, raw, authorization.authorization_digest)
+    verifier = OfflineChairAuthorizationVerifier(OfflineChairTrustRoot('d-proof-root', 1,
+        authorization.trust_domain, (authorization.chair_identity,), (approval,)))
+    verifier.verify(authorization, store_identity=store_identity, campaign_id=authorization.campaign_id)
+    return authorization, verifier
+
+
+class _ProcessWitnessReadView:
+    """Independent JPS data plus W membership, with no Controller runtime."""
+
+    def __init__(self, authority):
+        self.authority = authority
+        self.witness = authority.witness
+        self.identity = authority.store_identity
+        self._authentication_service = authority.verifier
+        self.authorization_lock = threading.RLock()
+        self._lock = threading.RLock()
+        self._current_actor = self._current_reconciler = None
+        self._durable = []
+        self._health = 'HEALTHY'
+        self.quarantined = False
+        self.containment_only = False
+        self.torn_tail = b''
+
+        self._receipts = {}
+        self._event_bytes = {}
+
+    def refresh(self):
+        observation = self.authority.channels['jps'].request('READ_JOURNAL', {})
+        if observation.get('service_instance') != self.authority.jps_instance:
+            raise AuthorizationDenied('original JPS continuity unproven')
+        self.torn_tail = bytes.fromhex(observation['tail_hex'])
+        frames = []
+        for record in observation['records']:
+            envelope = process_envelope(record)
+            commit = self.witness._commits.get(envelope.transaction_id)
+            receipt = AppendReceipt(self.identity, envelope.revision, envelope.transaction_id,
+                envelope.payload_digest, envelope.frame_digest,
+                json.loads(envelope.producer_bytes)['fence'],
+                commit.receipt_id if commit is not None else 'pending-' + envelope.transaction_id,
+                commit is not None)
+            frames.append(dict(envelope=envelope, bytes=envelope.canonical_bytes(),
+                               event=record['payload'], event_id=envelope.transaction_id, receipt=receipt))
+        self._durable = frames
+        return observation
+
+    _u04_frame_valid = OfflineDurableStore._u04_frame_valid
+    _validate_reconciliation_frame = OfflineDurableStore._validate_reconciliation_frame
+    reconcile_pending = OfflineDurableStore.reconcile_pending
+
+    def _independent_frame_readback(self, revision):
+        self.refresh()
+        return self._durable[revision - 1]['bytes']
+
+    def read_verified(self, _revision):
+        if self.authority.validate_history() != 'HEALTHY':
+            raise Quarantined('independent retained frontier is not healthy')
+        return tuple(self._durable)
+
+    def assert_healthy_authority(self):
+        if self.authority.validate_history() != 'HEALTHY':
+            raise Quarantined('process store lacks healthy independently committed frontier')
+        return True
+
+    def _validate_rp_envelope(self, actor, envelope):
+        self.authority.validate_payload(actor, envelope)
+
+    def _validate_rw_envelope(self, actor, envelope):
+        self.authority.validate_payload(actor, envelope)
+
+    def _independent_rp_conflict(self, event):
+        channel = self.authority.current_channel
+        if channel is None:
+            return False
+        return channel.request('VALIDATE_RETAINED_CONFLICT', {'event': event})['conflict']
+
+
+def _process_reservation_record(value):
+    return dict(store_identity=value.store_identity, transaction_id=value.transaction_id,
+        revision=value.revision, frame_digest=value.frame_digest,
+        authorization_digest=value.authorization_digest, campaign_id=value.campaign_id,
+        initiator_hex=value.initiator_bytes.hex(), boundary=value.boundary)
+
+
+def _process_reservation(value):
+    value = dict(value)
+    value['initiator_bytes'] = bytes.fromhex(value.pop('initiator_hex'))
+    return WitnessReservation(**value)
+
+
+def _process_commit_record(value):
+    return dict(reservation=_process_reservation_record(value.reservation),
+        completion_mode=value.completion_mode, completer_hex=value.completer_bytes.hex(),
+        frozen_frontier=value.frozen_frontier, receipt_id=value.receipt_id)
+
+
+def _process_commit(value):
+    return WitnessCommit(_process_reservation(value['reservation']), value['completion_mode'],
+        bytes.fromhex(value['completer_hex']), value['frozen_frontier'], value['receipt_id'])
+
+
+def _process_data(value):
+    """Data-only carriers; no decoder constructs an application capability."""
+    if type(value) is bytes:
+        return {'$bytes': value.hex()}
+    if type(value) in (tuple, list):
+        return [_process_data(item) for item in value]
+    if type(value) is dict:
+        return {key: _process_data(item) for key, item in value.items()}
+    if value is None or type(value) in (str, bool, int):
+        return value
+    raise AuthorizationDenied('closed process data carrier required')
+
+
+def _process_data_read(value):
+    if type(value) is dict:
+        if set(value) == {'$bytes'}:
+            return bytes.fromhex(value['$bytes'])
+        return {key: _process_data_read(item) for key, item in value.items()}
+    if type(value) is list:
+        return [_process_data_read(item) for item in value]
+    return value
+
+
+def _process_frame_record(frame):
+    return {'envelope': frame['envelope'].record(), 'receipt': asdict(frame['receipt'])}
+
+
+def _process_frame_read(record):
+    envelope = process_envelope(record['envelope'])
+    return dict(envelope=envelope, bytes=envelope.canonical_bytes(), event_id=envelope.transaction_id,
+        event=json.loads(envelope.payload_bytes), receipt=AppendReceipt(**record['receipt']))
+
+
+class _ProcessWitnessCustodianObservation:
+    """Read-only original C facts for the original W's denial predicates."""
+    def __init__(self, authority):
+        self.authority = authority
+
+    def confirms_publication_conflict(self, intended):
+        return self.authority.channels['c'].request('CONFIRMS_PUBLICATION_CONFLICT', {'intended': intended})['conflict']
+
+    def confirms_required_custody_loss(self, record):
+        return self.authority.channels['c'].request('CONFIRMS_CUSTODY_LOSS', {'record': record})['lost']
+
+
+class ProcessWitnessAuthority:
+    """Host the original accepted W kernel; retain no publication policy.
+
+    The only added authority is bootstrap channel membership. Accepted RP/RW
+    validation runs against the still-live Controller's original opaque
+    bindings, before W's original reservation transition. The callback carrier
+    contains an envelope, never a grant, binding, token or executable object.
+    """
+    def __init__(self, configuration, channels, instance):
+        expected = {'store_identity', 'authorization', 'subject', 'jps_instance',
+                    'c_instance', 'witness_root'}
+        if set(configuration) != expected:
+            raise AuthorizationDenied('closed W bootstrap required')
+        self.store_identity = configuration['store_identity']
+        self.authorization, self.verifier = _process_authorization(configuration['authorization'], self.store_identity)
+        self.authorization_record = configuration['authorization']
+        self.subject = configuration['subject']
+        self.channels, self.instance = channels, instance
+        self.jps_instance, self.c_instance = configuration['jps_instance'], configuration['c_instance']
+        self.witness = OfflineWitness('d-original-w-' + instance)
+        self.view = _ProcessWitnessReadView(self)
+        self.witness._store = self.view
+        self.witness._custodian = _ProcessWitnessCustodianObservation(self)
+        self.current_channel = None
+        self.actor_handle = None
+        self.fenced_channels = set()
+        self.active_persistence = None
+        self.exclusion = None
+        self.suppress = None
+        self._sequence = 0
+        from pathlib import Path
+        from .journal_persistence import ARTIFACT_ROOT
+        self.witness_root = Path(configuration['witness_root'])
+        if self.witness_root.relative_to(ARTIFACT_ROOT).parts[0] != 'witness':
+            raise AuthorizationDenied('approved W artifact root required')
+
+    def _retain(self, kind, value):
+        from .journal_persistence import preserve_file, CASE_WITNESS_LIMIT
+        from .local_ipc import canonical
+        import time
+        raw = canonical(dict(kind=kind, value=value, monotonic_ns=time.monotonic_ns()))
+        used = sum(p.stat().st_size for p in self.witness_root.iterdir() if p.is_file())
+        if used + len(raw) >= CASE_WITNESS_LIMIT:
+            raise StoreError('per-case W artifact limit reached')
+        self._sequence += 1
+        preserve_file(self.witness_root / ('%06d-%s.json' % (self._sequence, kind)), raw)
+
+    def validate_history(self, *, latch=True):
+        if self.view.quarantined or self.witness.quarantined:
+            return 'QUARANTINED'
+        view = self.view if latch else _ProcessWitnessReadView(self)
+        try:
+            observation = view.refresh()
+            if view.torn_tail:
+                raise Quarantined('incomplete original journal frame')
+            if not view._durable:
+                if self.witness.high_revision or self.witness.pending:
+                    raise Quarantined('original W fact without retained journal')
+                health = 'HEALTHY'
+            else:
+                status, _ = view._validate_reconciliation_frame(view._durable[-1]['envelope'])
+                if not observation['barrier']:
+                    raise TransactionPending('persistence', 'barrier', 'UNKNOWN')
+                health = 'RECONCILABLE' if status == 'PENDING' else 'HEALTHY'
+        except Quarantined:
+            if latch:
+                self.view.quarantined = True
+                self.view._health = 'QUARANTINED'
+            return 'QUARANTINED'
+        except (OSError, RuntimeError, ValueError):
+            if latch:
+                self.view._health = 'UNKNOWN'
+            return 'UNKNOWN'
+        if latch:
+            self.view._health = health
+        return health
+
+    def _continuity(self):
+        import secrets
+        challenge = secrets.token_hex(16)
+        observed = self.channels['c'].request('CONTINUITY', {'challenge': challenge})
+        jps = self.view.refresh()
+        if (observed != {'challenge': challenge, 'instance': self.c_instance, 'subject': self.subject} or
+                jps['service_instance'] != self.jps_instance):
+            raise AuthorizationDenied('original service private-channel continuity unproven')
+        return dict(w=self.instance, c=self.c_instance, jps=self.jps_instance)
+
+    def _member(self, channel, producer=None, boundary=None):
+        actor = self.view._current_actor
+        if channel is not self.current_channel or channel in self.fenced_channels or actor is None:
+            raise AuthorizationDenied('original current Controller endpoint required')
+        if self.view.quarantined:
+            raise Quarantined('quarantined original store authority is read-only')
+        if producer is not None and producer != actor.producer():
+            raise AuthorizationDenied('captured original actor differs')
+        if boundary is not None:
+            self.witness.authenticate(actor, self.store_identity, boundary)
+        return actor
+
+    def _proof(self, handle):
+        if self.actor_handle is None or handle != self.actor_handle:
+            raise AuthorizationDenied('original private actor call capability required')
+
+    def validate_payload(self, actor, envelope):
+        self._member(self.current_channel, actor.producer(), envelope.boundary)
+        opcode = {'RP': 'VALIDATE_RP_ENVELOPE', 'RW': 'VALIDATE_RW_ENVELOPE'}[envelope.boundary]
+        reply = self.current_channel.request(opcode, {'frame': envelope.record()})
+        if reply != {'validated': True}:
+            raise AuthorizationDenied('accepted captured lower validator did not complete')
+
+    def snapshot(self):
+        health = self.validate_history(latch=False)
+        w = self.witness
+        return dict(instance=self.instance, identity=w.identity, health=health,
+            high_revision=w.high_revision, high_chain_digest=w.high_chain_digest,
+            high_generation=w.high_generation, high_fence=w.high_fence,
+            current_fence=w.current_fence, quarantined=w.quarantined,
+            pending=[_process_reservation_record(r) for r in w.pending.values()],
+            commits={k: _process_commit_record(v) for k, v in w._commits.items()},
+            frontiers=[dict(key=list(k), value=list(v)) for k, v in w._frontiers.items()],
+            denials=[dict(key=list(k), value=[v[0], list(v[1])]) for k, v in w._denials.items()],
+            actor=None if self.view._current_actor is None else self.view._current_actor.producer(),
+            acknowledged={k: v.producer() for k, v in w._acknowledged.items()},
+            exclusion=self.exclusion is not None, continuity=dict(w=self.instance, c=self.c_instance, jps=self.jps_instance))
+
+    def handle(self, channel, operation, body):
+        if operation == 'SNAPSHOT':
+            return self.snapshot()
+        if channel.peer_role == 'H':
+            if operation == 'SUPPRESS':
+                if body['operation'] not in ('RESERVE_FRAME', 'COMMIT_FRAME', 'ACK_FRAME', 'FENCE', 'DENY_CAMPAIGN', 'RECONCILE'):
+                    raise AuthorizationDenied('closed W response suppression')
+                self.suppress = body['operation']
+                return {'armed': True}
+            if operation == 'FENCE':
+                old = self.channels['controller-%d' % body['channel']]
+                if self.active_persistence is not None or self.exclusion is not None:
+                    raise TransactionPending('exclusion', 'fence', 'UNKNOWN')
+                actor = self.view._current_actor
+                if old is self.current_channel and actor is not None:
+                    frontier = self.witness.freeze_actor(actor)
+                    self.view._current_actor = None
+                    self.current_channel = None
+                    self.actor_handle = None
+                    self.fenced_channels.add(old)
+                    self.channels['c'].request('REVOKE_CONTROLLER', {'controller_slot': body['channel']})
+                    self._retain('fence', dict(producer=actor.producer(), frontier=list(frontier)))
+                return {'fenced': old in self.fenced_channels}
+            if operation == 'QUARANTINE':
+                self.view.quarantined = True
+                self.view._health = 'QUARANTINED'
+                self.witness.quarantined = True
+                return {'quarantined': True}
+        if channel.peer_role == 'JPS':
+            if operation == 'OBJECT_PERMISSION':
+                endpoint = self.channels['controller-%d' % body['controller_slot']]
+                self._proof(body['actor_handle'])
+                self._member(endpoint, body['producer'], body['boundary'])
+                endpoint.request('VALIDATE_CAPTURED_OBJECT', {k: body[k] for k in ('object_id', 'sha256', 'length')})
+                if self.active_persistence is not None or body['length'] > 8 * 1024**2:
+                    raise TransactionPending(body['object_id'], 'original-JPS-writer-exclusion', 'UNKNOWN')
+                import secrets
+                self.active_persistence = 'object-' + secrets.token_hex(24)
+                return {'permitted': True, 'lease': self.active_persistence}
+            if operation == 'OBJECT_PERSISTED':
+                if body['lease'] != self.active_persistence or not body['lease'].startswith('object-'):
+                    raise AuthorizationDenied('exact original object persistence exclusion required')
+                self.active_persistence = None
+                return {'released': True}
+            if operation == 'PERSIST_PERMISSION':
+                endpoint = self.channels['controller-%d' % body['controller_slot']]
+                envelope = process_envelope(body['frame'])
+                actor = self._member(endpoint, json.loads(envelope.producer_bytes), envelope.boundary)
+                expected = WitnessReservation(envelope.store_identity, envelope.transaction_id,
+                    envelope.revision, envelope.frame_digest, envelope.authorization_digest,
+                    envelope.campaign_id, envelope.producer_bytes, envelope.boundary)
+                self._proof(body['actor_handle'])
+                endpoint.request('VALIDATE_CAPTURED_RESERVATION', {'frame': body['frame']})
+                if self.witness.pending.get(envelope.revision) != expected or self.active_persistence is not None:
+                    raise AuthorizationDenied('exact pending accepted W reservation required')
+                self.active_persistence = envelope.transaction_id
+                return {'permitted': True, 'transaction': envelope.transaction_id}
+            if operation == 'PERSISTED':
+                if body['transaction'] != self.active_persistence:
+                    raise AuthorizationDenied('original exact persistence transaction required')
+                self.active_persistence = None
+                return {'released': True}
+        if channel.peer_role == 'C':
+            if operation == 'BEGIN_C_OPERATION':
+                endpoint = self.channels['controller-%d' % body['controller_slot']]
+                self._proof(body['actor_handle'])
+                actor = self._member(endpoint, boundary=body['boundary'])
+                if self.exclusion is not None:
+                    raise TransactionPending('exclusion', 'C-operation', 'UNKNOWN')
+                import secrets
+                self.exclusion = secrets.token_hex(24)
+                return {'lease': self.exclusion, 'producer': actor.producer()}
+            if operation == 'END_C_OPERATION':
+                if body['lease'] != self.exclusion or self.exclusion is None:
+                    raise AuthorizationDenied('exact original C exclusion lease required')
+                self.exclusion = None
+                return {'released': True}
+        if channel.peer_role != 'CONTROLLER' or channel in self.fenced_channels:
+            raise AuthorizationDenied('unadmitted or fenced W endpoint')
+        if self.exclusion is not None and operation not in ('SNAPSHOT', 'QUERY_TRANSACTION',
+                'AUTHENTICATE_ACTOR', 'ACK_CURRENT', 'VERIFY_ENROLLMENT'):
+            raise TransactionPending('exclusion', 'accepted-C-call', 'UNKNOWN')
+        if operation == 'VERIFY_SERVICE_CONTINUITY':
+            return {'continuity': self._continuity()}
+        if operation == 'VERIFY_ENROLLMENT':
+            from .contracts import authorization_from_record
+            self.verifier.verify(authorization_from_record(body['authorization']),
+                store_identity=self.store_identity, campaign_id=self.authorization.campaign_id)
+            return {'verified': True}
+        if operation == 'QUERY_TRANSACTION':
+            status, record = self.witness.query_transaction(body['transaction'])
+            return dict(status=status, record=(_process_commit_record(record) if status == 'COMMITTED'
+                else _process_reservation_record(record) if record is not None else None))
+        if operation == 'ALLOCATE_GENERATION':
+            self._continuity()
+            if self.current_channel not in (None, channel) or body['store_identity'] != self.store_identity:
+                raise AuthorizationDenied('exact store and predecessor fencing required')
+            channel.request('VALIDATE_ENTRY_ALLOCATION', dict(store_identity=self.store_identity,
+                authorization_digest=self.authorization.authorization_digest, campaign_id=self.authorization.campaign_id))
+            return {'generation': self.witness.allocate_generation(self.store_identity)}
+        if operation == 'ACQUIRE_FENCE':
+            if self.current_channel not in (None, channel):
+                raise AuthorizationDenied('predecessor not fenced')
+            channel.request('VALIDATE_ENTRY_FENCE', dict(owner=body['owner'],
+                authorization_digest=self.authorization.authorization_digest, campaign_id=self.authorization.campaign_id))
+            return {'fence': self.witness.acquire_fence(body['owner'])}
+        if operation == 'REGISTER_ACTOR':
+            producer = body['producer']
+            if (self.current_channel not in (None, channel) or
+                    set(producer) != {'generation', 'incarnation_id', 'session_id', 'owner_identity', 'fence', 'mode'}):
+                raise AuthorizationDenied('bootstrap-bound original enrollment membership required')
+            if channel.request('VALIDATE_ACTOR_REGISTRATION', dict(producer=producer, store_identity=self.store_identity,
+                    authorization_digest=self.authorization.authorization_digest, campaign_id=self.authorization.campaign_id)) != {'validated': True}:
+                raise AuthorizationDenied('original captured ENTRY binding unavailable')
+            actor = IncarnationActor(self.store_identity, self.authorization.authorization_digest, self.authorization.campaign_id,
+                producer['generation'], producer['incarnation_id'], producer['session_id'],
+                producer['owner_identity'], producer['fence'], producer['mode'], object())
+            self.witness.register_actor(actor, _entry=_U04_BOUNDARIES['ENTRY'])
+            self.view._current_actor, self.current_channel = actor, channel
+            import secrets
+            self.actor_handle = secrets.token_hex(32)
+            return {'registered': True, 'actor_handle': self.actor_handle}
+        if operation == 'RECONCILE':
+            if self.current_channel is not None:
+                raise AuthorizationDenied('reconciliation interval requires predecessor fencing')
+            self._continuity()
+            health = self.validate_history()
+            if health not in ('HEALTHY', 'RECONCILABLE'):
+                raise Quarantined('separately proven exact reconciliation frontier required')
+            if not self.view._durable or self.view._durable[-1]['event_id'] != body['transaction']:
+                raise AuthorizationDenied('one exact existing checkpoint required')
+            receipt = self.view.reconcile_pending(self.verifier, self.authorization)
+            self.channels['jps'].request('COMPLETE_PERSISTENCE',
+                {'frame': self.view._durable[-1]['envelope'].record()})
+            self._retain('reconciliation', asdict(receipt))
+            return {'receipt': asdict(receipt)}
+        if operation == 'DENY_FROZEN_CAMPAIGN':
+            # Frozen producer metadata is history, never an executable actor.
+            producer = body['producer']
+            actor = IncarnationActor(self.store_identity, self.authorization.authorization_digest, self.authorization.campaign_id,
+                producer['generation'], producer['incarnation_id'], producer['session_id'],
+                producer['owner_identity'], producer['fence'], producer['mode'], object())
+            self.view.refresh()
+            denial = self.witness.deny_frozen_campaign(self.view, actor, body['code'],
+                [f['envelope'] for f in self.view._durable], _boundary=_U04_BOUNDARIES['DENY'])
+            return {'denial': None if denial is None else [denial[0], list(denial[1])]}
+        actor = self._member(channel, body.get('producer'))
+        from .local_ipc import ACTOR_W_OPERATIONS
+        if operation in ACTOR_W_OPERATIONS:
+            self._proof(body['actor_handle'])
+        if operation == 'AUTHENTICATE_ACTOR':
+            self.witness.authenticate(actor, self.store_identity, body['boundary'])
+            return {'authenticated': True}
+        if operation == 'FREEZE_ACTOR':
+            frontier = self.witness.freeze_actor(actor)
+            self.view._current_actor = None
+            self.current_channel = None
+            self.actor_handle = None
+            return {'frontier': list(frontier)}
+        if operation == 'CHANGE_MODE':
+            requested = {k: body[k] for k in ('producer', 'mode', 'boundary', 'session')}
+            if channel.request('VALIDATE_MODE_TRANSITION', requested) != {'validated': True}:
+                raise AuthorizationDenied('original captured mode exposure interval unavailable')
+            self.view.refresh()
+            changed = self.witness.change_mode(actor, body['mode'], _boundary=_U04_BOUNDARIES[body['boundary']],
+                execution_session=FenceSession(**body['session']) if body['session'] else None)
+            self.view._current_actor = changed
+            import secrets
+            self.actor_handle = secrets.token_hex(32)
+            return {'producer': changed.producer(), 'actor_handle': self.actor_handle}
+        if operation == 'RESERVE_FRAME':
+            if self.validate_history() != 'HEALTHY':
+                raise Quarantined('original JPS/W healthy frontier required before reservation')
+            envelope = process_envelope(body['frame'])
+            if channel.request('VALIDATE_CAPTURED_RESERVATION', {'frame': body['frame']}) != {'validated': True}:
+                raise AuthorizationDenied('accepted frozen original transaction unavailable')
+            reservation = self.witness.reserve_frame(actor, envelope, _U04_BOUNDARIES[envelope.boundary])
+            self._retain('reservation', _process_reservation_record(reservation))
+            return {'reservation': _process_reservation_record(reservation)}
+        if operation == 'COMMIT_FRAME':
+            envelope = process_envelope(body['frame'])
+            if channel.request('VALIDATE_CAPTURED_COMMITMENT', {'frame': body['frame']}) != {'validated': True}:
+                raise AuthorizationDenied('accepted independent readback interval unavailable')
+            observation = self.view.refresh()
+            if not observation['barrier']:
+                raise TransactionPending(envelope.transaction_id, 'independent-W-barrier', 'UNKNOWN')
+            commit = self.witness.commit_frame(actor, envelope, self.witness.pending.get(envelope.revision),
+                _U04_BOUNDARIES[envelope.boundary], self.view._durable[envelope.revision - 1]['bytes'])
+            self._retain('commitment', _process_commit_record(commit))
+            return {'commit': _process_commit_record(commit)}
+        if operation == 'ACK_FRAME':
+            if channel.request('VALIDATE_CAPTURED_ACKNOWLEDGEMENT', {'transaction': body['transaction']}) != {'validated': True}:
+                raise AuthorizationDenied('accepted independent confirmation interval unavailable')
+            self.view.refresh()
+            frame = next(f for f in self.view._durable if f['event_id'] == body['transaction'])
+            self.witness.acknowledge_frame(actor, frame['receipt'], _boundary=_U04_BOUNDARIES[frame['envelope'].boundary])
+            self._retain('acceptance-confirmed', dict(transaction=body['transaction'], producer=actor.producer()))
+            return {'acknowledged': True}
+        if operation == 'ACK_CURRENT':
+            return {'current': self.witness.acknowledged_current(actor, body['transaction'])}
+        if operation == 'DENY_CAMPAIGN':
+            self.view.refresh()
+            denial = self.witness.deny_campaign(actor, body['code'], [f['envelope'] for f in self.view._durable],
+                _boundary=_U04_BOUNDARIES['DENY'])
+            self._retain('accepted-denial', {'denial': [denial[0], list(denial[1])]})
+            return {'denial': [denial[0], list(denial[1])]}
+        raise AuthorizationDenied('closed accepted W kernel operation required')
+
+    def close(self):
+        pass
+
+    def suppress_matches(self, operation, body):
+        if self.suppress != operation:
+            return False
+        if operation in ('RESERVE_FRAME', 'COMMIT_FRAME'):
+            return body['frame']['payload'].get('record_type') == 'RECOVERY_PUBLICATION_ACCEPTED'
+        if operation == 'ACK_FRAME':
+            return any(f['event_id'] == body['transaction'] and f['event'].get('record_type') ==
+                'RECOVERY_PUBLICATION_ACCEPTED' for f in self.view._durable)
+        return True
+
+
+# Controller-local transport contexts are deliberately outside the classified
+# accepted store state. They cannot survive this interpreter's termination.
+import weakref as _process_weakref
+_PROCESS_STORES = _process_weakref.WeakKeyDictionary()
+
+
+@contextmanager
+def _process_kernel_call(store, stage, captured):
+    controller = _PROCESS_STORES.get(store)
+    if controller is None:
+        yield
+        return
+    if stage in controller._kernel_calls:
+        raise AuthorizationDenied('captured accepted kernel interval already occupied')
+    controller._kernel_calls[stage] = captured
+    try:
+        yield
+    finally:
+        del controller._kernel_calls[stage]
+
+
+class _ProcessWitnessPort:
+    """Dedicated accepted W operations on one original private endpoint."""
+    def __init__(self, controller):
+        self.controller = controller
+        self._store = self._custodian = None
+        self.local_actor = None
+        self.actor_handle = None
+        self.pending_actor = None
+        self.pending_mode = None
+
+    def _call(self, opcode, **body):
+        from .local_ipc import ACTOR_W_OPERATIONS
+        if opcode in ACTOR_W_OPERATIONS:
+            body['actor_handle'] = self._proof(self.local_actor)
+        return self.controller.channels['w'].request(opcode, body)
+
+    def _proof(self, actor):
+        if actor is None or actor is not self.local_actor or self._store._current_actor is not actor or self.actor_handle is None:
+            raise AuthorizationDenied('exact local original actor call capability required')
+        return self.actor_handle
+
+    def _snapshot(self):
+        return self._call('SNAPSHOT')
+
+    @property
+    def identity(self):
+        return self._snapshot()['identity']
+
+    @property
+    def available(self):
+        self._snapshot()
+        return True
+
+    @property
+    def quarantined(self):
+        return self._snapshot()['quarantined']
+
+    @property
+    def high_revision(self):
+        return self._snapshot()['high_revision']
+
+    @property
+    def high_chain_digest(self):
+        return self._snapshot()['high_chain_digest']
+
+    @property
+    def high_generation(self):
+        return self._snapshot()['high_generation']
+
+    @property
+    def high_fence(self):
+        return self._snapshot()['high_fence']
+
+    @property
+    def current_fence(self):
+        return self._snapshot()['current_fence']
+
+    @property
+    def pending(self):
+        return {r['revision']: _process_reservation(r) for r in self._snapshot()['pending']}
+
+    @property
+    def _actors(self):
+        observed = self._snapshot()['actor']
+        return ({self._store.identity: self.local_actor} if self.local_actor is not None and
+                observed == self.local_actor.producer() else {})
+
+    @property
+    def _frontiers(self):
+        return {tuple(v['key']): tuple(v['value']) for v in self._snapshot()['frontiers']}
+
+    @property
+    def _denials(self):
+        return {tuple(v['key']): (v['value'][0], tuple(v['value'][1])) for v in self._snapshot()['denials']}
+
+    def allocate_generation(self, store_identity, fault=None):
+        if fault is not None:
+            raise AuthorizationDenied('process faults belong to H')
+        return self._call('ALLOCATE_GENERATION', store_identity=store_identity)['generation']
+
+    def acquire_fence(self, owner, fail=False):
+        if fail:
+            raise AuthorizationDenied('process faults belong to H')
+        return self._call('ACQUIRE_FENCE', owner=owner)['fence']
+
+    def register_actor(self, actor, *, _entry=None):
+        if _entry is not _U04_BOUNDARIES['ENTRY'] or type(actor) is not IncarnationActor:
+            raise AuthorizationDenied('accepted ENTRY actor required')
+        self.pending_actor = actor
+        try:
+            result = self._call('REGISTER_ACTOR', producer=actor.producer())
+        finally:
+            self.pending_actor = None
+        self.local_actor = actor
+        self.actor_handle = result['actor_handle']
+
+    def authenticate(self, actor, store_identity, boundary):
+        if (actor is not self.local_actor or self._store._current_actor is not actor or
+                actor.store_identity != store_identity):
+            raise AuthorizationDenied('exact Controller-local captured actor required')
+        self._call('AUTHENTICATE_ACTOR', producer=actor.producer(), boundary=boundary)
+        return actor
+
+    def freeze_actor(self, actor):
+        if actor is not self.local_actor:
+            raise AuthorizationDenied('exact original local actor required')
+        frontier = self._call('FREEZE_ACTOR', producer=actor.producer())['frontier']
+        self.local_actor = None
+        self.actor_handle = None
+        return tuple(frontier)
+
+    def change_mode(self, actor, mode, *, _boundary, execution_session=None):
+        self.authenticate(actor, actor.store_identity, next(k for k, v in _U04_BOUNDARIES.items() if v is _boundary))
+        boundary = next(k for k, v in _U04_BOUNDARIES.items() if v is _boundary)
+        self.pending_mode = (actor, mode, boundary, execution_session)
+        try:
+            result = self._call('CHANGE_MODE', producer=actor.producer(), mode=mode, boundary=boundary,
+                session={} if execution_session is None else asdict(execution_session))
+        finally:
+            self.pending_mode = None
+        changed = replace(actor, mode=mode, execution_session=execution_session)
+        if result['producer'] != changed.producer():
+            raise AuthorizationDenied('mode transition differs from original W')
+        self.local_actor = changed
+        self.actor_handle = result['actor_handle']
+        return changed
+
+    def reserve_frame(self, actor, envelope, boundary_token):
+        if _U04_BOUNDARIES.get(envelope.boundary) is not boundary_token:
+            raise AuthorizationDenied('dedicated accepted boundary required')
+        self.authenticate(actor, envelope.store_identity, envelope.boundary)
+        c = self.controller
+        c._frame_stage('before_reservation', envelope)
+        result = self._call('RESERVE_FRAME', frame=envelope.record())
+        reservation = _process_reservation(result['reservation'])
+        c._frame_stage('after_reservation_before_frame', envelope)
+        c.channels['jps'].request('WRITE_FRAME', {'frame': envelope.record(), 'actor_handle': self._proof(actor)})
+        c._frame_stage('partial_frame', envelope)
+        c._frame_stage('bytes_written_before_barrier', envelope)
+        c.channels['jps'].request('BARRIER', {'frame': envelope.record(), 'actor_handle': self._proof(actor)})
+        c._frame_stage('barrier_complete_before_readback', envelope)
+        return reservation
+
+    def commit_frame(self, actor, envelope, reservation, boundary_token, readback_bytes):
+        self.authenticate(actor, envelope.store_identity, envelope.boundary)
+        if readback_bytes != envelope.canonical_bytes() or _U04_BOUNDARIES.get(envelope.boundary) is not boundary_token:
+            raise AuthorizationDenied('exact accepted frame readback required')
+        self.controller._frame_stage('readback_before_commit', envelope)
+        self.controller._frame_stage('result_frame_before_commit', envelope)
+        result = self._call('COMMIT_FRAME', frame=envelope.record())
+        self.controller._frame_stage('commit_before_ack', envelope)
+        self.controller._frame_stage('result_commit_before_ack', envelope)
+        return _process_commit(result['commit'])
+
+    def acknowledge_frame(self, actor, receipt, *, _boundary):
+        self.authenticate(actor, receipt.store_identity, next(k for k, v in _U04_BOUNDARIES.items() if v is _boundary))
+        self._call('ACK_FRAME', transaction=receipt.event_id)
+        context = self.controller._kernel_calls.get('acknowledgement')
+        if context is not None:
+            frame = next(f for f in self._store._durable if f['event_id'] == receipt.event_id)
+            self.controller._frame_stage('acceptance_before_claim', frame['envelope'])
+
+    def acknowledged_current(self, actor, event_id):
+        if actor is not self.local_actor or actor is None:
+            return False
+        return self._call('ACK_CURRENT', producer=actor.producer(), transaction=event_id)['current']
+
+    def query_transaction(self, transaction_id):
+        result = self._call('QUERY_TRANSACTION', transaction=transaction_id)
+        status, record = result['status'], result['record']
+        return status, (_process_commit(record) if status == 'COMMITTED' else
+                        _process_reservation(record) if record is not None else None)
+
+    def denial(self, actor):
+        return self._denials.get((actor.store_identity, actor.authorization_digest, actor.campaign_id))
+
+    def deny_campaign(self, actor, code, envelopes, *, _boundary):
+        if _boundary is not _U04_BOUNDARIES['DENY']:
+            raise AuthorizationDenied('accepted denial boundary required')
+        self.authenticate(actor, actor.store_identity, 'DENY')
+        value = self._call('DENY_CAMPAIGN', producer=actor.producer(), code=code)['denial']
+        return value[0], tuple(value[1])
+
+    def deny_frozen_campaign(self, store, actor, code, envelopes, *, _boundary):
+        if store is not self._store or _boundary is not _U04_BOUNDARIES['DENY']:
+            raise AuthorizationDenied('original bound frozen denial view required')
+        value = self._call('DENY_FROZEN_CAMPAIGN', producer=actor.producer(), code=code)['denial']
+        return None if value is None else (value[0], tuple(value[1]))
+
+
+class _ProcessDurableStore(OfflineDurableStore):
+    """Accepted store/reducer with JPS-backed bytes, no extra application state."""
+    def read_verified(self, min_revision, expected_chain_digest=None):
+        controller = _PROCESS_STORES[self]
+        observation = controller.channels['jps'].request('READ_JOURNAL', {})
+        self.torn_tail = bytes.fromhex(observation['tail_hex'])
+        if self.torn_tail or not observation['barrier']:
+            self.quarantined = self.containment_only = True
+            self._health = 'QUARANTINED'
+            raise Quarantined('original physical retained stream is incomplete or lacks a barrier')
+        frames = []
+        for record in observation['records']:
+            envelope = process_envelope(record)
+            status, fact = self.witness.query_transaction(envelope.transaction_id)
+            receipt = AppendReceipt(self.identity, envelope.revision, envelope.transaction_id,
+                envelope.payload_digest, envelope.frame_digest, json.loads(envelope.producer_bytes)['fence'],
+                fact.receipt_id if status == 'COMMITTED' else 'pending-' + envelope.transaction_id,
+                status == 'COMMITTED')
+            frames.append(dict(envelope=envelope, bytes=envelope.canonical_bytes(), event=record['payload'],
+                event_id=envelope.transaction_id, receipt=receipt))
+        self._durable = frames
+        return super().read_verified(min_revision, expected_chain_digest)
+
+    def _independent_frame_readback(self, revision):
+        controller = _PROCESS_STORES[self]
+        observed = controller.channels['jps'].request('READ_JOURNAL', {})
+        if observed['tail_hex'] or not observed['barrier']:
+            raise TransactionPending('readback', 'original-JPS-barrier', 'UNKNOWN')
+        envelope = process_envelope(observed['records'][revision - 1])
+        return envelope.canonical_bytes()
+
+    def put_object(self, object_id, bytes_value, *, actor=None, boundary='EXEC'):
+        digest = super().put_object(object_id, bytes_value, actor=actor, boundary=boundary)
+        controller = _PROCESS_STORES[self]
+        with _process_kernel_call(self, 'object', (actor, object_id, bytes_value)):
+            controller.channels['jps'].request('PUT_OBJECT', dict(object_id=object_id,
+                bytes_hex=bytes_value.hex(), producer=actor.producer(), boundary=boundary,
+                actor_handle=self.witness._proof(actor)))
+        return digest
+
+    def read_object(self, object_id, expected_digest):
+        controller = _PROCESS_STORES[self]
+        value = controller.channels['jps'].request('READ_OBJECT', {'object_id': object_id})
+        raw = bytes.fromhex(value['bytes_hex'])
+        if _sha(raw) != expected_digest:
+            raise StoreError('independent original JPS immutable object mismatch')
+        return raw
+
+
+class ProcessController:
+    """Disposable host for the accepted PersistentSupervisor and local store."""
+    def __init__(self, configuration, channels):
+        self.configuration, self.channels = configuration, channels
+        self.store_identity = configuration['store_identity']
+        self.authorization, self.verifier = _process_authorization(configuration['authorization'], self.store_identity)
+        self.authorization_record = configuration['authorization']
+        self.subject = configuration['subject']
+        self.replacement = configuration['replacement']
+        self.cut = ''
+        self.supervisor = self.store = None
+        self.port = self.custodian = None
+        self._grant_handles = {}
+        self._kernel_calls = {}
+
+    def _stage(self, stage, transaction=''):
+        if stage == self.cut:
+            self.channels['h'].request('STAGE', {'stage': stage, 'transaction': transaction})
+
+    def _frame_stage(self, stage, envelope):
+        event = json.loads(envelope.payload_bytes)
+        result_cut = stage.startswith('result_')
+        required = 'RECOVERY_PUBLICATION_RESULT' if result_cut else 'RECOVERY_PUBLICATION_ACCEPTED'
+        if event.get('record_type') == required and (not result_cut or event.get('query_or_grant') == 'GRANT'):
+            if stage == 'after_reservation_before_frame' and self.cut == 'partial_frame':
+                self.channels['h'].request('STAGE', {'stage': 'partial_frame_prepare', 'transaction': envelope.transaction_id})
+            self._stage(stage, envelope.transaction_id)
+
+    def handle(self, channel, operation, body):
+        if channel is self.channels['w']:
+            if operation in ('VALIDATE_ENTRY_ALLOCATION', 'VALIDATE_ENTRY_FENCE'):
+                kind = 'entry_allocation' if operation == 'VALIDATE_ENTRY_ALLOCATION' else 'entry_fence'
+                captured = self._kernel_calls.get(kind)
+                if (captured is None or captured[0] is not self.authorization or
+                        body['authorization_digest'] != captured[0].authorization_digest or
+                        body['campaign_id'] != captured[0].campaign_id or
+                        operation == 'VALIDATE_ENTRY_FENCE' and body['owner'] != captured[1] or
+                        operation == 'VALIDATE_ENTRY_ALLOCATION' and body['store_identity'] != self.store.identity):
+                    raise AuthorizationDenied('original accepted entry invocation required')
+                return {'validated': True}
+            if operation == 'VALIDATE_CAPTURED_OBJECT':
+                captured = self._kernel_calls.get('object')
+                if (captured is None or captured[0] is not self.store._current_actor or
+                        captured[1] != body['object_id'] or _sha(captured[2]) != body['sha256'] or
+                        len(captured[2]) != body['length']):
+                    raise AuthorizationDenied('exact accepted immutable object persistence call required')
+                return {'validated': True}
+            if operation == 'VALIDATE_RETAINED_CONFLICT':
+                return {'conflict': self.store._independent_rp_conflict(body['event'])}
+            if operation == 'VALIDATE_ACTOR_REGISTRATION':
+                candidate = self.store.witness.pending_actor
+                if (candidate is None or type(candidate) is not IncarnationActor or
+                        candidate.producer() != body['producer'] or
+                        candidate.store_identity != body['store_identity'] or
+                        candidate.authorization_digest != body['authorization_digest'] or
+                        candidate.campaign_id != body['campaign_id']):
+                    raise AuthorizationDenied('original local ENTRY actor call is absent')
+                return {'validated': True}
+            if operation == 'VALIDATE_MODE_TRANSITION':
+                captured = self.store.witness.pending_mode
+                if captured is None:
+                    raise AuthorizationDenied('original local accepted mode transition call is absent')
+                actor, mode, boundary, session = captured
+                if (actor is not self.store._current_actor or actor.producer() != body['producer'] or
+                        mode != body['mode'] or boundary != body['boundary'] or
+                        ({} if session is None else asdict(session)) != body['session']):
+                    raise AuthorizationDenied('captured accepted mode transition differs')
+                return {'validated': True}
+            if operation in ('VALIDATE_CAPTURED_RESERVATION', 'VALIDATE_CAPTURED_COMMITMENT'):
+                stage = 'reservation' if operation == 'VALIDATE_CAPTURED_RESERVATION' else 'commitment'
+                captured = self._kernel_calls.get(stage)
+                if (captured is None or captured[0] is not self.store._current_actor or
+                        captured[1].record() != body['frame']):
+                    raise AuthorizationDenied('exact live original accepted kernel transaction call required')
+                return {'validated': True}
+            if operation == 'VALIDATE_CAPTURED_ACKNOWLEDGEMENT':
+                captured = self._kernel_calls.get('acknowledgement')
+                if (captured is None or captured[0] is not self.store._current_actor or
+                        captured[1].event_id != body['transaction']):
+                    raise AuthorizationDenied('original independent confirmation interval required')
+                return {'validated': True}
+            actor = self.store._current_actor
+            envelope = process_envelope(body['frame'])
+            if operation == 'VALIDATE_RP_ENVELOPE':
+                self.store._validate_rp_envelope(actor, envelope)
+            elif operation == 'VALIDATE_RW_ENVELOPE':
+                self.store._validate_rw_envelope(actor, envelope)
+            else:
+                raise AuthorizationDenied('closed accepted lower validator callback')
+            return {'validated': True}
+        if channel is self.channels['c']:
+            return self._c_callback(operation, body)
+        if channel is not self.channels['h'] or operation != 'RUN':
+            raise AuthorizationDenied('closed Controller driver operation')
+        self.cut = body['cut']
+        action = body['action']
+        if action in ('initialize', 'recover'):
+            return self._construct()
+        if action == 'reserve_original':
+            self.publisher.exclusive_create(self.intent)
+            return {'reserved': True}
+        if action == 'write_original_partial':
+            self.publisher.write(self.intent, self.intent.bytes[:7], allow_partial=True)
+            return {'written': 7}
+        if action == 'make_supplement':
+            result = next(f for f in reversed(self.store._committed_frames()) if
+                f['event'].get('record_type') == 'RECOVERY_PUBLICATION_RESULT' and
+                f['event'].get('outcome') == 'VERIFIED')
+            proof = result['event']['destination_receipt']
+            raw = self.store.read_object(proof['object_id'], proof['sha256'])
+            binding = self.store.recovery_writer_binding(self.supervisor._actor)
+            receipt = self.store.record_recovery_supplement(binding, parent_ref=self.store._reference(result['receipt']),
+                supplement_kind='PUBLICATION_READBACK', evidence_bytes=raw,
+                source_id=self.port.port_identity, verifier_id=self.port.port_identity)
+            return {'receipt': asdict(receipt)}
+        if action in ('perform_supplement', 'query_supplement'):
+            binding = self.store.recovery_publication_binding(self.supervisor._actor, self.authorization)
+            supplement = next(f for f in reversed(self.store._committed_frames()) if
+                f['event'].get('record_type') == 'RECOVERY_SUPPLEMENT')
+            op = 'QUERY' if action == 'query_supplement' else 'ENSURE_EXACT_OBJECT'
+            subject = self.store.recovery_supplement_subject(binding, self._original_ref(),
+                self.store._reference(supplement['receipt']), op, policy_rule_id='d-supplement-rule')
+            receipt = (self.store.query_recovery_publication(binding, subject) if op == 'QUERY' else
+                       self.store.perform_recovery_publication(binding, subject, op))
+            return {'receipt': asdict(receipt)}
+        if action == 'substitute_enrollment':
+            from .contracts import canonical_authorization_bytes, authorization_digest
+            substitute = replace(self.authorization, nonce=self.authorization.nonce + '-substitute')
+            substitute = replace(substitute, authorization_digest=authorization_digest(substitute))
+            carrier = json.loads(canonical_authorization_bytes(substitute))
+            carrier['authorization_digest'] = substitute.authorization_digest
+            return self.channels['w'].request('VERIFY_ENROLLMENT', {'authorization': carrier})
+        if action == 'copied_actor':
+            self.store.require_actor(replace(self.store._current_actor), 'RP')
+            raise AuthorizationDenied('copied actor unexpectedly admitted')
+        if action == 'copied_binding':
+            binding = self.store.recovery_publication_binding(self.supervisor._actor, self.authorization)
+            self.store._require_rp_binding(replace(binding))
+            raise AuthorizationDenied('copied binding unexpectedly admitted')
+        if action == 'copied_grant':
+            grant = next(iter(self.store._rp_grants.values()))
+            return {'handle': self._grant_handle(replace(grant))}
+        if action == 'copied_frame':
+            frame = self.store._durable[-1]['envelope'].record()
+            return self.channels['w'].request('RESERVE_FRAME', {'frame': frame,
+                'actor_handle': self.store.witness._proof(self.store._current_actor)})
+        if action == 'lower_object':
+            actor = self.store._current_actor
+            return self.channels['jps'].request('PUT_OBJECT', dict(object_id='unadmitted-object',
+                bytes_hex=b'copied carrier'.hex(), producer=actor.producer(), boundary='RP',
+                actor_handle=self.store.witness._proof(actor)))
+        if action == 'lower_barrier':
+            actor = self.store._current_actor
+            return self.channels['jps'].request('BARRIER', dict(frame=self.store._durable[-1]['envelope'].record(),
+                actor_handle=self.store.witness._proof(actor)))
+        if action == 'lower_allocation':
+            return self.channels['w'].request('ALLOCATE_GENERATION', {'store_identity': self.store.identity})
+        if action == 'lower_fence':
+            return self.channels['w'].request('ACQUIRE_FENCE', {'owner': self.supervisor._actor.owner_identity})
+        if action == 'inspect_runtime':
+            return dict(controller_type=type(self.supervisor).__name__,
+                store_type=type(self.store).__name__, actor=None if self.store._current_actor is None else self.store._current_actor.producer(),
+                registered_sessions=[asdict(s) for s in self.store._sessions.values()],
+                publication_grants=list(self.store._publication_grants), rp_grants=list(self.store._rp_grants),
+                measurement_window=self.store._measurement_window,
+                window_operation_ids=list(self.store._window_operations),
+                campaign_state=self.supervisor.campaign_state, boot_state=self.supervisor.boot_state,
+                reconstruction_violations=self.supervisor.reconstruction_violations)
+        if action in ('perform', 'continue', 'durable', 'verify', 'query'):
+            binding = self.store.recovery_publication_binding(self.supervisor._actor, self.authorization)
+            original = self._original_ref()
+            op = {'perform': 'ENSURE_EXACT_OBJECT', 'continue': 'CONTINUE_RESERVED_EXACT',
+                'durable': 'ESTABLISH_DURABILITY', 'verify': 'VERIFY_EXACT_OBJECT', 'query': 'QUERY'}[action]
+            subject = self.store.recovery_publication_subject(binding, original, op)
+            receipt = (self.store.query_recovery_publication(binding, subject) if op == 'QUERY' else
+                self.store.perform_recovery_publication(binding, subject, op))
+            return {'receipt': asdict(receipt)}
+        raise AuthorizationDenied('closed accepted Controller scenario')
+
+    def _original_ref(self):
+        frames = [f for f in self.store._committed_frames() if f['event'].get('operation') == 'intent' and
+            self.store.publication_record_provenanced(f, phase='INTENT')]
+        if len(frames) != 1:
+            raise AuthorizationDenied('one actual accepted original INTENT required')
+        return self.store._reference(frames[0]['receipt'])
+
+    def _construct(self):
+        if self.store is not None:
+            raise AuthorizationDenied('one accepted Controller runtime per process')
+        self.channels['w'].request('VERIFY_ENROLLMENT', {'authorization': self.authorization_record})
+        from .authorization import OfflineBootActivationApproval, OfflineBootActivationVerifier
+        from .evidence import (OfflinePublicationDestination, _ProcessDestinationTransport,
+                               _PROCESS_DESTINATIONS, ImmutablePublication)
+        from .custody import _ProcessCustodianPort
+        activation = BootActivation('activation-1', self.authorization.authorization_digest,
+            1, 'boot-1', None, self.authorization.chair_identity, True)
+        activation_verifier = OfflineBootActivationVerifier('d-original-activation-root', (
+            OfflineBootActivationApproval(self.store_identity, self.authorization.authorization_digest,
+                self.authorization.chair_identity, activation.activation_id, 1, activation.observed_boot_id),))
+        rule = self.authorization.destination_rules[0]
+        self.port = OfflinePublicationDestination(rule.port_identity, rule.destination_id)
+        transport = _ProcessDestinationTransport(self, self.port)
+        _PROCESS_DESTINATIONS[self.port] = transport
+        witness = _ProcessWitnessPort(self)
+        self.store = _ProcessDurableStore(self.store_identity, witness, chair_verifier=self.verifier,
+            activation_verifier=activation_verifier, publication_destinations=(self.port,))
+        _PROCESS_STORES[self.store] = self
+        observed = self.channels['jps'].request('READ_JOURNAL', {})
+        self.store.torn_tail = bytes.fromhex(observed['tail_hex'])
+        frames = []
+        for record in observed['records']:
+            envelope = process_envelope(record)
+            status, fact = witness.query_transaction(envelope.transaction_id)
+            receipt = AppendReceipt(self.store_identity, envelope.revision, envelope.transaction_id,
+                envelope.payload_digest, envelope.frame_digest, json.loads(envelope.producer_bytes)['fence'],
+                fact.receipt_id if status == 'COMMITTED' else 'pending-' + envelope.transaction_id,
+                status == 'COMMITTED')
+            frames.append(dict(envelope=envelope, event_id=envelope.transaction_id,
+                bytes=envelope.canonical_bytes(), event=record['payload'], receipt=receipt))
+        self.store._durable = frames
+        objects = self.channels['jps'].request('READ_OBJECTS', {})['objects']
+        self.store._objects = {key: bytes.fromhex(raw) for key, raw in objects.items()}
+        if witness.pending and frames and observed['barrier'] and not self.store.torn_tail:
+            transaction = frames[-1]['event_id']
+            self._stage('before_reconcile', transaction)
+            result = self.channels['w'].request('RECONCILE', {'transaction': transaction})
+            self.store._durable[-1]['receipt'] = AppendReceipt(**result['receipt'])
+            self._stage('after_reconcile_before_reentry', transaction)
+        artifacts = _process_data_read(self.configuration['artifacts'])
+        verification = ArtifactVerificationPrimitive('d-fixture-artifacts', self.authorization,
+            lambda: copy.deepcopy(artifacts))
+        self.custodian = _ProcessCustodianPort(self)
+        owner = 'recovery-reader-1' if self.replacement else 'd-origin'
+        initial_session = FenceSession(1, 'unadmitted-bootstrap-session', owner, 1, False)
+        self.supervisor = PersistentSupervisor(self.store, verification, self.custodian,
+            self.authorization, initial_session)
+        if not self.replacement:
+            self.supervisor.admit_campaign(activation)
+            self.publisher = ImmutablePublication(self.supervisor)
+            self.intent = self.publisher.intent(rule.destination_id, self.authorization.object_rules[0].object_key,
+                bytes.fromhex(self.configuration['source_hex']), source_proof=transport.source_proof)
+        return dict(mode=self.store._entry_mode, controller_type=type(self.supervisor).__name__,
+            history_revision=self.store.revision)
+
+    def _grant_handle(self, grant):
+        if type(grant) is RecoveryPublicationGrant:
+            payload = parse_closed_canonical(grant.canonical_bytes)
+            if self.store._rp_grants.get(payload['grant_id']) is not grant:
+                raise AuthorizationDenied('original exact Controller-local RP grant required')
+        elif type(grant) is PublicationOperationGrant:
+            if self.store._publication_grants.get(grant.grant_id) is not grant:
+                raise AuthorizationDenied('original exact Controller-local publication grant required')
+        else:
+            raise AuthorizationDenied('closed accepted live publication grant required')
+        for handle, original in self._grant_handles.items():
+            if original is grant:
+                return handle
+        import secrets
+        handle = secrets.token_hex(32)
+        self._grant_handles[handle] = grant
+        return handle
+
+    def _resolve_grant(self, handle):
+        grant = self._grant_handles.get(handle)
+        if grant is None or self._grant_handle(grant) != handle:
+            raise AuthorizationDenied('live original endpoint grant binding unavailable')
+        return grant
+
+    def _c_callback(self, operation, body):
+        store, actor = self.store, self.store._current_actor
+        if operation == 'VALIDATE_ORIGINAL_SOURCE_BINDING':
+            captured = self._kernel_calls.get('original_source')
+            if (captured is None or captured[0] is not actor or captured[3] != body['intent']):
+                raise AuthorizationDenied('original accepted producer binding invocation required')
+            store.require_actor(actor)
+            return {'validated': True}
+        if operation == 'VALIDATE_CURRENT_ACTOR':
+            if actor is None or body['producer'] != actor.producer():
+                raise AuthorizationDenied('C callback differs from captured original actor')
+            store.require_actor(actor, body['boundary'])
+            return {'validated': True}
+        if operation == 'VALIDATE_HEALTH':
+            store.assert_healthy_authority()
+            return {'validated': True}
+        if operation == 'READ_ACCEPTED_FRAMES':
+            return {'frames': [_process_frame_record(f) for f in store._committed_frames()]}
+        if operation == 'VALIDATE_ORIGINAL_INITIATION':
+            grant = self._resolve_grant(body['grant_handle'])
+            frame = store.validate_publication_initiation(actor, grant, body['planned'])
+            return {'frame': _process_frame_record(frame)}
+        if operation == 'VALIDATE_RP_INITIATION':
+            grant = self._resolve_grant(body['grant_handle'])
+            checked_actor, payload, subject, port, source, accepted = store.validate_rp_initiation(grant)
+            if port is not self.port or checked_actor is not actor:
+                raise AuthorizationDenied('original C accepted initiation binding differs')
+            return _process_data(dict(payload=payload, subject=subject, source=source, acceptance_ref=accepted))
+        if operation == 'VALIDATE_RP_BINDING':
+            store._require_rp_binding(store._rp_binding)
+            return {'validated': True}
+        if operation == 'VALIDATE_RP_SUBJECT':
+            port, source = store._validate_rp_subject(store._rp_binding, body['subject'], body['operation'])
+            if port is not self.port:
+                raise AuthorizationDenied('original accepted destination binding differs')
+            return {'source': _process_data(source)}
+        if operation == 'READ_ACCEPTED_OBJECT':
+            return {'bytes_hex': store.read_object(body['object_id'], body['sha256']).hex()}
+        if operation == 'PUT_ACCEPTED_OBJECT':
+            raw = bytes.fromhex(body['bytes_hex'])
+            return {'digest': store.put_object(body['object_id'], raw, actor=actor)}
+        if operation == 'PUBLICATION_PROVENANCED':
+            frame = next(f for f in store._committed_frames() if f['event_id'] == body['event_id'])
+            return {'provenanced': store.publication_record_provenanced(frame, phase=body['phase'])}
+        if operation == 'FRAME_PROVENANCED':
+            frame = next(f for f in store._committed_frames() if f['event_id'] == body['event_id'])
+            return {'provenanced': store.frame_has_provenance(frame)}
+        if operation == 'WINDOW_PROVENANCED':
+            frame = next(f for f in store._committed_frames() if f['event_id'] == body['event_id'])
+            return {'provenanced': store.window_record_provenanced(frame)}
+        if operation == 'ACK_ACCEPTED_TRANSACTION':
+            return {'current': store.witness.acknowledged_current(actor, body['transaction'])}
+        raise AuthorizationDenied('closed accepted C validator callback required')
+
+    def close(self):
+        self._grant_handles.clear()
+        self._kernel_calls.clear()
+        self.supervisor = self.store = self.port = self.custodian = None

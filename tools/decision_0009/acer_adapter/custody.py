@@ -1797,3 +1797,425 @@ class OfflineContainmentFactory:
                     observation['bytes']!=entry['receipt_bytes'])
             if not valid:raise CustodyError('reason must describe actual independently observed unresolved state')
             return True
+
+
+class _ProcessCBinding:
+    def __init__(self, actor):
+        self.actor = actor
+
+
+class _ProcessCGrant:
+    """Private service-side call binding; never reconstructed from a record."""
+    def __init__(self, handle, binding):
+        self.handle, self.binding = handle, binding
+
+
+class _ProcessCReadWitness:
+    def __init__(self, view):
+        self.view = view
+
+    @property
+    def high_generation(self):
+        if not self.view._bootstrapping:
+            raise CustodyError('bootstrap-only destination binding predicate')
+        return 0
+
+    def acknowledged_current(self, actor, event_id):
+        self.view.require_actor(actor, 'RP')
+        return self.view.callback('ACK_ACCEPTED_TRANSACTION', transaction=event_id)['current']
+
+
+class _ProcessCStoreView:
+    """Finite live callbacks into the accepted Controller, not its object graph.
+
+    The C operation holds W exclusion throughout these callbacks. A dead or
+    fenced Controller cannot answer them and cannot supply a new live grant.
+    Journal/receipt carriers are historical data; handles resolve only in the
+    original endpoint's private live call registry.
+    """
+    def __init__(self, host, authorization, store_identity):
+        self.host, self.identity = host, store_identity
+        self.authorization = authorization
+        self.authorization_lock = threading.RLock()
+        self._authentication_service = object()
+        self._publication_destinations = ()
+        self._current_actor = None
+        self.channel = None
+        self.binding = None
+        self._bound_custodian = None
+        self._bootstrapping = True
+        self.witness = _ProcessCReadWitness(self)
+
+    def callback(self, opcode, **body):
+        if self.channel is None:
+            raise CustodyError('no original current Controller call binding')
+        return self.channel.request(opcode, body)
+
+    def bind_custodian(self, custodian):
+        if self._bound_custodian not in (None, custodian):
+            raise CustodyError('original C custodian binding is pinned')
+        self._bound_custodian = custodian
+
+    def require_actor(self, actor, boundary='EXEC'):
+        if actor is not self._current_actor or actor is None:
+            raise CustodyError('exact original channel-bound C actor required')
+        self.callback('VALIDATE_CURRENT_ACTOR', producer=actor.producer(), boundary=boundary)
+        return actor
+
+    def assert_healthy_authority(self):
+        self.callback('VALIDATE_HEALTH')
+        return True
+
+    def _admitted_payload(self):
+        self.assert_healthy_authority()
+        return self.authorization
+
+    def _committed_frames(self):
+        from .supervisor import _process_frame_read
+        return [_process_frame_read(f) for f in self.callback('READ_ACCEPTED_FRAMES')['frames']]
+
+    @property
+    def _durable(self):
+        if self._bootstrapping:
+            return []
+        return self._committed_frames()
+
+    @property
+    def revision(self):
+        return len(self._committed_frames())
+
+    def _reference(self, receipt):
+        return dict(event_id=receipt.event_id, revision=receipt.revision, payload_digest=receipt.event_digest)
+
+    def _exact_ref(self, reference):
+        frames = [f for f in self._committed_frames() if self._reference(f['receipt']) == reference]
+        if len(frames) != 1:
+            raise CustodyError('exact accepted committed reference unavailable')
+        return frames[0]
+
+    def publication_record_provenanced(self, frame, *, phase='RESULT'):
+        return self.callback('PUBLICATION_PROVENANCED', event_id=frame['event_id'], phase=phase)['provenanced']
+
+    def frame_has_provenance(self, frame):
+        return self.callback('FRAME_PROVENANCED', event_id=frame['event_id'])['provenanced']
+
+    def window_record_provenanced(self, frame):
+        return self.callback('WINDOW_PROVENANCED', event_id=frame['event_id'])['provenanced']
+
+    def validate_publication_initiation(self, actor, grant, planned):
+        self.require_actor(actor)
+        if grant is not self.host.current_original_grant:
+            raise CustodyError('exact live original publication call grant required')
+        from .supervisor import _process_frame_read
+        return _process_frame_read(self.callback('VALIDATE_ORIGINAL_INITIATION',
+            grant_handle=self.host.current_handle, planned=planned)['frame'])
+
+    def validate_rp_initiation(self, grant):
+        if (type(grant) is not _ProcessCGrant or grant is not self.host.grants.get((self.channel, grant.handle)) or
+                grant.binding is not self.binding):
+            raise CustodyError('exact live original channel RP grant binding required')
+        from .supervisor import _process_data_read
+        record = _process_data_read(self.callback('VALIDATE_RP_INITIATION', grant_handle=grant.handle))
+        self.require_actor(self._current_actor, 'RP')
+        return (self._current_actor, record['payload'], record['subject'],
+                self.host.port, record['source'], record['acceptance_ref'])
+
+    def _require_rp_binding(self, binding):
+        if binding is not self.binding:
+            raise CustodyError('original C call RP binding required')
+        self.require_actor(binding.actor, 'RP')
+        self.callback('VALIDATE_RP_BINDING')
+        return binding.actor
+
+    def _validate_rp_subject(self, binding, subject, operation):
+        self._require_rp_binding(binding)
+        from .supervisor import _process_data_read
+        record = _process_data_read(self.callback('VALIDATE_RP_SUBJECT', subject=subject, operation=operation))
+        return self.host.port, record['source']
+
+    def read_object(self, object_id, expected_digest):
+        return bytes.fromhex(self.callback('READ_ACCEPTED_OBJECT', object_id=object_id, sha256=expected_digest)['bytes_hex'])
+
+    def put_object(self, object_id, raw, *, actor=None):
+        self.require_actor(actor)
+        return self.callback('PUT_ACCEPTED_OBJECT', object_id=object_id, bytes_hex=raw.hex())['digest']
+
+
+class ProcessRetainedHost:
+    """The original accepted C destination, custodian and producer instances."""
+    def __init__(self, configuration, channels, instance):
+        from .supervisor import _process_authorization
+        from .evidence import (EvidencePipeline, OfflinePublicationDestination,
+                               _PROCESS_DESTINATION_OBSERVERS)
+        self.channels, self.instance = channels, instance
+        self.subject = configuration['subject']
+        authorization, _ = _process_authorization(configuration['authorization'], configuration['store_identity'])
+        self.authorization = authorization
+        self.pipeline = EvidencePipeline(max_frame_bytes=8_388_608)
+        raw = bytes.fromhex(configuration['source_hex'])
+        captured = self.pipeline.capture('d-original-source', raw, 1, 1)
+        self.produced = self.pipeline.freeze_raw(captured)
+        rule = authorization.destination_rules[0]
+        self.port = OfflinePublicationDestination(rule.port_identity, rule.destination_id,
+            producers=((authorization.evidence_source_ids[0], self.pipeline),))
+        self.view = _ProcessCStoreView(self, authorization, configuration['store_identity'])
+        self.port.bind_store(self.view)
+        self.view._publication_destinations = (self.port,)
+        self.view._bootstrapping = False
+        self.custodian = OfflineCustodian('d-original-custodian')
+        self.custodian.bind_authority(self.view, lambda *args: None)
+        self.grants = {}
+        self.current_original_grant = self.current_handle = None
+        self.suppress = None
+        self._actor_by_channel = {}
+        self.stage = None
+        self.destination_fault = None
+        _PROCESS_DESTINATION_OBSERVERS[self.port] = self._observe_stage
+
+    def _observe_stage(self, stage, operation_id):
+        if stage == self.stage:
+            self.stage = None
+            self.channels['h'].request('C_STAGE', {'stage': stage, 'operation_id': operation_id})
+
+    def _registries(self):
+        from .supervisor import _process_data
+        subjects = {k: {n: v for n, v in s.items() if n != 'producers'} for k, s in self.port._subjects.items()}
+        return _process_data(dict(subjects=subjects, operations=self.port._operations,
+            grant_results=self.port._grant_results, reserved_subjects=sorted(self.port._reserved_subjects),
+            objects=self.port._objects, claims=sorted(self.port._claims), counts=self.port._counts,
+            publication_counts=self.custodian._publication_counts,
+            available=self.port.available, readback_available=self.port.readback_available))
+
+    def _invoke(self, channel, operation, body):
+        from .supervisor import (IncarnationActor, _process_data, PublicationOperationBinding,
+                                 PublicationOperationGrant, _process_frame_read)
+        from .evidence import PublicationIntent
+        slot = next(int(n.split('-')[1]) for n, c in self.channels.items()
+                    if c is channel and n.startswith('controller-'))
+        boundary = 'EXEC' if operation in ('BIND_SOURCE', 'ORIGINAL_PUBLICATION') else 'RP'
+        lease = self.channels['w'].request('BEGIN_C_OPERATION', dict(controller_slot=slot,
+            boundary=boundary, actor_handle=body['actor_handle']))
+        producer = lease['producer']
+        existing = self._actor_by_channel.get(channel)
+        if existing is None or existing.producer() != producer:
+            existing = IncarnationActor(self.view.identity, self.authorization.authorization_digest,
+                self.authorization.campaign_id, producer['generation'], producer['incarnation_id'],
+                producer['session_id'], producer['owner_identity'], producer['fence'], producer['mode'], object())
+            self._actor_by_channel[channel] = existing
+        self.view.channel, self.view._current_actor = channel, existing
+        self.view.binding = _ProcessCBinding(existing)
+        try:
+            if operation == 'BIND_SOURCE':
+                value = body['intent']
+                channel.request('VALIDATE_ORIGINAL_SOURCE_BINDING', {'intent': value})
+                intent = PublicationIntent(value['intent_id'], value['destination'], value['object_key'],
+                    value['object_digest'], value['length'], bytes.fromhex(value['bytes_hex']))
+                self.port.bind_original_source(existing, intent, (self.pipeline, self.produced))
+                result = {}
+            elif operation == 'ORIGINAL_PUBLICATION':
+                frame = _process_frame_read(channel.request('VALIDATE_ORIGINAL_INITIATION',
+                    dict(grant_handle=body['grant_handle'], planned=body['planned']))['frame'])
+                request = PublicationOperationBinding.from_record(self.view.identity, frame['event'])
+                grant = PublicationOperationGrant(request, request.attestation_digest())
+                self.current_original_grant, self.current_handle = grant, body['grant_handle']
+                payload = bytes.fromhex(body['payload_hex']) if body['payload_present'] else None
+                result = {'event': self.custodian.initiate_publication(existing, grant, body['planned'], payload)}
+            elif operation == 'RP_PRECONDITION':
+                source = self.port.validate_precondition(self.view.binding, body['subject'], body['operation'])
+                result = {'source': _process_data({k: v for k, v in source.items() if k != 'producers'})}
+            elif operation == 'RP_EXCLUDE':
+                source = self.port.exclude_original_writers(self.view.binding, body['subject'])
+                result = {'source': _process_data({k: v for k, v in source.items() if k != 'producers'})}
+            elif operation == 'RP_OBSERVE':
+                raw, reason = self.port.observe(self.view.binding, body['subject'])
+                result = dict(raw_hex=None if raw is None else raw.hex(), reason=reason)
+            elif operation == 'RP_REGISTER_SUPPLEMENT':
+                self.port.register_supplement(self.view.binding, body['subject'], body['intent_ref'])
+                result = {}
+            elif operation in ('RP_ARM', 'RP_INITIATE'):
+                key = (channel, body['grant_handle'])
+                grant = self.grants.get(key)
+                if operation == 'RP_ARM':
+                    if grant is not None:
+                        raise CustodyError('RP service call grant already bound')
+                    grant = _ProcessCGrant(body['grant_handle'], self.view.binding)
+                    self.grants[key] = grant
+                    self.port.arm_recovery_grant(grant)
+                    result = {}
+                else:
+                    if grant is None:
+                        raise CustodyError('original C live grant call binding unavailable')
+                    if body['fault']:
+                        raise CustodyError('destination fault scheduling belongs only to H')
+                    # This binding is per admitted call, with current W membership.
+                    grant.binding = self.view.binding
+                    fault, self.destination_fault = self.destination_fault, None
+                    raw, reason = self.port.initiate_recovery(grant, fault=fault)
+                    result = dict(raw_hex=None if raw is None else raw.hex(), reason=reason)
+            else:
+                raise CustodyError('closed accepted C mutation opcode')
+            result['registries'] = self._registries()
+            return result
+        finally:
+            self.current_original_grant = self.current_handle = None
+            self.view.channel = None
+            self.view._current_actor = None
+            self.view.binding = None
+            self.channels['w'].request('END_C_OPERATION', {'lease': lease['lease']})
+
+    def handle(self, channel, operation, body):
+        from .supervisor import _process_data
+        if operation == 'CONTINUITY' and channel is self.channels['w']:
+            return dict(challenge=body['challenge'], instance=self.instance, subject=self.subject)
+        if operation == 'REVOKE_CONTROLLER' and channel is self.channels['w']:
+            old = self.channels['controller-%d' % body['controller_slot']]
+            self.grants = {k: v for k, v in self.grants.items() if k[0] is not old}
+            self._actor_by_channel.pop(old, None)
+            self.port._source_bindings.clear()
+            self.port._eligible_grants.clear()
+            return {'revoked': True}
+        if channel is self.channels['w'] and operation == 'CONFIRMS_PUBLICATION_CONFLICT':
+            return {'conflict': self.custodian.confirms_publication_conflict(body['intended'])}
+        if channel is self.channels['w'] and operation == 'CONFIRMS_CUSTODY_LOSS':
+            return {'lost': self.custodian.confirms_required_custody_loss(body['record'])}
+        if operation == 'SNAPSHOT':
+            return dict(instance=self.instance, registries=self._registries(),
+                original_source_digest=self.produced.digest,
+                original_source_owned=self.pipeline._objects.get(self.produced.digest) is self.produced)
+        if channel.peer_role == 'H':
+            if operation == 'ARM_DESTINATION_FAULT':
+                if body['fault'] not in ('before_claim', 'after_claim', 'after_initiation', 'after_bytes', 'after_readback'):
+                    raise CustodyError('closed accepted destination acknowledgement-loss schedule')
+                self.destination_fault = body['fault']
+                return {'armed': True}
+            if operation == 'ARM_STAGE':
+                if body['stage'] not in ('claimed_before_initiation', 'initiated_before_result', 'authentic_result_before_reply'):
+                    raise CustodyError('closed original C observation cut')
+                self.stage = body['stage']
+                return {'armed': True}
+            if operation == 'SUPPRESS':
+                if body['operation'] not in ('ORIGINAL_PUBLICATION', 'RP_ARM', 'RP_INITIATE'):
+                    raise CustodyError('closed C acknowledgement suppression')
+                self.suppress = body['operation']
+                return {'armed': True}
+            if operation == 'FORGET':
+                for fact in body['facts']:
+                    if fact == 'registry':
+                        self.port._operations.clear()
+                    elif fact == 'mirror':
+                        self.port._subjects.clear()
+                    elif fact == 'result_observation':
+                        self.port.readback_available = False
+                    elif fact in ('supplement_keep_subject', 'supplement_keep_operation',
+                                  'supplement_keep_both', 'supplement_acceptance_only'):
+                        keys = [k for k in self.port._subjects if k not in self.port._sources]
+                        for key in keys:
+                            source = self.port._subjects[key]
+                            operations = [self.port.operation_id(source, op) for op in
+                                ('ENSURE_EXACT_OBJECT', 'ESTABLISH_DURABILITY', 'VERIFY_EXACT_OBJECT')]
+                            self.port._objects.pop(key, None)
+                            self.port._reserved_subjects.discard(key)
+                            if fact not in ('supplement_keep_subject', 'supplement_keep_both'):
+                                self.port._subjects.pop(key, None)
+                            if fact not in ('supplement_keep_operation', 'supplement_keep_both'):
+                                for op in operations:
+                                    self.port._operations.pop(op, None)
+                            if fact == 'supplement_acceptance_only':
+                                self.port._exclusions.pop(key, None)
+                                for op in operations:
+                                    grant_id = self.port._eligible_grants.pop(op, None)
+                                    if grant_id is not None:
+                                        self.port._grant_results.pop(grant_id, None)
+                                        self.port._counts.pop(grant_id, None)
+                                        self.port._claims.discard(grant_id + '-consumption')
+                                self.port._receipts = {r: v for r, v in self.port._receipts.items()
+                                                       if v[0]['object_key'] != key}
+                    else:
+                        raise CustodyError('closed accepted C registry-loss fault')
+                return {'retained_claims': len(self.port._claims), 'retained_results': len(self.port._receipts)}
+        if channel.peer_role != 'CONTROLLER':
+            raise CustodyError('closed original C peer')
+        if operation == 'SOURCE':
+            source = self.port.source(body['original_ref'], body['object_key'])
+            return dict(source=_process_data(source), registries=self._registries())
+        if operation == 'AUTHENTICATE_RECEIPT':
+            receipt, raw = self.port.authenticate_receipt(bytes.fromhex(body['raw_hex']))
+            return dict(receipt=receipt, bytes_hex=None if raw is None else raw.hex(), registries=self._registries())
+        if operation == 'OBSERVATION_REASON':
+            return {'reason': self.port.observation_reason(bytes.fromhex(body['raw_hex']))}
+        if operation == 'PUBLICATION_RESULT':
+            return {'bytes_hex': self.custodian.publication_result_bytes(body['effect_id']).hex()}
+        if operation == 'VALIDATE_PUBLICATION_RESULT':
+            return {'event': self.custodian.validate_publication_result(body['effect_id'], bytes.fromhex(body['raw_hex']), body['verifier_id'])}
+        if operation == 'EFFECT_PORT_RECEIPT':
+            return {'bytes_hex': self.custodian.effect_port_receipt_bytes(body['effect_id']).hex()}
+        if operation == 'VALIDATE_EFFECT_PORT_RECEIPT':
+            raw = bytes.fromhex(body['raw_hex'])
+            self.custodian.validate_effect_port_receipt(body['effect_id'], raw, body['verifier_id'])
+            return {'bytes_hex': raw.hex()}
+        if operation == 'PORT_OBSERVATION':
+            from .contracts import parse_effect_port_receipt
+            receipt = parse_effect_port_receipt(bytes.fromhex(body['receipt_hex']))
+            return {'bytes_hex': self.custodian.port_observation_bytes(receipt).hex()}
+        if operation == 'CONFIRMS_PUBLICATION_CONFLICT':
+            return {'conflict': self.custodian.confirms_publication_conflict(body['intended'])}
+        if operation == 'CONFIRMS_CUSTODY_LOSS':
+            return {'lost': self.custodian.confirms_required_custody_loss(body['record'])}
+        if operation == 'BOOT_CUSTODY_ATTESTATION':
+            value = self.custodian.boot_custody_attestation(body['attestation_id'])
+            return {'record': None if value is None else value.record()}
+        return self._invoke(channel, operation, body)
+
+    def tick(self):
+        pass
+
+    def close(self):
+        pass
+
+class _ProcessCustodianPort(OfflineCustodian):
+    """Dedicated facade for the original accepted C custodian's observations."""
+    def __init__(self, controller):
+        super().__init__('d-original-custodian')
+        self._controller = controller
+
+    def _call(self, opcode, **body):
+        if opcode == 'ORIGINAL_PUBLICATION':
+            body['actor_handle'] = self._controller.store.witness._proof(self._controller.store._current_actor)
+        return self._controller.channels['c'].request(opcode, body)
+
+    def initiate_publication(self, actor, grant, planned, payload):
+        self._store.require_actor(actor)
+        handle = self._controller._grant_handle(grant)
+        result = self._call('ORIGINAL_PUBLICATION', grant_handle=handle, planned=planned,
+            payload_hex='' if payload is None else payload.hex(), payload_present=payload is not None)
+        return result['event']
+
+    def publication_result_bytes(self, effect_id):
+        return bytes.fromhex(self._call('PUBLICATION_RESULT', effect_id=effect_id)['bytes_hex'])
+
+    def validate_publication_result(self, effect_id, raw, verifier_id):
+        return self._call('VALIDATE_PUBLICATION_RESULT', effect_id=effect_id,
+            raw_hex=raw.hex(), verifier_id=verifier_id)['event']
+
+    def effect_port_receipt_bytes(self, effect_id):
+        return bytes.fromhex(self._call('EFFECT_PORT_RECEIPT', effect_id=effect_id)['bytes_hex'])
+
+    def validate_effect_port_receipt(self, effect_id, raw, verifier_id):
+        checked = bytes.fromhex(self._call('VALIDATE_EFFECT_PORT_RECEIPT', effect_id=effect_id,
+            raw_hex=raw.hex(), verifier_id=verifier_id)['bytes_hex'])
+        return parse_effect_port_receipt(checked)
+
+    def port_observation_bytes(self, receipt):
+        from dataclasses import asdict
+        from .supervisor import _u04_canonical
+        return bytes.fromhex(self._call('PORT_OBSERVATION', receipt_hex=_u04_canonical(asdict(receipt)).hex())['bytes_hex'])
+
+    def confirms_publication_conflict(self, intended):
+        return self._call('CONFIRMS_PUBLICATION_CONFLICT', intended=intended)['conflict']
+
+    def confirms_required_custody_loss(self, attestation_record):
+        return self._call('CONFIRMS_CUSTODY_LOSS', record=attestation_record)['lost']
+
+    def boot_custody_attestation(self, attestation_id):
+        result = self._call('BOOT_CUSTODY_ATTESTATION', attestation_id=attestation_id)['record']
+        return None if result is None else BootCustodyAttestation(**result)

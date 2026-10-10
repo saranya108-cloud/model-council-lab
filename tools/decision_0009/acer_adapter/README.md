@@ -556,3 +556,100 @@ suite and unchanged startup-characterization suite with bytecode disabled.
 This model proves no real storage durability, protected provisioning/signing,
 process/host fencing, reboot survival, provider behavior, GPU/CUDA/NVML operation,
 or production readiness. No live recovery publication port is provided.
+
+## Checkpoint D bounded process fixture
+
+The D path hosts the accepted `PersistentSupervisor` and `OfflineDurableStore`
+in a disposable Controller interpreter. Fresh admission, original publication
+INTENT and exclusive reservation, reconstruction, RP/RW binding, grants,
+destination claim, receipt authentication, result handling and denial use the
+accepted A/B/C implementations. There is no separate D admission, publication,
+freshness, retry or recovery state machine. The Harness drives closed scenarios
+and fault timing; it does not choose application modes.
+
+The original W process hosts `OfflineWitness`; the original C process hosts
+`OfflineCustodian`, `OfflinePublicationDestination` and its original evidence
+producer. Dedicated, closed operation adapters connect these accepted owners.
+Controller-local actors, sessions, bindings and opaque grants remain in that
+Controller. Data carriers cannot restore them. Captured accepted kernel-call
+intervals authenticate lower reservation, persistence, commitment, confirmation,
+object and entry operations. W serializes fencing with physical persistence and
+complete C calls through transport exclusion leases. Those leases confer no
+application eligibility. Original C validators own claims, registry status,
+results and exclusion; W's original predicates own irreversible denial.
+
+H owns every proof child directly with the pinned macOS arm64 Python 3.14.7
+interpreter. One thread owns poll/signal/wait/reap. Reaped capabilities are
+permanent tombstones; copied wrappers, numeric PIDs and another thread are
+rejected before signaling. W/JPS/C cannot restart. There are at most four
+successive Controller lifetimes for interruption cases, with only one alive at
+a time and a peak of five operating proof processes including H. No proof child
+spawns a child. All IPC uses private anonymous AF_UNIX stream socket pairs,
+canonical bounded JSON, fixed peer roles and bounded request correlation.
+Nested calls service the existing endpoints without additional service threads.
+
+JPS exclusively creates and locks the physical `journal.frames`. It pins root
+and file identities through descriptor-relative, no-follow opens, rejects file
+aliases, writes complete frames, performs file/directory fsync barriers and
+independent read-only reopen/readback. W observes that same original JPS through
+its own original endpoint before committing. Bytes written, barrier completion,
+Controller readback, W readback, commitment and confirmation have distinct
+observations. Exact accepted reconciliation completes only the pre-existing W
+reservation. It writes no application frame or object and creates no effect
+grant. Its byte-invariant interval ends before accepted nonlive re-entry, which
+may append accepted incarnation/recovery records. JPS resolves transport
+bookkeeping only from that exact completed persistence transaction.
+
+The process tests preserve real SIGKILL/exit/wait/reap observations, original
+W/JPS/C lifetime/channel provenance, independent service observations and fault
+pre/postimages. They exercise accepted RP acceptance/result crash cuts, C
+pending/claim/in-flight/result states, acknowledgement loss, stale delivery,
+registry/mirror loss, the accepted supplement freshness correction, stable
+conflict, irreversible denial, quarantine and original service loss. Missing
+registry state is UNKNOWN, not NOT_STARTED. A copy or replacement endpoint or
+service has no operational authority.
+
+Artifacts are restricted to `logs/u04-checkpoint-d-local-proof-v1/` beneath
+`journal`, `witness`, `faults` and `evidence`. Cumulative limits are respectively
+1 GiB, 256 MiB, 1 GiB and 1 GiB; case limits are 16 MiB journal, 4 MiB witness and
+8 MiB per application object. Wire messages are at most 16 MiB. F07 uses the
+enumerated seven-byte frame prefix; F08/F09 only mutate the identified fault-case
+JPS journal and preserve both images. Development and failure artifacts remain
+historical. `evidence/final-candidate-01` is single-use and must not be overwritten.
+Final capture binds source before fresh suites; verification is read-only.
+
+The authorized V4 entrypoint is:
+
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests:tests/decision_0009 python3 -B -m unittest checkpoint_d_evidence.CheckpointDEvidenceTests.test_capture_final_candidate -v
+
+Its foreground unittest Harness discovers and runs the exact focused D, adapter
+and startup suite populations in that same process. This preserves the five
+process bound during each proof case. Results distinguish in-process unittest
+completion from the enclosing V4 operating-system exit; raw output, test and
+subcase identities and all original service/OS observations are retained.
+
+V4 exclusively creates the single candidate after read-only preflight, archives
+the final source and fresh closed case artifacts, checks historical A/B/C and D
+preservation, and seals only after every writer is closed. Symlink substitution
+fixtures remain at their original fault paths; the archive contains their
+metadata receipts and never follows or extracts them. Interrupted or failed
+captures remain incomplete and require Human Chair action.
+
+The authorized V5 entrypoint is:
+
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests:tests/decision_0009 python3 -B -m unittest checkpoint_d_evidence.CheckpointDEvidenceTests.test_verify_final_candidate -v
+
+It checks source/scope, package and retained artifact membership, raw suite
+closure, original process lifetime/reap records, independent persistence/W/C
+observations and fault coverage. It performs no repair, test-suite execution,
+service launch, fault or package write. Archived IDs and receipts confer no
+operational authority after service shutdown.
+
+D proves bounded trusted-host Controller loss with original authenticated
+services surviving. Custody, workload and destination effects remain simulated.
+It proves no W/C/JPS replacement, whole-runtime/host recovery, power-loss
+durability, protected provisioning, hostile same-user containment, real custody
+or publication, provider/GPU behavior, deployment or production readiness.
+Quiescence concerns only proof-owned direct children. General host `ps` was
+sandbox-unavailable; that observation proves neither daemon presence nor absence.
+No daemon workflow or persistent background service is used by this fixture.
