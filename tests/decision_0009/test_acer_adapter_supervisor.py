@@ -3946,3 +3946,142 @@ class SupervisorTakeoverTests(unittest.TestCase):
                         with self.assertRaises(AuthorizationDenied):
                             survivor.issue_publication_grant(
                                 survivor.publication_binding(), "intent", _direct_intent())
+
+
+class ExecutionByteFailClosedTests(unittest.TestCase):
+    """C1: a fresh authorized-byte proof is required at create and containment."""
+
+    def test_bytes_changed_after_supervisor_verification_deny_create(self):
+        from tools.decision_0009.acer_adapter.supervisor import StoreError
+        supervisor, artifacts, custodian = make_supervisor()
+        supervisor.make_slot_eligible("slot-1-1")
+        original = custodian.create_once
+
+        def change_after_supervisor_check(*args, **kwargs):
+            artifacts.substitute("core")
+            return original(*args, **kwargs)
+
+        custodian.create_once = change_after_supervisor_check
+        with self.assertRaises((StoreError, CustodyError)):
+            supervisor.spawn_worker("slot-1-1", digest("launch"))
+        self.assertEqual(custodian.underlying_create_count_for_all(), 0)
+        self.assertNotIn("spawn-slot-1-1", custodian._registry)
+        self.assertNotIn("spawn-slot-1-1", custodian._creation_receipts)
+        self.assertIsNone(custodian.get_reap_receipt("spawn-slot-1-1"))
+        self.assertEqual(
+            supervisor.store.effect_acceptance_count("spawn-intent-slot-1-1"), 0)
+        self.assertIn(
+            "authorized-execution-byte-verification-failure", supervisor.store.taint)
+        self.assertTrue(supervisor.store.execution_revoked)
+
+    def test_live_worker_byte_change_denies_containment_without_reap(self):
+        for kind in ("core", "adapter", "policy", "schema"):
+            supervisor, artifacts, custodian = make_supervisor()
+            supervisor.make_slot_eligible("slot-1-1")
+            receipt = supervisor.spawn_worker("slot-1-1", digest("launch"))
+            binding = custodian.original_creation_binding(receipt.spawn_token)
+            artifacts.substitute(kind)
+            with self.subTest(kind=kind):
+                with self.assertRaises((AuthorizationDenied, CustodyError)):
+                    custodian.contain_spawn(
+                        receipt.spawn_token, "failure-containment", binding)
+                inspection = custodian.inspect_spawn(receipt.spawn_token)
+                self.assertTrue(inspection.possibly_live)
+                self.assertEqual(inspection.status, "BLOCKED")
+                self.assertIsNone(custodian.get_reap_receipt(receipt.spawn_token))
+                self.assertFalse(supervisor.synthetic_reap)
+                self.assertFalse(supervisor.synthetic_residual_clearance)
+                self.assertTrue(supervisor.store.execution_revoked)
+                self.assertTrue(supervisor.store.publication_prohibited)
+                self.assertTrue(supervisor.store.containment_only)
+                self.assertIn(
+                    "authorized-execution-byte-verification-failure",
+                    supervisor.store.taint)
+                with self.assertRaises(AuthorizationDenied):
+                    supervisor.make_slot_eligible("slot-1-2")
+
+    def test_lifecycle_verification_failure_does_not_use_creation_binding(self):
+        supervisor, artifacts, custodian = make_supervisor()
+        supervisor.make_slot_eligible("slot-1-1")
+        receipt = supervisor.spawn_worker("slot-1-1", digest("launch"))
+        artifacts.substitute("adapter")
+        calls = []
+        original = custodian.contain_spawn
+
+        def record_contain(*args, **kwargs):
+            calls.append(args)
+            return original(*args, **kwargs)
+
+        custodian.contain_spawn = record_contain
+        with self.assertRaises(AuthorizationDenied):
+            supervisor.complete_worker_lifecycle("slot-1-1")
+        inspection = custodian.inspect_spawn(receipt.spawn_token)
+        self.assertTrue(inspection.possibly_live)
+        self.assertNotEqual(inspection.status, "EXITED")
+        self.assertIsNone(custodian.get_reap_receipt(receipt.spawn_token))
+        self.assertEqual(calls, [])
+        self.assertIn("CUSTODY_UNCERTAIN", supervisor.safety_markers)
+        self.assertIn("TAINTED", supervisor.safety_markers)
+        self.assertFalse(supervisor.synthetic_reap)
+        self.assertFalse(supervisor.synthetic_residual_clearance)
+        stale = custodian.original_creation_binding(receipt.spawn_token)
+        with self.assertRaises((AuthorizationDenied, CustodyError)):
+            original(receipt.spawn_token, "failure-containment", stale)
+        self.assertTrue(custodian.inspect_spawn(receipt.spawn_token).possibly_live)
+        self.assertIsNone(custodian.get_reap_receipt(receipt.spawn_token))
+        with self.assertRaises(AuthorizationDenied):
+            supervisor.make_slot_eligible("slot-1-2")
+
+
+class CustodianManifestMembershipTests(unittest.TestCase):
+    """C3: adapter authorization must name the custodian artifact."""
+
+    def test_omitted_custodian_artifact_denies_authorization_and_effect(self):
+        from tools.decision_0009.acer_adapter.supervisor import (
+            REQUIRED_CUSTODIAN_ARTIFACT, ArtifactVerificationPrimitive,
+        )
+        from acer_adapter_fakes import MutableArtifacts
+        artifacts = MutableArtifacts()
+        del artifacts.values["adapter"]["files"][REQUIRED_CUSTODIAN_ARTIFACT]
+        verifier = ArtifactVerificationPrimitive(
+            "offline-root", u04_authorization(artifacts), artifacts.read)
+        with self.assertRaisesRegex(AuthorizationDenied, "omitted"):
+            verifier.verify("BOOT_CUSTODY_ESTABLISHED", 1, "session-1")
+        supervisor, live, custodian = make_supervisor()
+        del live.values["adapter"]["files"][REQUIRED_CUSTODIAN_ARTIFACT]
+        with self.assertRaisesRegex(AuthorizationDenied, "omitted"):
+            supervisor.make_slot_eligible("slot-1-1")
+        self.assertEqual(custodian.underlying_create_count_for_all(), 0)
+
+    def test_substituted_custodian_artifact_denies_authorization_and_effect(self):
+        from tools.decision_0009.acer_adapter.supervisor import (
+            REQUIRED_CUSTODIAN_ARTIFACT, ArtifactVerificationPrimitive,
+        )
+        from acer_adapter_fakes import MutableArtifacts
+        artifacts = MutableArtifacts()
+        verifier = ArtifactVerificationPrimitive(
+            "offline-root", u04_authorization(artifacts), artifacts.read)
+        artifacts.values["adapter"]["files"][REQUIRED_CUSTODIAN_ARTIFACT] = (
+            b"substituted custodian\n")
+        with self.assertRaisesRegex(AuthorizationDenied, "changed"):
+            verifier.verify("BOOT_CUSTODY_ESTABLISHED", 1, "session-1")
+        supervisor, live, custodian = make_supervisor()
+        live.values["adapter"]["files"][REQUIRED_CUSTODIAN_ARTIFACT] = (
+            b"substituted custodian\n")
+        with self.assertRaises(AuthorizationDenied):
+            supervisor.make_slot_eligible("slot-1-1")
+        self.assertEqual(custodian.underlying_create_count_for_all(), 0)
+
+    def test_explicit_custodian_manifest_authorizes_existing_behavior(self):
+        from tools.decision_0009.acer_adapter.supervisor import (
+            REQUIRED_CUSTODIAN_ARTIFACT,
+        )
+        supervisor, artifacts, custodian = make_supervisor()
+        self.assertIn(REQUIRED_CUSTODIAN_ARTIFACT, artifacts.values["adapter"]["files"])
+        self.assertIn(b"offline custodian",
+                      artifacts.values["adapter"]["files"][REQUIRED_CUSTODIAN_ARTIFACT])
+        supervisor.make_slot_eligible("slot-1-1")
+        supervisor.spawn_worker("slot-1-1", digest("launch"))
+        self.assertEqual(custodian.underlying_create_count_for_all(), 1)
+        self.assertEqual(
+            custodian.inspect_spawn("spawn-slot-1-1").status, "BLOCKED")

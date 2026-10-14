@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from tools.decision_0009.acer_adapter.supervisor import REQUIRED_CUSTODIAN_ARTIFACT
 from tools.decision_0009.acer_adapter.contracts import (
     ArtifactBinding,
     Authorization,
@@ -35,7 +36,10 @@ class MutableArtifacts:
         self.values = {
             "core": {"commit": CORE_COMMIT,
                      "files": {"core/policy.py": b"accepted core bytes\n"}},
-            "adapter": {"files": {"adapter/supervisor.py": b"adapter bytes\n"}},
+            "adapter": {"files": {
+                "adapter/supervisor.py": b"adapter bytes\n",
+                REQUIRED_CUSTODIAN_ARTIFACT: b"offline custodian bytes\n",
+            }},
             "policy": b"policy identity bytes\n",
             "schema": b"schema identity bytes\n",
         }

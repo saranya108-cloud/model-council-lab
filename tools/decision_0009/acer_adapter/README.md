@@ -616,7 +616,8 @@ Artifacts are restricted to `logs/u04-checkpoint-d-local-proof-v1/` beneath
 enumerated seven-byte frame prefix; F08/F09 only mutate the identified fault-case
 JPS journal and preserve both images. Development and failure artifacts remain
 historical. `evidence/final-candidate-01` is single-use and must not be overwritten.
-Final capture binds source before fresh suites; verification is read-only.
+Final capture binds source before fresh suites. V5 verification is read-only
+and is the capture-time check described below.
 
 The authorized V4 entrypoint is:
 
@@ -644,6 +645,36 @@ closure, original process lifetime/reap records, independent persistence/W/C
 observations and fault coverage. It performs no repair, test-suite execution,
 service launch, fault or package write. Archived IDs and receipts confer no
 operational authority after service shutdown.
+
+V5 is the authorized capture-time / pre-publication verifier. Its success
+depends on the exact captured candidate state: Checkpoint C baseline HEAD
+`eb27da7a56c2c01e673173a1d9bc8cacdf6c721a`, the expected dirty-worktree scope,
+capture-time filesystem identity (inode, device, mtime, and link count), and
+retained-artifact membership as they existed before publication. Publication
+changes that repository state by design. After Checkpoint D was published as
+`005f982dd1c234079f40877fda00e596f7fcdbf4`, V5 no longer reproduces
+`READ_ONLY_PASS`. The sealed candidate remains the evidence record. V5 is
+unchanged and is not a post-publication check.
+
+The authorized post-publication verifier is:
+
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:tests:tests/decision_0009 python3 -B -m unittest checkpoint_d_post_publication.CheckpointDPostPublicationTests.test_published_checkpoint_d_passes -v
+
+It verifies published commit `005f982dd1c234079f40877fda00e596f7fcdbf4` against
+the sealed `evidence/final-candidate-01` package. It does not reconstruct the
+dirty pre-publication worktree, and it does not retarget itself to whatever
+commit is currently checked out. It binds that publication commit and the
+Checkpoint C baseline recorded by the sealed manifest, compares the
+baseline-to-publication diff with the sealed manifest scope, and checks
+committed blobs, baseline blobs, seal integrity, the package-content hash,
+archived source, prior Checkpoint A/B/C membership, suite closure, and every
+retained artifact's kind, size, and content digest. Files added after the seal
+are reported apart from the sealed set and do not by themselves invalidate it.
+Inode, device, mtime, and link count may be reported as diagnostics;
+post-publication success does not depend on them.
+
+Neither V5 nor this post-publication verifier grants council acceptance or
+Checkpoint D closure by itself.
 
 D proves bounded trusted-host Controller loss with original authenticated
 services surviving. Custody, workload and destination effects remain simulated.

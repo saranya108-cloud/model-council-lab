@@ -5069,6 +5069,11 @@ class OfflineDurableStore:
             return dict(grant)
 
 
+# OfflineCustodian and the fake survivor share this artifact. Adapter
+# authorization is valid only when the measured file set names it explicitly.
+REQUIRED_CUSTODIAN_ARTIFACT = "tools/decision_0009/acer_adapter/custody.py"
+
+
 class ArtifactVerificationPrimitive:
     """Nonrecursive trust root for exact authorized execution bytes."""
 
@@ -5108,6 +5113,9 @@ class ArtifactVerificationPrimitive:
                 core["commit"] != self.authorization.core_commit or
                 type(adapter) is not dict or set(adapter) != {"files"}):
             raise AuthorizationDenied("artifact commit and manifest structure")
+        if (type(adapter["files"]) is dict and
+                REQUIRED_CUSTODIAN_ARTIFACT not in adapter["files"]):
+            raise AuthorizationDenied("required custodian artifact omitted")
         def manifest_digest(kind, files, commit=None):
             if (type(files) is not dict or not files or
                     any(type(path) is not str or not path or type(value) is not bytes
@@ -6532,6 +6540,8 @@ class PersistentSupervisor:
             if inspection.possibly_live:
                 binding = self.store.effect_capability(
                     "spawn-intent-" + slot_id).artifact_binding
+                # A creation-time binding is not authority after the bytes move.
+                self.verifier.assert_continuity(binding)
                 self.custodian.contain_spawn(token.token_id, "failure-containment", binding)
         except Exception as exc:
             secondary.append("contain:" + type(exc).__name__)
@@ -6693,6 +6703,15 @@ class PersistentSupervisor:
             try:
                 binding = self.custodian.original_creation_binding(token.token_id)
             except Exception:
+                continue
+            try:
+                self.verifier.assert_continuity(binding)
+            except Exception:
+                # Verification failure must not fall through to a stale binding.
+                # The custodian latch never runs because contain_spawn is not called.
+                self.safety_markers.add("CUSTODY_UNCERTAIN")
+                self.store.install_failure_latch(
+                    "authorized-execution-byte-verification-failure")
                 continue
             try:
                 self.custodian.contain_spawn(

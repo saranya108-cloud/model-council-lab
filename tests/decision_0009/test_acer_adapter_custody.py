@@ -705,18 +705,21 @@ class CheckpointBEstablishmentAndReportTests(unittest.TestCase):
             c.establish_survivor_containment('spawn-slot-1-1',s._actor)
         entry=next(iter(f._entries.values()));self.assertFalse(entry['exposed'])
 
-    def test_original_parent_reap_can_be_reported_after_parent_caches_are_lost(self):
+    def test_archived_reap_cannot_prove_receipt_when_live_registry_is_absent(self):
         s,a,c,d,f,l=self.world();c.contain_spawn('spawn-slot-1-1','original',f._entries[d['delegation_id']]['binding'])
         reap=c.wait_reap('spawn-slot-1-1')
         from dataclasses import asdict
         from tools.decision_0009.acer_adapter.contracts import closed_canonical_bytes
         raw=closed_canonical_bytes(asdict(reap))
+        self.assertIn(reap.receipt_id, f._reap_history)
         c._registry.clear();l.terminate(c);s.store.crash()
         actor=s.store.open_nonlive_entry(s.authorization,'reap-reader');rw=s.store.recovery_writer_binding(actor)
         ref=f.inspect(d['delegation_id'],reader=rw)['transfer_ref']
-        receipt=s.store.record_recovery_supplement(rw,parent_ref=ref,supplement_kind='REAP_EVIDENCE',
-            evidence_bytes=raw,source_id=c.identity,verifier_id=c.identity)
-        self.assertTrue(receipt.durable)
+        before=s.store.revision
+        with self.assertRaises(CustodyError):
+            s.store.record_recovery_supplement(rw,parent_ref=ref,supplement_kind='REAP_EVIDENCE',
+                evidence_bytes=raw,source_id=c.identity,verifier_id=c.identity)
+        self.assertEqual(s.store.revision, before)
 
     def test_T2_survivor_origin_reap_refused_with_valid_parent_receipt(self):
         s,a,c,d,f,l=self.world()
@@ -1418,3 +1421,82 @@ class CheckpointBSlotReleaseTests(unittest.TestCase):
         self.assertEqual(c._control_counts,controls)
         self.assertEqual(e['domain'].releases,0)
         self.assertEqual(e['domain'].initiations,1)
+
+
+class LiveRegistryReapValidationTests(unittest.TestCase):
+    """C2: a normal reap is proved only by the live custodian registry."""
+
+    def _reaped_worker(self):
+        supervisor, _, custodian = make_supervisor()
+        supervisor.make_slot_eligible("slot-1-1")
+        supervisor.spawn_worker("slot-1-1", digest("launch"))
+        token = supervisor._slot_tokens["slot-1-1"]
+        binding = supervisor.store.effect_capability(
+            "spawn-intent-slot-1-1").artifact_binding
+        custodian.contain_spawn(token.token_id, "containment", binding)
+        receipt = custodian.wait_reap(token.token_id)
+        return supervisor, custodian, token, receipt
+
+    def test_exact_live_registry_match_is_accepted(self):
+        _, custodian, _, receipt = self._reaped_worker()
+        self.assertTrue(custodian.validate_reap_receipt(receipt))
+
+    def test_spawn_token_mismatch_is_still_rejected(self):
+        _, custodian, _, receipt = self._reaped_worker()
+        with self.assertRaises(CustodyError):
+            custodian.validate_reap_receipt(
+                receipt.__class__(**{**receipt.__dict__, "spawn_token": "other"}))
+
+    def test_wrong_identity_and_stale_receipt_are_rejected(self):
+        _, custodian, token, receipt = self._reaped_worker()
+        cases = {
+            "custodian": dataclasses.replace(receipt, custodian_id="other-custodian"),
+            "host_pid": dataclasses.replace(receipt, host_pid=receipt.host_pid + 1),
+            "process_start_ticks": dataclasses.replace(
+                receipt, process_start_ticks=receipt.process_start_ticks + 1),
+        }
+        for name, forged in cases.items():
+            with self.subTest(name=name), self.assertRaises(CustodyError):
+                custodian.validate_reap_receipt(forged)
+        later = dataclasses.replace(
+            receipt, receipt_id="reap-later-" + token.token_id, exit_status=2)
+        custodian._registry[token.token_id].reap_receipt = later
+        with self.assertRaises(CustodyError):
+            custodian.validate_reap_receipt(receipt)
+        self.assertTrue(custodian.validate_reap_receipt(later))
+
+    def test_registry_absence_rejects_archived_reap_bytes(self):
+        _, custodian, token, receipt = self._reaped_worker()
+        factory = custodian._containment_factory
+        self.assertIsNotNone(factory._reap_history.get(receipt.receipt_id))
+        del custodian._registry[token.token_id]
+        with self.assertRaises(CustodyError):
+            custodian.validate_reap_receipt(receipt)
+
+    def test_replay_against_another_worker_is_rejected(self):
+        from acer_adapter_fakes import core_attempt_bytes, residual_observations
+        supervisor, _, custodian = make_supervisor()
+        supervisor.make_slot_eligible("slot-1-1")
+        supervisor.spawn_worker("slot-1-1", digest("launch-slot-1-1"))
+        first = supervisor.complete_worker_lifecycle("slot-1-1")
+        slot = next(item for item in supervisor.authorization.slots
+                    if item.slot_id == "slot-1-1")
+        supervisor.persist_local_attempt_evidence(
+            "slot-1-1",
+            core_attempt_bytes(slot, supervisor.authorization.campaign_id,
+                               supervisor.current_boot_id),
+            residual_observations(
+                campaign_id=supervisor.authorization.campaign_id,
+                boot_id=supervisor.current_boot_id,
+                slot_id=slot.slot_id, attempt_id=slot.attempt_id,
+                spawn_token_id=supervisor._slot_tokens[slot.slot_id].token_id))
+        supervisor.make_slot_eligible("slot-1-2")
+        supervisor.spawn_worker("slot-1-2", digest("launch-slot-1-2"))
+        second = supervisor.complete_worker_lifecycle("slot-1-2")
+        self.assertTrue(custodian.validate_reap_receipt(first))
+        self.assertTrue(custodian.validate_reap_receipt(second))
+        replayed = dataclasses.replace(first, spawn_token=second.spawn_token)
+        with self.assertRaises(CustodyError):
+            custodian.validate_reap_receipt(replayed)
+        self.assertTrue(custodian.validate_reap_receipt(first))
+        self.assertTrue(custodian.validate_reap_receipt(second))

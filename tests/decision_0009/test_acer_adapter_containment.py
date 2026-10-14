@@ -60,16 +60,41 @@ class ContainmentTests(unittest.TestCase):
         self.assertIn("witness-outage", supervisor.store.taint)
         self.assertEqual(custodian.inspect_spawn(receipt.spawn_token).status, "EXITED")
 
-    def test_serializer_and_verifier_failure_cannot_block_authorized_cleanup(self):
+    def test_execution_byte_substitution_blocks_cleanup_after_serializer_failure(self):
         supervisor, artifacts, custodian = make_supervisor()
         supervisor.make_slot_eligible("slot-1-1")
         receipt = supervisor.spawn_worker("slot-1-1", digest("launch"))
         artifacts.substitute("policy")
-        with self.assertRaises(Exception):
-            supervisor.run_contained(
-                lambda: canonical_core_bytes({"bad": float("nan")}), b"bad")
+        containment_calls = []
+        original_contain = custodian.contain_spawn
+
+        def record_contain(*args, **kwargs):
+            containment_calls.append(args)
+            return original_contain(*args, **kwargs)
+
+        custodian.contain_spawn = record_contain
+        try:
+            with self.assertRaises(Exception):
+                supervisor.run_contained(
+                    lambda: canonical_core_bytes({"bad": float("nan")}), b"bad")
+        finally:
+            custodian.contain_spawn = original_contain
         self.assertTrue(supervisor.store.execution_revoked)
-        self.assertEqual(custodian.inspect_spawn(receipt.spawn_token).status, "EXITED")
+        self.assertTrue(supervisor.store.publication_prohibited)
+        self.assertTrue(supervisor.store.containment_only)
+        inspection = custodian.inspect_spawn(receipt.spawn_token)
+        self.assertTrue(inspection.possibly_live)
+        self.assertNotEqual(inspection.status, "EXITED")
+        self.assertEqual(containment_calls, [])
+        self.assertIsNone(custodian.get_reap_receipt(receipt.spawn_token))
+        self.assertFalse(supervisor.synthetic_reap)
+        self.assertFalse(supervisor.synthetic_residual_clearance)
+        self.assertIn("CUSTODY_UNCERTAIN", supervisor.safety_markers)
+        self.assertIn(
+            "authorized-execution-byte-verification-failure",
+            supervisor.store.taint)
+        with self.assertRaises(AuthorizationDenied):
+            supervisor.make_slot_eligible("slot-1-2")
 
     def test_direct_lifecycle_verifier_failure_latches_before_publication_reporting(self):
         for publication_state in ("RESERVED", "WRITTEN", "DURABLE"):
@@ -89,7 +114,10 @@ class ContainmentTests(unittest.TestCase):
             self.assertTrue(supervisor.store.execution_revoked)
             self.assertTrue(supervisor.store.publication_prohibited)
             self.assertIn("authoritative-verification-failure", supervisor.store.taint)
-            self.assertEqual(custodian.inspect_spawn(receipt.spawn_token).status, "EXITED")
+            inspection = custodian.inspect_spawn(receipt.spawn_token)
+            self.assertTrue(inspection.possibly_live)
+            self.assertNotEqual(inspection.status, "EXITED")
+            self.assertIsNone(custodian.get_reap_receipt(receipt.spawn_token))
             with self.assertRaises(EvidenceError):
                 ({"RESERVED": lambda: publisher.write(intent, b"value"),
                   "WRITTEN": lambda: publisher.make_durable(intent),
@@ -227,7 +255,7 @@ class LateLifecycleFailureRegressionTests(unittest.TestCase):
         self.assertIn("TAINTED", supervisor.safety_markers)
         self.assertIn("worker-lifecycle-failure", supervisor.store.taint)
 
-    def test_late_lifecycle_verifier_failure_latches_contains_and_survives_restart(self):
+    def test_late_lifecycle_verifier_failure_latches_without_stale_containment(self):
         for publication_state in ("RESERVED", "WRITTEN", "DURABLE"):
             supervisor, artifacts, custodian = make_supervisor()
             publisher, intent = _publication_at(
@@ -241,9 +269,9 @@ class LateLifecycleFailureRegressionTests(unittest.TestCase):
                 self.assertEqual(fired, [True])
                 self.assert_safety_installed(supervisor)
                 inspection = custodian.inspect_spawn(receipt.spawn_token)
-                self.assertFalse(inspection.possibly_live)
-                self.assertEqual(inspection.status, "EXITED")
-                # Containment is attempted, but reaping is never claimed.
+                self.assertTrue(inspection.possibly_live)
+                self.assertNotEqual(inspection.status, "EXITED")
+                self.assertIsNone(custodian.get_reap_receipt(receipt.spawn_token))
                 self.assertIn("CUSTODY_UNCERTAIN", supervisor.safety_markers)
                 states = [event.get("state") for event in supervisor.store.events]
                 self.assertNotIn("EXIT_OBSERVED", states)
@@ -315,12 +343,11 @@ class LateLifecycleFailureRegressionTests(unittest.TestCase):
                 inspection = custodian.inspect_spawn(receipt.spawn_token)
                 self.assertIn("CUSTODY_UNCERTAIN", supervisor.safety_markers)
                 self.assertIsNone(custodian.get_reap_receipt(receipt.spawn_token))
+                self.assertTrue(inspection.possibly_live)
+                self.assertNotEqual(inspection.status, "EXITED")
                 if secondary.startswith("contain"):
-                    self.assertTrue(inspection.possibly_live)
                     self.assertTrue(any(item.startswith("contain")
                                         for item in failure["secondary"]))
-                else:
-                    self.assertEqual(inspection.status, "EXITED")
                 if secondary.endswith("diagnostic"):
                     self.assertTrue(any(item.startswith("diagnostic")
                                         for item in failure["secondary"]))

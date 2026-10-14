@@ -297,6 +297,40 @@ class OfflineCustodian:
         if not self.alive:
             raise ContainmentUnavailable("custodian ownership is unavailable")
 
+    def _latch_execution_byte_failure(self, store):
+        reason = "authorized-execution-byte-verification-failure"
+        def assign():
+            store._execution_revoked = True
+            store._publication_prohibited = True
+            store.containment_only = True
+            store._taint.add(reason)
+            invalidated = getattr(store, "_invalidated_effects", None)
+            capabilities = getattr(store, "_effect_capabilities", None)
+            if invalidated is not None and capabilities is not None:
+                invalidated.update(capabilities)
+        factory = self._containment_factory
+        if ((factory is not None and factory.lock.owned_by_current_thread()) or
+                store.authorization_lock.owned_by_current_thread()):
+            assign()
+            return
+        store.install_failure_latch(reason)
+
+    def _require_fresh_authorized_bytes(self, binding):
+        """Re-read authorized core, adapter, policy, and schema bytes.
+
+        The binding recorded at creation is not a substitute for the bytes
+        present at the moment of an effect.
+        """
+        store = self._store
+        verifier = None if store is None else getattr(store, "_artifact_verifier", None)
+        if verifier is None:
+            raise CustodyError("authoritative durable store binding required")
+        try:
+            verifier.assert_continuity(binding)
+        except Exception:
+            self._latch_execution_byte_failure(store)
+            raise
+
     def create_once(self, token, launch_spec_digest, consumed_capability_receipt,
                     artifact_binding, fault=None):
         if self._store is None:
@@ -366,6 +400,7 @@ class OfflineCustodian:
                 existing = self._registry.get(token.token_id)
                 if existing is not None:
                     raise CustodyError("unregistered existing effect is ambiguous")
+                self._require_fresh_authorized_bytes(artifact_binding)
                 try:
                     accepted = self._store.accept_effect(consumed_capability_receipt)
                 except Exception as exc:
@@ -658,6 +693,7 @@ class OfflineCustodian:
             raise CustodyError("containment artifact binding")
         if self._containment_factory is not None:
             return self._containment_factory._contain_original(self, spawn_token, artifact_binding)
+        self._require_fresh_authorized_bytes(artifact_binding)
         with self._lock:
             worker = self._registry.get(spawn_token)
             if worker is None:
@@ -701,13 +737,32 @@ class OfflineCustodian:
         return None if worker is None else worker.reap_receipt
 
     def validate_reap_receipt(self, receipt):
+        """Accept a reap only from the live registry's exact retained receipt.
+
+        Archived reap bytes are not authority when the registry entry is gone,
+        and an older receipt cannot prove a later wait.
+        """
         if not isinstance(receipt, ReapReceipt):
             raise CustodyError("reap receipt type")
         worker = self._registry.get(receipt.spawn_token)
-        if worker is None and self._containment_factory is not None:
-            return self._containment_factory._validate_archived_reap(self,receipt)
-        if (worker is None or worker.reap_receipt != receipt or
-                receipt.custodian_id != self.identity or not worker.reaped):
+        retained = None if worker is None else worker.reap_receipt
+        identity = None if worker is None else worker.identity
+        if retained is None or identity is None:
+            raise CustodyError("reap receipt does not match custodian registry")
+        presented = (json.dumps(asdict(receipt), sort_keys=True, separators=(",", ":"),
+                                ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
+        expected = (json.dumps(asdict(retained), sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
+        if (presented != expected or retained != receipt or
+                receipt.custodian_id != self.identity or
+                worker.token.custodian_id != self.identity or
+                worker.token.token_id != receipt.spawn_token or
+                identity.custodian_id != self.identity or
+                identity.spawn_token != worker.token.token_id or
+                identity.host_pid != receipt.host_pid or
+                identity.process_start_ticks != receipt.process_start_ticks or
+                not worker.reaped or worker.status != "REAPED" or
+                worker.possibly_live):
             raise CustodyError("reap receipt does not match custodian registry")
         return True
 
@@ -1439,15 +1494,15 @@ class OfflineContainmentFactory:
             raise ContainmentUnavailable('exact ORIGIN original failure diagnostic required')
 
     def _assert_original_containment(self,domain,binding):
-        # Accepted A cleanup uses the already-admitted original ownership bytes,
-        # including after the verifier detects substitution. S has a separate
-        # fresh continuity guard; this is no new delegation or execution right.
         self._require_original_source_lifetime(domain.source)
         original=domain.source.original_creation_binding(domain.worker.token.token_id)
         if (not isinstance(binding,ArtifactBinding) or binding.manifest()!=original.manifest() or
                 binding.authorization_digest!=original.authorization_digest or
                 binding.verifier_identity!=original.verifier_identity):
             raise ContainmentUnavailable('exact original admitted cleanup binding required')
+        # The creation binding identifies the admission. It does not authorize
+        # containment after the current authorized bytes have changed.
+        domain.source._require_fresh_authorized_bytes(binding)
 
     def _actual_domain(self,worker,source):
         if not self.lock.owned_by_current_thread():
@@ -1470,6 +1525,7 @@ class OfflineContainmentFactory:
                 raise ContainmentUnavailable('surviving original ownership required')
             worker=source._registry.get(token_id)
             if worker is None:raise ContainmentUnavailable('exact token-owned domain unavailable')
+            source._require_fresh_authorized_bytes(binding)
             domain=self._actual_domain(worker,source)
             with domain.lock:
                 self._assert_original_containment(domain,binding)
