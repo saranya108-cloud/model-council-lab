@@ -8,7 +8,7 @@
 
 **Source conversation:** Resume Evidence Preparation (`6ae1f046-5de4-83e8-bb9a-1916a5e14b9a`)
 
-This record consolidates the confirmed Human Chair decisions in Parts A–C. Part A is confirmed; Part B is partially confirmed with O's absolute path intentionally unresolved; Part C is confirmed.
+This record consolidates the confirmed Human Chair decisions in Parts A–C. Parts A–C are confirmed; O is designated only and is not technically qualified.
 
 This governance record creates **no P0, implementation, inspection, or successor-gate authority**. Recording these decisions does not authorize host actions, evidence gathering, protected-object inspection, object creation, compilation, execution, or progression to another gate. Such actions remain subject to their separate, specific authorization requirements. The authorization to create and commit this record is limited to this governance file.
 
@@ -38,15 +38,25 @@ P is the protected package/evidence subtree.
 
 I is the Stage-2 execution-authorization sidecar/input object.
 
-### O — Semantic definition confirmed; absolute path unresolved
+### O — Authorized output destination: confirmed
 
-O is an **output-only destination subtree**.
+**Human Chair-designated O absolute path:**
 
-**O absolute path: TBD / NOT YET DESIGNATED.**
+`/Users/aclab/aclab/model-council-lab/logs/u04-checkpoint-d-local-proof-v1/evidence/decision-0009-o-authorized-output`
+
+**Scope:** entire directory/subtree.
+
+**Purpose:** output-only destination for authorized Decision 0009 lifecycle artifacts.
+
+**Exclusions:** inputs, source material, authorization/governance records, control/provenance descriptors, and mixed-purpose workspace material are excluded from O.
+
+**Change rule:** relocation, replacement, supersession, or material namespace/backing change invalidates the binding and requires renewed Human Chair designation/requalification as applicable.
+
+**Current technical status:** designated only — NOT created, inspected, proven disjoint, or qualified.
 
 The previously inspected `path-b-continuation-fdeb91ac79d1461eaba1c327e51372bf` directory is explicitly rejected as O because it is a mixed workspace containing authorization/governance, source/input, control/provenance, execution-state, and result material. Its inclusion of result material does not make the mixed workspace an output-only destination subtree.
 
-This record does not designate a substitute O path or establish technical qualification of any binding. The unresolved O absolute binding remains explicit.
+This designation does not establish technical qualification of any binding.
 
 ## Part C — Preservation-Period Administrative Constraints
 
