@@ -3308,3 +3308,431 @@ V2_1_IMAGE_SHA256_ORACLES = {
     "wrong_f_identity_identical_bytes": "a1cec3887c53a7ce9e3d8c12bdf95da485f95e0e44d7aa367a93090bb6120ab6",
     "zero_header_followed_by_nonzero": "16118cd43a1031cae484180bec13a4673c9f348cd494126237d284350dca173d",
 }
+
+
+# M0-1 independent Amendment 1a literals and synthetic evidence adapters.
+# No operational map/acquisition/composite schema is adopted by these fixtures.
+Q_EXTENTS_LITERAL = (
+    (0, 131072, 32768),
+    (1, 163840, 32768),
+    (2, 196608, 32768),
+    (3, 229376, 32768),
+    (4, 262144, 32768),
+    (5, 294912, 32768),
+    (6, 327680, 32768),
+    (7, 360448, 32768),
+    (8, 393216, 32768),
+    (9, 425984, 32768),
+    (10, 458752, 32768),
+    (11, 491520, 32768),
+    (12, 655360, 12288),
+    (13, 667648, 12288),
+    (14, 679936, 12288),
+    (15, 692224, 12288),
+    (16, 704512, 12288),
+    (17, 716800, 12288),
+    (18, 729088, 12288),
+    (19, 741376, 12288),
+    (20, 753664, 524288),
+    (21, 1277952, 131072),
+    (22, 1409024, 16384),
+    (23, 1425408, 131072),
+    (24, 1556480, 16384),
+    (25, 1572864, 524288),
+    (26, 2097152, 65536),
+    (27, 2162688, 65536),
+    (28, 2228224, 28672),
+    (29, 2256896, 28672),
+    (30, 2285568, 28672),
+    (31, 2314240, 28672),
+    (32, 2342912, 28672),
+    (33, 2371584, 28672),
+    (34, 2400256, 28672),
+    (35, 2428928, 28672),
+    (36, 2457600, 28672),
+    (37, 2486272, 28672),
+    (38, 2514944, 28672),
+    (39, 2543616, 28672),
+    (40, 2572288, 28672),
+    (41, 2600960, 28672),
+    (42, 2629632, 28672),
+    (43, 2658304, 28672),
+    (44, 2686976, 32768),
+    (45, 2719744, 32768),
+    (46, 2752512, 1024),
+    (47, 2753536, 1024),
+    (48, 2754560, 1024),
+    (49, 2755584, 1024),
+    (50, 2756608, 1024),
+    (51, 2757632, 1024),
+    (52, 2758656, 1024),
+    (53, 2759680, 1024),
+    (54, 2760704, 1024),
+    (55, 2761728, 1024),
+    (56, 2762752, 1024),
+    (57, 2763776, 1024),
+    (58, 2764800, 1024),
+    (59, 2765824, 1024),
+    (60, 2766848, 1024),
+    (61, 2767872, 1024),
+    (62, 2768896, 1024),
+    (63, 2769920, 1024),
+    (64, 2770944, 1024),
+    (65, 2771968, 1024),
+    (66, 2772992, 1024),
+    (67, 2774016, 1024),
+    (68, 2775040, 1024),
+    (69, 2776064, 1024),
+    (70, 2777088, 1024),
+    (71, 2778112, 1024),
+    (72, 2779136, 1024),
+    (73, 2780160, 1024),
+    (74, 2781184, 1024),
+    (75, 2782208, 1024),
+    (76, 2783232, 1024),
+    (77, 2784256, 1024),
+    (78, 2785280, 1024),
+    (79, 2786304, 1024),
+    (80, 2787328, 1024),
+    (81, 2788352, 1024),
+    (82, 2789376, 1024),
+    (83, 2790400, 1024),
+    (84, 2791424, 1024),
+    (85, 2792448, 1024),
+    (86, 2793472, 1024),
+    (87, 2794496, 1024),
+    (88, 2795520, 1024),
+    (89, 2796544, 1024),
+    (90, 2797568, 1024),
+    (91, 2798592, 1024),
+    (92, 2799616, 1024),
+    (93, 2800640, 1024),
+    (94, 2801664, 1024),
+    (95, 2802688, 1024),
+    (96, 2803712, 1024),
+    (97, 2804736, 1024),
+    (98, 2805760, 1024),
+    (99, 2806784, 1024),
+    (100, 2807808, 1024),
+    (101, 2808832, 1024),
+    (102, 2809856, 1024),
+    (103, 2810880, 16384),
+    (104, 2827264, 16384),
+    (105, 2843648, 8192),
+    (106, 2851840, 24576),
+    (107, 2876416, 7168),
+)
+Q_ROLES_LITERAL = ('a2_inputs', 'toolchain', 'sdk', 'compile_intent', 'compile_result', 'object_inspection', 'link_intent', 'link_result', 'macho_dependencies', 'signature', 'entitlements', 'output_inventory', 'privileged_transition', 'i_intent', 'i_result', 'private_intent', 'private_result', 'j_intent', 'j_result_import_verification', 'bootstrap_complete', 'pre_provision', 'pre_group', 'group_readback', 'pre_account', 'account_readback', 'post_provision', 'installed_objects', 'output_creation', 'bootstrap_result', 'kickstart_result', 'ready_structures', 'ready_print', 'ready_list', 'observer_attachment', 'observation_release', 'pre_final_structures', 'pre_final_raw_state', 'final_release', 'terminal_event', 'terminal_print', 'terminal_list', 'final_process_custody', 'sigterm', 'sigkill', 'bootout', 'service_absence', 'temporary_account:intent', 'temporary_account:composite_result', 'temporary_account:absence', 'temporary_group:intent', 'temporary_group:composite_result', 'temporary_group:absence', 'I/probe:intent', 'I/probe:composite_result', 'I/probe:absence', 'I/probe.plist:intent', 'I/probe.plist:composite_result', 'I/probe.plist:absence', 'O/result.bin:intent', 'O/result.bin:composite_result', 'O/result.bin:absence', 'O/stderr.bin:intent', 'O/stderr.bin:composite_result', 'O/stderr.bin:absence', 'J:intent', 'J:composite_result', 'J:absence', 'O:intent', 'O:composite_result', 'O:absence', 'I/private:intent', 'I/private:composite_result', 'I/private:absence', 'I:intent', 'I:composite_result', 'I:absence', 'P/probe.c:intent', 'P/probe.c:composite_result', 'P/probe.c:absence', 'P/probe.plist:intent', 'P/probe.plist:composite_result', 'P/probe.plist:absence', 'P/package.json:intent', 'P/package.json:composite_result', 'P/package.json:absence', 'P/probe.o:intent', 'P/probe.o:composite_result', 'P/probe.o:absence', 'P/probe:intent', 'P/probe:composite_result', 'P/probe:absence', 'P/build.stdout:intent', 'P/build.stdout:composite_result', 'P/build.stdout:absence', 'P/build.stderr:intent', 'P/build.stderr:composite_result', 'P/build.stderr:absence', 'P:intent', 'P:composite_result', 'P:absence', 'W/work:intent', 'W/work:composite_result', 'W/work:absence', 'cleanup_eligibility_1', 'cleanup_eligibility_2', 'residue', 'preservation', 'final_privileged')
+Q_RECEIPT_FIELDS_LITERAL = ('format', 'map', 'binding', 'lifecycle', 'authorization', 'producer', 'writer', 'encoding', 'schema', 'length', 'sha256', 'completeness')
+Q_STATES_LITERAL = ("EMPTY", "RECEIPTED_COMPLETE", "RECEIPTED_PARTIAL", "RECEIPTED_UNRESOLVED", "ORPHAN", "INVALID")
+Q_CHECKSUM_LITERAL_VECTORS = ({'capture': 0, 'offset': 131072, 'capacity': 32768, 'cell_hex': '44394d3043415000000000005e02000000000000000000000000000000000000000000000000000000000000000000007b22617574686f72697a6174696f6e223a2234343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434222c2262696e64696e67223a2232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232222c22636f6d706c6574656e657373223a22636f6d706c657465222c22656e636f64696e67223a22726177222c22666f726d6174223a226d636c2d64303030392d713161222c226c656e677468223a2233222c226c6966656379636c65223a223333333333333333333333333333333333333333333333333333333333333333222c226d6170223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131222c2270726f6475636572223a2235353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535222c22736368656d61223a6e756c6c2c22736861323536223a2262613738313662663866303163666561343134313430646535646165323232336230303336316133393631373761396362343130666636316632303031356164222c22777269746572223a2236363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636227d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000', 'payload_hex': '616263', 'map': '1111111111111111111111111111111111111111111111111111111111111111', 'binding': '2222222222222222222222222222222222222222222222222222222222222222', 'lifecycle': '33333333333333333333333333333333', 'sha256': 'df2a762cb3f7b62e25226a2e26d05c5540426cc3d2a5f7cb8e0f7503f5ef223e', 'preimage_sha256': 'df2a762cb3f7b62e25226a2e26d05c5540426cc3d2a5f7cb8e0f7503f5ef223e'}, {'capture': 107, 'offset': 2876416, 'capacity': 7168, 'cell_hex': '44394d30434150006b0000005d02000000000000000000000000000000000000000000000000000000000000000000007b22617574686f72697a6174696f6e223a2234343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434222c2262696e64696e67223a2232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232222c22636f6d706c6574656e657373223a227061727469616c222c22656e636f64696e67223a22726177222c22666f726d6174223a226d636c2d64303030392d713161222c226c656e677468223a2236222c226c6966656379636c65223a223333333333333333333333333333333333333333333333333333333333333333222c226d6170223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131222c2270726f6475636572223a2235353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535222c22736368656d61223a6e756c6c2c22736861323536223a2230653933613461343766323632386663316136646235646230363262306130343930633037336438393065623536323831353865313562633331663032666534222c22777269746572223a2236363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636227d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000', 'payload_hex': '00ff7461696c', 'map': '1111111111111111111111111111111111111111111111111111111111111111', 'binding': '2222222222222222222222222222222222222222222222222222222222222222', 'lifecycle': '33333333333333333333333333333333', 'sha256': '34a7af87539acac2924eda931ceedea1d1e8f85205b398ee5e4a15369b07fc08', 'preimage_sha256': '34a7af87539acac2924eda931ceedea1d1e8f85205b398ee5e4a15369b07fc08'})
+
+
+_M0_LIFECYCLE = "7" * 32
+_M0_RAW_MAP = b"synthetic-approved-map-test-only;not-an-operational-schema"
+
+
+def _m0_ref(label):
+    return _v2_1_digest(("m0-synthetic:" + label).encode("ascii"))
+
+
+def m0_rebind_map(evidence):
+    """Rebind synthetic external projection; never used by production code."""
+    evidence["references"][evidence["map_attestation"]]["projection"] = _v2_1_digest(
+        _v2_1_cjson({"captures": evidence["map_view"]})
+    )
+
+
+def m0_receipt_cell(number, payload, evidence, *, completeness="complete", changes=None):
+    """Independent receipt builder using literal geometry and stdlib primitives."""
+    _, offset, capacity = Q_EXTENTS_LITERAL[number]
+    entry = evidence["map_view"][number]
+    receipt = {
+        "format": "mcl-d0009-q1a", "map": _v2_1_digest(evidence["map_bytes"]),
+        "binding": evidence["binding"], "lifecycle": evidence["lifecycle"],
+        "authorization": entry["authorization"], "producer": entry["producer"],
+        "writer": entry["writer"], "encoding": entry["encoding"],
+        "schema": entry["schema"], "length": str(len(payload)),
+        "sha256": _v2_1_digest(payload), "completeness": completeness,
+    }
+    receipt.update(changes or {})
+    raw = _v2_1_cjson(receipt)
+    if len(raw) > 976 or len(payload) > capacity:
+        raise ValueError("synthetic fixture exceeds fixed extent")
+    cell = bytearray(1024)
+    cell[:8] = b"D9M0CAP\x00"
+    cell[8:12] = number.to_bytes(4, "little")
+    cell[12:16] = len(raw).to_bytes(4, "little")
+    cell[48:48 + len(raw)] = raw
+    pieces = [b"MCL-D0009-M0-CAPTURE-1A\x00",
+              bytes.fromhex(receipt["map"]), bytes.fromhex(receipt["binding"]),
+              bytes.fromhex(receipt["lifecycle"]), number.to_bytes(4, "little"),
+              offset.to_bytes(8, "little"), capacity.to_bytes(8, "little"), bytes(cell), payload]
+    cell[16:48] = _v2_hashlib.sha256(b"".join(pieces)).digest()
+    return bytes(cell)
+
+
+def build_m0_q_fixture(captures=(0,), *, payloads=None, completeness=None, structured=None):
+    payloads, completeness, structured = payloads or {}, completeness or {}, structured or {}
+    refs = {}
+    def established(label, **facts):
+        digest = _m0_ref(label)
+        refs[digest] = dict(established=True, current=True, order=0, **facts)
+        return digest
+    map_digest = _v2_1_digest(_M0_RAW_MAP)
+    binding = established("binding", kind="q_binding", map=map_digest,
+                          lifecycle=_M0_LIFECYCLE, size=3145728, object="synthetic-q-identity",
+                          parent="synthetic-parent-identity", creation_custody_established=True)
+    attestation = established("map_attestation", map=map_digest, immutable=True)
+    authority = established("authorization")
+    producer = established("producer")
+    writer = established("writer")
+    operation = established("operation")
+    acquisition = established("acquisition")
+    evidence = {
+        "map_bytes": _M0_RAW_MAP, "map_view": [], "map_attestation": attestation,
+        "binding": binding, "lifecycle": _M0_LIFECYCLE, "object": "synthetic-q-identity",
+        "references": refs, "schemas": {}, "captures": {}, "history": [],
+        "prior_freeze": False, "retention": [], "cleanup": [], "originals": [],
+        "accounting": {"generations": 1, "aborted_generations": 0, "items": 0,
+            "physical_attempts": 0, "phases": 1, "accounts": {key: 0 for key in ORDINARY_ACCOUNT_FIELDS_LITERAL},
+            "generation_usage": [], "support": [_M0_RAW_MAP]},
+    }
+    for number, offset, capacity in Q_EXTENTS_LITERAL:
+        schema = structured.get(number)
+        schema_digest = _v2_1_digest(schema) if schema else None
+        if schema:
+            evidence["schemas"][schema_digest] = schema
+        evidence["map_view"].append({
+            "number": str(number), "offset": str(offset), "capacity": str(capacity),
+            "role": Q_ROLES_LITERAL[number], "category": "3",
+            "account": "a2_evidence" if number < 12 else "gate_b_ordinary_evidence",
+            "operation": operation, "branch": "synthetic", "acquisition": acquisition,
+            "authorization": authority, "producer": producer, "writer": writer,
+            "encoding": "cjson2" if schema else "raw", "schema": schema_digest,
+            "required_complete": True, "dependencies": [],
+        })
+    m0_rebind_map(evidence)
+    image = bytearray(3145728)
+    for number, offset, capacity in Q_EXTENTS_LITERAL:
+        active = number in captures
+        data = payloads.get(number, b"synthetic-evidence") if active else b""
+        cell = m0_receipt_cell(number, data, evidence, completeness=completeness.get(number, "complete")) if active else bytes(1024)
+        image[number * 1024:(number + 1) * 1024] = cell
+        if active:
+            image[offset:offset + len(data)] = data
+        digest = established("capture_" + str(number), capture=number, map=map_digest,
+                             binding=binding, lifecycle=_M0_LIFECYCLE,
+                             dispatch="dispatched" if active else "not_dispatched", branch="synthetic")
+        proof = refs[digest]
+        observation = {"reference": digest, "cell_sha256": _v2_1_digest(cell),
+                       "payload_sha256": _v2_1_digest(data)}
+        evidence["captures"][number] = observation
+        if active:
+            order = 1000 + list(captures).index(number) * 10
+            proof.update(order=order, checks={key: True for key in ("authority", "identity", "custody", "map", "reservations", "f_closed")},
+                         zero_cell=bytes(1024), zero_extent=bytes(capacity),
+                         trace=["validate", "zero", "payload", "payload_fsync", "receipt", "receipt_fsync", "readback", "close"],
+                         readback_cell_sha256=_v2_1_digest(cell), readback_payload_sha256=_v2_1_digest(data),
+                         payload_written=len(data), receipt_written=1024, io_uncertain=False)
+    evidence["history"] = [{"capture": n, "order": 1000 + index * 10} for index, n in enumerate(captures)]
+    evidence["independent_stop"] = established("stop", kind="independent_stop", binding=binding,
+                                                f_identity_custody_valid=True, requires_new_q_capture=False)
+    return bytes(image), evidence
+
+
+def m0_add_retention(image, evidence, number=0, *, generation=1, unresolved_raw=False):
+    """Build exact synthetic F representations/admission; no F object or writer."""
+    _, offset, capacity = Q_EXTENTS_LITERAL[number]
+    cell = image[number * 1024:(number + 1) * 1024]
+    raw_receipt = cell[48:48 + int.from_bytes(cell[12:16], "little")]
+    receipt = _v2_json.loads(raw_receipt) if not unresolved_raw else None
+    payload = image[offset:offset + (int(receipt["length"]) if receipt else capacity)]
+    entry = evidence["map_view"][number]
+    roles = ["q_cell_" + str(number), "q_payload_" + str(number)]
+    descriptors = []
+    for role, data, encoding, schema in ((roles[0], cell, "raw", None),
+            (roles[1], payload, entry["encoding"] if receipt else "raw", entry["schema"] if receipt else None)):
+        descriptors.append(_v2_1_cjson({"permit": _m0_ref("retention_permit"), "role": role,
+             "category": "3", "encoding": encoding, "schema": schema,
+             "length": str(len(data)), "sha256": _v2_1_digest(data)}))
+    cp = _m0_ref("admission_" + str(number) + "_" + str(len(evidence["retention"])))
+    evidence["references"][cp] = {"established": True, "current": True, "order": 2000,
+        "kind": "admit", "generation": generation, "binding": evidence["binding"],
+        "independently_verified": True, "closed": True,
+        "scope": [(roles[0], _v2_1_digest(cell)), (roles[1], _v2_1_digest(payload))]}
+    item = {"capture": number, "cell": cell, "payload": payload,
+            "cell_descriptor": descriptors[0], "payload_descriptor": descriptors[1],
+            "roles": roles, "generation": generation, "checkpoint": cp,
+            "qualification": receipt["completeness"] if receipt else "unresolved",
+            "unresolved_raw": unresolved_raw}
+    read_ref = _m0_ref("retention_read_" + str(number) + "_" + str(len(evidence["retention"])))
+    evidence["references"][read_ref] = {"established": True, "current": True,
+        "kind": "q_retention_read", "binding": evidence["binding"], "map": _v2_1_digest(evidence["map_bytes"]),
+        "lifecycle": evidence["lifecycle"], "capture": number, "object": evidence["object"],
+        "identity_matches": True, "custody_valid": True, "writers_closed": True,
+        "cell_sha256": _v2_1_digest(cell), "payload_sha256": _v2_1_digest(payload)}
+    item["read_reference"] = read_ref
+    evidence["retention"].append(item)
+    # Independent ledger arithmetic, including boundaries once per generation.
+    ledger = evidence["accounting"]
+    row = next((row for row in ledger["generation_usage"] if row["generation"] == generation), None)
+    if row is None:
+        row = {"generation": generation, "items": 0, "records": 2, "bytes": 1024}
+        ledger["generation_usage"].append(row)
+        ledger["physical_attempts"] += 2
+        ledger["generations"] = len(ledger["generation_usage"])
+    physical, records = 0, 0
+    for desc, data in zip(descriptors, (cell, payload)):
+        physical += (len(desc) + 103) // 8 * 8
+        records += 1
+        for start in range(0, len(data), 262048):
+            physical += (len(data[start:start + 262048]) + 103) // 8 * 8
+            records += 1
+    ledger["accounts"]["review_correction"] += len(cell)
+    ledger["accounts"][entry["account"]] += len(payload)
+    ledger["accounts"]["descriptors_control_framing_padding"] += physical - len(cell) - len(payload)
+    row["items"] += 2
+    row["records"] += records
+    row["bytes"] += physical
+    ledger["items"] += 2
+    ledger["physical_attempts"] += records
+    return item
+
+
+def m0_add_terminal(evidence, kind="final_unresolved"):
+    ref = _m0_ref("terminal")
+    evidence["references"][ref] = {"established": True, "current": True, "kind": kind,
+        "binding": evidence["binding"], "r2_terminal_established": True}
+    evidence["terminal"] = ref
+
+
+def m0_add_j(evidence):
+    ref = _m0_ref("journal")
+    evidence["references"][ref] = {"established": True, "current": True, "kind": "journal",
+        "binding": evidence["binding"], "bootstrap_sha256": _v2_1_digest(b"independent-bootstrap")}
+    evidence["references"][ref]["capture_scope"] = [
+        (number, evidence["captures"][number]["payload_sha256"])
+        for number in range(13, 19)
+        if evidence["references"][evidence["captures"][number]["reference"]]["dispatch"] == "dispatched"
+    ]
+    evidence["j"] = {"reference": ref, "bootstrap_source": "original_acquisition",
+        "bootstrap_bytes": b"independent-bootstrap", "independent_bytes": b"independent-bootstrap",
+        "conflict": False, "frozen": True, "reopened": False, "active_j_intents_duplicated_in_q": False}
+
+    for key in ("bootstrap_source", "conflict", "reopened", "active_j_intents_duplicated_in_q"):
+        evidence["references"][ref][key] = evidence["j"][key]
+
+
+def m0_add_build(evidence, *, success=False, linked=False):
+    ref = _m0_ref("build")
+    status = {"kind": "exit", "value": 0 if success else 1}
+    proof = {"established": True, "current": True, "kind": "build", "binding": evidence["binding"],
+             "compile_status": status, "link_status": {"kind": "exit", "value": 0}}
+    build = {"reference": ref, "compile_status": dict(status), "compile_attempts": 1,
+             "link_status": {"kind": "exit", "value": 0}, "link_attempts": int(linked)}
+    for name in ("stdout", "stderr"):
+        prefix = ("compile-" + name).encode()
+        data = prefix + (b"link" if linked else b"")
+        build[name] = {"bytes": data, "start": 0, "compile_end": len(prefix),
+            "compile_sha256": _v2_1_digest(prefix), "link_start": len(prefix),
+            "final_end": len(data), "final_sha256": _v2_1_digest(data)}
+        proof[name + "_compile_sha256"] = _v2_1_digest(prefix)
+        proof[name + "_final_sha256"] = _v2_1_digest(data)
+    proof["capture_scope"] = [
+        (number, evidence["captures"][number]["payload_sha256"])
+        for number in range(3, 12)
+        if evidence["references"][evidence["captures"][number]["reference"]]["dispatch"] == "dispatched"
+    ]
+    proof["compile_attempts"] = build["compile_attempts"]
+    proof["link_attempts"] = build["link_attempts"]
+    evidence["references"][ref] = proof
+    evidence["build"] = build
+
+
+M0_SYNTHETIC_COMPOSITE_SCHEMA = _v2_1_cjson({"type": "object", "fields": {
+    "dispatch": {"type": "enum", "values": ["dispatched", "not_dispatched"]},
+    "identity_hex": {"type": "string", "max": "128"},
+    "preconditions": {"type": "boolean"},
+    "status": {"type": "string", "max": "64"},
+}})
+
+
+def _m0_cleanup_payload(*, dispatch, original_status, failed_precondition):
+    """Synthetic values within the unchanged four-field composite shape."""
+    if dispatch not in ("dispatched", "not_dispatched"):
+        raise ValueError("fixture requires a recorded dispatch decision")
+    local = (b"failed-precondition:" + failed_precondition.encode("ascii")
+             if failed_precondition else b"fresh-exact-identity")
+    raw = _v2_1_cjson({"dispatch": dispatch, "identity_hex": local.hex(),
+                     "preconditions": failed_precondition is None,
+                     "status": original_status if dispatch == "dispatched" else ""})
+    return raw, local
+
+
+def m0_add_cleanup(evidence, target="I/probe", *, dispatch="dispatched",
+                   original_status="original-exit-0", failed_precondition=None):
+    targets = ("temporary_account", "temporary_group", "I/probe", "I/probe.plist", "O/result.bin",
+               "O/stderr.bin", "J", "O", "I/private", "I", "P/probe.c", "P/probe.plist",
+               "P/package.json", "P/probe.o", "P/probe", "P/build.stdout", "P/build.stderr", "P", "W/work")
+    number = 47 + targets.index(target) * 3
+    raw, local = _m0_cleanup_payload(dispatch=dispatch, original_status=original_status,
+                                     failed_precondition=failed_precondition)
+    schema = _v2_1_digest(M0_SYNTHETIC_COMPOSITE_SCHEMA)
+    evidence["schemas"][schema] = M0_SYNTHETIC_COMPOSITE_SCHEMA
+    ref = _m0_ref("cleanup_" + target + "_" + str(len(evidence["cleanup"])))
+    proof = {"established": True, "current": True, "kind": "cleanup", "binding": evidence["binding"],
+        "target": target, "capture": number, "composite_sha256": _v2_1_digest(raw), "schema": schema,
+        "f_admitted_target": True, "checkpoint": True, "specific_chair_authority": True,
+        "f_closed": True, "no_remaining_required_use": True, "fresh_identity_custody": True,
+        "all_preconditions_passed": failed_precondition is None, "fresh_population": True,
+        "local_observation_bytes": local, "dispatch": dispatch, "eligibility": []}
+    if dispatch == "dispatched":
+        proof["original_status"] = original_status
+    if target in ("temporary_account", "temporary_group"):
+        for capture in (103, 104):
+            proof["eligibility"].append({"capture": capture, "binding": evidence["binding"],
+                "map": _v2_1_digest(evidence["map_bytes"]), "lifecycle": evidence["lifecycle"],
+                "fresh": True, "conflict": False,
+                "sha256": evidence["captures"][capture]["payload_sha256"]})
+    if failed_precondition == "eligibility":
+        proof["eligibility"][0]["fresh"] = False
+    elif failed_precondition is not None:
+        proof[failed_precondition] = False
+    identity = _m0_ref("target_identity_" + target)
+    admission = _m0_ref("target_admission_" + target)
+    chair = _m0_ref("target_chair_authority_" + target)
+    evidence["references"][admission] = {"established": True, "current": True, "order": 0, "kind": "admit",
+        "binding": evidence["binding"], "independently_verified": True, "closed": True,
+        "targets": [(target, identity)]}
+    evidence["references"][chair] = {"established": True, "current": True, "order": 0, "kind": "cleanup_authority",
+        "binding": evidence["binding"], "target": target, "identity": identity}
+    proof.update(target_admission=admission, chair_authority=chair,
+                 target_identity=identity, observed_identity=identity)
+    evidence["references"][ref] = proof
+    action = {"reference": ref, "target": target, "schema": schema, "composite": raw}
+    evidence["cleanup"].append(action)
+    return action, proof
+
+
+
+def build_m0_cleanup_fixture(target="I/probe", *, dispatch="dispatched",
+                             original_status="original-exit-0", failed_precondition=None,
+                             absence=False):
+    targets = ("temporary_account", "temporary_group", "I/probe", "I/probe.plist", "O/result.bin",
+               "O/stderr.bin", "J", "O", "I/private", "I", "P/probe.c", "P/probe.plist",
+               "P/package.json", "P/probe.o", "P/probe", "P/build.stdout", "P/build.stderr", "P", "W/work")
+    number = 47 + targets.index(target) * 3
+    raw, _ = _m0_cleanup_payload(dispatch=dispatch, original_status=original_status,
+                                failed_precondition=failed_precondition)
+    # Eligibility observations and intent close before the result acquisition.
+    captures = ((103, 104) if target in ("temporary_account", "temporary_group") else ())
+    captures += (number - 1, number)
+    if absence:
+        captures += (number + 1,)
+    image, evidence = build_m0_q_fixture(captures, payloads={number: raw},
+                                       structured={number: M0_SYNTHETIC_COMPOSITE_SCHEMA})
+    action, proof = m0_add_cleanup(evidence, target, dispatch=dispatch,
+                                  original_status=original_status,
+                                  failed_precondition=failed_precondition)
+    return image, evidence, action, proof

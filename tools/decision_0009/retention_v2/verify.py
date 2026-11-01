@@ -1996,3 +1996,924 @@ def encode_result(result: Mapping[str, Any]) -> bytes:
 
     _validate_result(result)
     return cjson2.dumps(dict(result))
+
+
+# M0-1: Python evidence adapter, not an additional F/Q wire schema.
+# The operation's map/acquisition/composite schemas are external inputs.  A
+# trusted external map attestation binds its exact bytes AND the normalized
+# declarations used below.  This module never interprets Q as authority.
+_Q_RECEIPT_KEYS = {
+    "format", "map", "binding", "lifecycle", "authorization", "producer",
+    "writer", "encoding", "schema", "length", "sha256", "completeness",
+}
+_Q_LIFECYCLE_RE = re.compile(r"\A[0-9a-f]{32}\Z", re.ASCII)
+_Q_DECLARATION_KEYS = {
+    "number", "offset", "capacity", "role", "category", "account", "operation",
+    "branch", "acquisition", "authorization", "producer", "writer", "encoding",
+    "schema", "required_complete", "dependencies",
+}
+_Q_TRACE = (
+    "validate", "zero", "payload", "payload_fsync", "receipt",
+    "receipt_fsync", "readback", "close",
+)
+
+
+def compute_q_checksum(
+    capture: int, offset: int, capacity: int, cell: bytes, payload: bytes,
+    map_digest: str, binding_digest: str, lifecycle: str,
+) -> bytes:
+    """Amendment §5 preimage, independently assembled; no writer dependency."""
+    if type(capture) is not int or not 0 <= capture < 108:
+        raise ValueError("unassigned capture")
+    if type(offset) is not int or type(capacity) is not int or offset < 0 or capacity < 0:
+        raise ValueError("invalid extent")
+    if not isinstance(cell, bytes) or len(cell) != 1024:
+        raise ValueError("incomplete cell")
+    if not isinstance(payload, bytes) or len(payload) > capacity:
+        raise ValueError("invalid payload")
+    _digest(map_digest, "Q map")
+    _digest(binding_digest, "Q binding")
+    if not isinstance(lifecycle, str) or not _Q_LIFECYCLE_RE.fullmatch(lifecycle):
+        raise ValueError("invalid lifecycle")
+    preimage = (
+        b"MCL-D0009-M0-CAPTURE-1A\x00"
+        + bytes.fromhex(map_digest) + bytes.fromhex(binding_digest)
+        + bytes.fromhex(lifecycle) + struct.pack("<IQQ", capture, offset, capacity)
+        + cell[:16] + bytes(32) + cell[48:] + payload
+    )
+    return hashlib.sha256(preimage).digest()
+
+
+def _q_reference(evidence, reference, *, before=None, current=False):
+    _digest(reference, "external reference")
+    value = evidence.get("references", {}).get(reference)
+    if not isinstance(value, Mapping) or value.get("established") is not True:
+        raise _ReferenceError("unestablished external reference")
+    if current and value.get("current") is not True:
+        raise _ReferenceError("external reference is not current")
+    if before is not None and (
+        type(value.get("order")) is not int or value["order"] >= before
+    ):
+        raise _ReferenceError("reference does not predate capture")
+    return value
+
+
+def _q_schema(value, rule, depth=0):
+    """Apply a supplied closed shape; this is an input adapter, not a wire DSL.
+
+    Shape nodes use type=object/array/string/uint/digest/boolean/null/enum.
+    Object fields are exact; array limits and string maxima are supplied.
+    Its exact CJSON2 bytes must hash to the map's approved schema digest.
+    """
+    if depth > 8 or not isinstance(rule, dict):
+        raise _SchemaError("missing or excessively nested payload schema")
+    kind = rule.get("type")
+    if kind == "object":
+        _require_keys(rule, {"type", "fields"}, "shape")
+        fields = rule["fields"]
+        if not isinstance(fields, dict) or len(fields) > 64:
+            raise _SchemaError("invalid closed shape")
+        _require_keys(value, set(fields), "Q payload")
+        for key, child in fields.items():
+            _q_schema(value[key], child, depth + 1)
+    elif kind == "array":
+        _require_keys(rule, {"type", "items", "max"}, "shape")
+        if not isinstance(value, list) or len(value) > _uint(rule["max"], "array max"):
+            raise _SchemaError("payload array")
+        for child in value:
+            _q_schema(child, rule["items"], depth + 1)
+    elif kind in ("string", "uint"):
+        _require_keys(rule, {"type", "max"}, "shape")
+        maximum = _uint(rule["max"], "shape max")
+        if kind == "uint":
+            _uint(value, "payload integer", maximum=maximum)
+        elif not isinstance(value, str) or len(value.encode("utf-8")) > maximum:
+            raise _SchemaError("payload string")
+    elif kind == "digest":
+        _require_keys(rule, {"type"}, "shape")
+        _digest(value, "payload digest")
+    elif kind == "boolean":
+        _require_keys(rule, {"type"}, "shape")
+        if type(value) is not bool:
+            raise _SchemaError("payload boolean")
+    elif kind == "null":
+        _require_keys(rule, {"type"}, "shape")
+        if value is not None:
+            raise _SchemaError("payload null")
+    elif kind == "enum":
+        _require_keys(rule, {"type", "values"}, "shape")
+        if not isinstance(rule["values"], list) or value not in rule["values"]:
+            raise _SchemaError("payload enum")
+    else:
+        raise _SchemaError("unsupported supplied payload shape")
+
+
+def _q_map(evidence):
+    raw, view = evidence.get("map_bytes"), evidence.get("map_view")
+    if not isinstance(raw, bytes) or not 0 < len(raw) <= 65_536:
+        raise _ReferenceError("missing/oversized approved map")
+    if not isinstance(view, list) or len(view) != 108:
+        raise _ReferenceError("missing exact map projection")
+    digest = hashlib.sha256(raw).hexdigest()
+    attestation = _q_reference(evidence, evidence.get("map_attestation"), current=True)
+    if (attestation.get("map") != digest or attestation.get("projection") !=
+            hashlib.sha256(cjson2.dumps({"captures": view})).hexdigest()):
+        raise _ReferenceError("unbound map projection")
+    binding = _q_reference(evidence, evidence.get("binding"), current=True)
+    lifecycle = evidence.get("lifecycle")
+    if not isinstance(lifecycle, str) or not _Q_LIFECYCLE_RE.fullmatch(lifecycle):
+        raise _ReferenceError("missing lifecycle")
+    if (binding.get("map") != digest or binding.get("lifecycle") != lifecycle
+            or binding.get("size") != 3_145_728
+            or binding.get("object") != evidence.get("object")
+            or not binding.get("object") or not binding.get("parent")
+            or binding.get("creation_custody_established") is not True
+            or attestation.get("immutable") is not True):
+        raise _ReferenceError("Q binding mismatch")
+    for number, (entry, extent) in enumerate(zip(view, spec.Q_CAPTURES)):
+        _require_keys(entry, _Q_DECLARATION_KEYS, "normalized map declaration")
+        if (_uint(entry["number"], "capture") != number
+                or _uint(entry["offset"], "offset") != extent.offset
+                or _uint(entry["capacity"], "capacity") != extent.capacity
+                or entry["role"] != spec.Q_CAPTURE_ROLES[number]):
+            raise _ReferenceError("immutable capture assignment mismatch")
+        _uint(entry["category"], "category", maximum=11)
+        if entry["account"] not in spec.ORDINARY_ACCOUNT_BYTES:
+            raise _SchemaError("unknown account")
+        for key in ("operation", "acquisition", "authorization", "producer", "writer"):
+            _digest(entry[key], key)
+        _role(entry["branch"], "branch")
+        if entry["encoding"] not in ("raw", "cjson2"):
+            raise _SchemaError("unknown encoding")
+        _digest(entry["schema"], "schema", nullable=entry["encoding"] == "raw")
+        if type(entry["required_complete"]) is not bool:
+            raise _SchemaError("missing completeness requirement")
+        if not isinstance(entry["dependencies"], list):
+            raise _SchemaError("missing dependencies")
+        deps = [_uint(n, "dependency", maximum=107) for n in entry["dependencies"]]
+        if len(set(deps)) != len(deps) or number in deps:
+            raise _ReferenceError("invalid dependency set")
+    return digest, view
+
+
+def _q_physical(image, number, entry, evidence, map_digest):
+    extent = spec.Q_CAPTURES[number]
+    start, capacity = extent.offset, extent.capacity
+    result = {"physical_state": "INVALID", "dispatch": "uncertain",
+              "closure": "not_established", "usable": False, "errors": []}
+    if not isinstance(image, bytes) or len(image) != 3_145_728:
+        result["errors"].append("unreadable_or_wrong_size")
+        return result, None, b"", b""
+    cell = image[number * 1024:(number + 1) * 1024]
+    payload_extent = image[start:start + capacity]
+    if not any(cell):
+        result["physical_state"] = "ORPHAN" if any(payload_extent) else "EMPTY"
+        return result, None, cell, payload_extent
+    try:
+        magic, physical_number, length = struct.unpack("<8sII", cell[:16])
+        if magic != b"D9M0CAP\x00" or physical_number != number or not 0 < length <= 976:
+            raise _SchemaError("invalid receipt header")
+        if any(cell[48 + length:]):
+            raise _SchemaError("nonzero receipt padding")
+        receipt = cjson2.loads(cell[48:48 + length])
+        _require_keys(receipt, _Q_RECEIPT_KEYS, "Q receipt")
+        if receipt["format"] != "mcl-d0009-q1a":
+            raise _SchemaError("receipt format")
+        for key in ("map", "binding", "authorization", "producer", "writer", "sha256"):
+            _digest(receipt[key], key)
+        if not isinstance(receipt["lifecycle"], str) or not _Q_LIFECYCLE_RE.fullmatch(receipt["lifecycle"]):
+            raise _SchemaError("receipt lifecycle")
+        if receipt["encoding"] not in ("raw", "cjson2"):
+            raise _SchemaError("receipt encoding")
+        _digest(receipt["schema"], "schema", nullable=receipt["encoding"] == "raw")
+        if receipt["completeness"] not in ("complete", "partial", "unresolved"):
+            raise _SchemaError("receipt completeness")
+        claimed = _uint(receipt["length"], "payload length", maximum=capacity)
+        payload = payload_extent[:claimed]
+        if any(payload_extent[claimed:]):
+            raise _SchemaError("nonzero unused extent suffix")
+        if receipt["sha256"] != hashlib.sha256(payload).hexdigest():
+            raise _SchemaError("payload digest")
+        if (receipt["map"] != map_digest or receipt["binding"] != evidence.get("binding")
+                or receipt["lifecycle"] != evidence.get("lifecycle")):
+            raise _ReferenceError("receipt object/map/lifecycle binding")
+        if entry is None:
+            raise _ReferenceError("unestablished map")
+        for key in ("authorization", "producer", "writer", "encoding", "schema"):
+            if receipt[key] != entry[key]:
+                raise _ReferenceError("receipt declaration binding")
+        expected = compute_q_checksum(number, start, capacity, cell, payload,
+                                      map_digest, evidence["binding"], evidence["lifecycle"])
+        if expected != cell[16:48]:
+            raise _SchemaError("receipt checksum")
+        if receipt["schema"] is not None:
+            raw_schema = evidence.get("schemas", {}).get(receipt["schema"])
+            if not isinstance(raw_schema, bytes) or hashlib.sha256(raw_schema).hexdigest() != receipt["schema"]:
+                raise _SchemaError("missing exact approved payload schema")
+            # Partial raw prefixes are retained without claiming schema compliance.
+            if receipt["completeness"] == "complete":
+                if receipt["encoding"] != "cjson2":
+                    raise _SchemaError("opaque raw schema needs external acquisition-specific validation")
+                _q_schema(cjson2.loads(payload), cjson2.loads(raw_schema))
+        elif receipt["encoding"] == "cjson2":
+            raise _SchemaError("structured payload without approved schema")
+        result["physical_state"] = "RECEIPTED_" + receipt["completeness"].upper()
+        return result, receipt, cell, payload
+    except (ValueError, TypeError, KeyError, OverflowError, struct.error) as exc:
+        result["errors"].append(str(exc))
+        return result, None, cell, payload_extent
+
+
+def _q_capture_evidence(number, entry, state, receipt, evidence):
+    """Qualify dispatch, ordering and closure without observing the host."""
+    observation = evidence.get("captures", {}).get(number, {})
+    if not isinstance(observation, Mapping):
+        observation = {}
+    try:
+        proof = _q_reference(evidence, observation.get("reference"), current=True)
+        if (proof.get("capture") != number or proof.get("map") != evidence.get("map_digest")
+                or proof.get("binding") != evidence.get("binding")
+                or proof.get("lifecycle") != evidence.get("lifecycle")):
+            raise _ReferenceError("unbound capture evidence")
+        dispatch = proof.get("dispatch")
+        if dispatch not in ("dispatched", "not_dispatched", "uncertain"):
+            raise _ReferenceError("dispatch not established")
+        state["dispatch"] = dispatch
+        if number in (100, 101, 102) and dispatch != "not_dispatched":
+            raise _ReferenceError("W/work is not eligible")
+        if dispatch == "not_dispatched":
+            if state["physical_state"] != "EMPTY":
+                raise _ReferenceError("bytes contradict proven non-dispatch")
+            state["closure"] = "not_applicable"
+            return
+        if dispatch != "dispatched" or receipt is None or entry is None:
+            raise _ReferenceError("dispatched/uncertain capture lacks usable evidence")
+        order = proof.get("order")
+        if type(order) is not int:
+            raise _ReferenceError("missing capture ordering")
+        for key in ("authorization", "producer", "writer", "operation", "acquisition"):
+            _q_reference(evidence, entry[key], before=order, current=True)
+        if proof.get("branch") != entry["branch"]:
+            raise _ReferenceError("wrong authorized branch")
+        for key in ("authority", "identity", "custody", "map", "reservations", "f_closed"):
+            if proof.get("checks", {}).get(key) is not True:
+                raise _ReferenceError("capture precondition: " + key)
+        extent = spec.Q_CAPTURES[number]
+        if proof.get("zero_cell") != bytes(1024) or proof.get("zero_extent") != bytes(extent.capacity):
+            raise _ReferenceError("whole capture target not proven zero")
+        if proof.get("trace") != list(_Q_TRACE):
+            raise _ReferenceError("capture ordering/synchronization/closure unproven")
+        if (proof.get("readback_cell_sha256") != observation.get("cell_sha256")
+                or state.get("observation_mismatch")):
+            raise _ReferenceError("receipt/payload readback mismatch")
+        if proof.get("readback_payload_sha256") != receipt["sha256"]:
+            raise _ReferenceError("payload readback mismatch")
+        if proof.get("payload_written") != int(receipt["length"]) or proof.get("receipt_written") != 1024:
+            raise _ReferenceError("short/uncertain write")
+        if proof.get("io_uncertain") is not False:
+            raise _ReferenceError("write/synchronization outcome uncertain")
+        state["closure"] = "established"
+        state["usable"] = receipt["completeness"] == "complete" or not entry["required_complete"]
+    except (ValueError, TypeError, KeyError) as exc:
+        state["errors"].append(str(exc))
+        if receipt is not None:
+            state["closure"] = "closure_unproven"
+
+
+def _q_history(evidence, states, declarations):
+    errors = []
+    history = evidence.get("history")
+    if not isinstance(history, list):
+        return ["missing lifecycle history"], True
+    seen, frozen = set(), evidence.get("prior_freeze") is not False
+    closed_at = {}
+    previous_order = -1
+    for event in history:
+        if not isinstance(event, Mapping):
+            errors.append("malformed history")
+            frozen = True
+            continue
+        number, order = event.get("capture"), event.get("order")
+        if type(number) is not int or not 0 <= number < 108 or type(order) is not int or order <= previous_order:
+            errors.append("invalid capture history/order")
+            frozen = True
+            continue
+        previous_order = order
+        if frozen or number in seen or number in (100, 101, 102):
+            errors.append("capture after freeze, reuse, or prohibited assignment")
+            frozen = True
+        seen.add(number)
+        state = states[number]
+        observation = evidence.get("captures", {}).get(number, {})
+        proof = evidence.get("references", {}).get(observation.get("reference"), {})
+        if state["dispatch"] != "dispatched" or proof.get("order") != order:
+            errors.append("history/dispatch disagreement")
+            frozen = True
+        entry = declarations[number] if declarations else None
+        if entry is not None:
+            for dependency in entry["dependencies"]:
+                dep = int(dependency)
+                if dep not in closed_at or closed_at[dep] >= order or not states[dep]["usable"]:
+                    errors.append("intent/dependency not closed before dispatch")
+                    frozen = True
+        if state["closure"] == "established":
+            closed_at[number] = order
+        else:
+            frozen = True
+        if state["physical_state"] in ("ORPHAN", "INVALID"):
+            frozen = True
+    for number, state in states.items():
+        if state["dispatch"] == "dispatched" and number not in seen:
+            errors.append("dispatched capture missing from history")
+            frozen = True
+    return errors, frozen
+
+
+def _q_build_and_j(evidence, states):
+    errors = []
+    def capture_scope_matches(reference, numbers):
+        expected = [(number, evidence["captures"][number]["payload_sha256"])
+                    for number in numbers if states[number]["dispatch"] == "dispatched"]
+        return reference.get("capture_scope") == expected
+    build = evidence.get("build")
+    if any(states[n]["dispatch"] == "dispatched" for n in range(3, 12)):
+        if not isinstance(build, Mapping):
+            errors.append("missing original build evidence")
+        else:
+            try:
+                reference = _q_reference(evidence, build.get("reference"), current=True)
+                if reference.get("binding") != evidence.get("binding") or reference.get("kind") != "build":
+                    raise _ReferenceError("unbound build evidence")
+                if not capture_scope_matches(reference, range(3, 12)):
+                    raise _ReferenceError("build projection does not bind exact Q capture bytes")
+                for key in ("compile_attempts", "link_attempts"):
+                    if (key not in reference or key not in build
+                            or type(reference[key]) is not int or type(build[key]) is not int
+                            or reference[key] != build[key]):
+                        raise _ReferenceError("missing/contradictory trusted build fact: " + key)
+                compile_success = build.get("compile_status") == {"kind": "exit", "value": 0}
+                if reference.get("compile_status") != build.get("compile_status"):
+                    raise _ReferenceError("original compile status changed")
+                linked = any(states[n]["dispatch"] == "dispatched" for n in range(6, 12))
+                if linked and not compile_success:
+                    raise _ReferenceError("failed/abnormal compile prevents link")
+                if build.get("compile_attempts") != 1 or build.get("link_attempts") != int(linked):
+                    raise _ReferenceError("build replay/retry")
+                for name in ("stdout", "stderr"):
+                    stream = build[name]
+                    data, end = stream["bytes"], stream["compile_end"]
+                    if (not isinstance(data, bytes) or len(data) > 32768
+                            or type(end) is not int or not 0 <= end <= len(data)
+                            or stream.get("start") != 0
+                            or hashlib.sha256(data[:end]).hexdigest() != stream["compile_sha256"]
+                            or stream["compile_sha256"] != reference.get(name + "_compile_sha256")):
+                        raise _ReferenceError("compile stream prefix/boundary mismatch")
+                    if linked:
+                        if (stream.get("link_start") != end or stream.get("final_end") != len(data)
+                                or hashlib.sha256(data).hexdigest() != stream.get("final_sha256")
+                                or reference.get(name + "_final_sha256") != stream.get("final_sha256")):
+                            raise _ReferenceError("link stream boundary/digest mismatch")
+                    elif len(data) != end:
+                        raise _ReferenceError("post-failure stream append")
+                if linked and reference.get("link_status") != build.get("link_status"):
+                    raise _ReferenceError("original link status changed")
+            except (ValueError, TypeError, KeyError) as exc:
+                errors.append(str(exc))
+    journal = evidence.get("j")
+    if any(states[n]["dispatch"] == "dispatched" for n in range(13, 19)) or journal is not None:
+        try:
+            if not isinstance(journal, Mapping):
+                raise _ReferenceError("missing independent J bootstrap evidence")
+            ref = _q_reference(evidence, journal.get("reference"), current=True)
+            if ref.get("binding") != evidence.get("binding") or ref.get("kind") != "journal":
+                raise _ReferenceError("unbound J evidence")
+            if not capture_scope_matches(ref, range(13, 19)):
+                raise _ReferenceError("J comparison does not bind exact Q capture bytes")
+            for key, kind in (("bootstrap_source", str), ("conflict", bool),
+                              ("reopened", bool), ("active_j_intents_duplicated_in_q", bool)):
+                if (key not in ref or key not in journal or type(ref[key]) is not kind
+                        or type(journal[key]) is not kind or ref[key] != journal[key]):
+                    raise _ReferenceError("missing/contradictory trusted J fact: " + key)
+            if journal.get("bootstrap_source") not in ("original_acquisition", "authorized_bootstrap_source"):
+                raise _ReferenceError("J bootstrap cannot derive from Q")
+            if (journal.get("bootstrap_bytes") != journal.get("independent_bytes")
+                    or not isinstance(journal.get("bootstrap_bytes"), bytes)
+                    or ref.get("bootstrap_sha256") != hashlib.sha256(journal["bootstrap_bytes"]).hexdigest()
+                    or journal.get("conflict") is not False):
+                raise _ReferenceError("J/Q conflict or unproved independent source")
+            if ref["reopened"] is not False:
+                raise _ReferenceError("J cannot reopen")
+            if journal.get("active_j_intents_duplicated_in_q") is not False:
+                raise _ReferenceError("J/Q intent duplication")
+        except (ValueError, TypeError, KeyError) as exc:
+            errors.append(str(exc))
+    return errors
+
+
+def _q_cleanup(evidence, states, physical, declarations, frozen):
+    """Preserve each evaluation; factual dispatch never grants permission.
+
+    Each target maps to an ordered list of the existing result objects. This
+    in-memory report container introduces no F/Q wire field or disposition.
+    """
+    results, seen_targets, seen_captures = {}, set(), set()
+
+    def closed_order(capture, label, *, before=None):
+        state = states[capture]
+        if (state["dispatch"] != "dispatched" or state["closure"] != "established"
+                or not state["usable"]):
+            raise _ReferenceError(label + " capture not established/closed")
+        observation = evidence["captures"][capture]
+        reference = _q_reference(evidence, observation.get("reference"),
+                                 before=before, current=True)
+        if type(reference.get("order")) is not int:
+            raise _ReferenceError(label + " capture lacks chronology")
+        return reference["order"]
+
+    for action in evidence.get("cleanup", []):
+        target = action.get("target")
+        if not isinstance(target, str):
+            target = "invalid_target_" + str(len(results))
+        result = {"dispatch": "uncertain", "errors": [], "absence_established": False}
+        results.setdefault(target, []).append(result)
+        if target in seen_targets:
+            result["errors"].append("second cleanup action/target reuse is prohibited")
+        seen_targets.add(target)
+        number, proof, claim = None, None, None
+        predicate_errors = []
+        failed_observation_preserved = False
+        result_order = None
+        try:
+            if target not in spec.Q_CLEANUP_TARGETS:
+                raise _ReferenceError("ineligible cleanup target")
+            number = 47 + 3 * spec.Q_CLEANUP_TARGETS.index(target)
+            reused = number in seen_captures
+            seen_captures.add(number)
+            proof = _q_reference(evidence, action.get("reference"), current=True)
+            claimed_capture = proof.get("capture")
+            if type(claimed_capture) is int:
+                reused |= claimed_capture != number and claimed_capture in seen_captures
+                seen_captures.add(claimed_capture)
+            if reused:
+                result["errors"].append("cleanup result capture reuse is prohibited")
+            if (proof.get("binding") != evidence.get("binding") or proof.get("target") != target
+                    or claimed_capture != number):
+                raise _ReferenceError("unbound cleanup evidence")
+            # Preserve attested facts before evaluating whether dispatch was valid.
+            claim = proof.get("dispatch")
+            if claim != "not_dispatched" and "original_status" in proof:
+                result["original_status"] = proof["original_status"]
+            if claim == "dispatched":
+                result["dispatch"] = "dispatched"
+                if "original_status" not in proof:
+                    result["errors"].append("dispatched action lacks original status")
+            elif claim != "not_dispatched":
+                result["errors"].append("cleanup dispatch is uncertain")
+            raw = action.get("composite")
+            if not isinstance(raw, bytes) or len(raw) > 1024 or not raw:
+                raise _ReferenceError("composite does not fit assigned result")
+            if (declarations is None or not states[number]["usable"]
+                    or physical[number][2] != raw
+                    or declarations[number]["schema"] != action.get("schema")):
+                raise _ReferenceError("composite differs from bound result capture")
+            if proof.get("composite_sha256") != hashlib.sha256(raw).hexdigest():
+                raise _ReferenceError("composite projection not bound")
+            schema_digest = action.get("schema")
+            _digest(schema_digest, "composite schema")
+            schema = evidence.get("schemas", {}).get(schema_digest)
+            if not isinstance(schema, bytes) or hashlib.sha256(schema).hexdigest() != schema_digest:
+                raise _ReferenceError("missing exact composite schema")
+            _q_schema(cjson2.loads(raw), cjson2.loads(schema))
+            if proof.get("schema") != schema_digest:
+                raise _ReferenceError("wrong composite schema binding")
+            local = proof.get("local_observation_bytes")
+            if (not isinstance(local, bytes) or not local
+                    or local.hex() not in raw.decode("utf-8")):
+                raise _ReferenceError("required local observations not preserved in composite")
+            failed_observation_preserved = proof.get("all_preconditions_passed") is False
+
+            if frozen:
+                result["errors"].append("Q freeze blocks post-handoff cleanup")
+            if target == "W/work":
+                predicate_errors.append("ineligible cleanup target W/work")
+            for key in ("f_admitted_target", "checkpoint", "specific_chair_authority",
+                        "f_closed", "no_remaining_required_use", "fresh_identity_custody"):
+                if proof.get(key) is not True:
+                    predicate_errors.append("cleanup precondition: " + key)
+            if target in ("O", "I/private", "I", "P") and proof.get("fresh_population") is not True:
+                predicate_errors.append("missing immediately preceding population evidence")
+
+            # Capture-order evidence is independent of result/dispatch interpretation.
+            try:
+                result_order = closed_order(number, "result")
+                closed_order(number - 1, "intent", before=result_order)
+                for reference in (evidence.get("binding"), evidence.get("map_attestation")):
+                    _q_reference(evidence, reference, before=result_order, current=True)
+            except (ValueError, TypeError, KeyError) as exc:
+                result["errors"].append(str(exc))
+
+            if target in ("temporary_account", "temporary_group"):
+                try:
+                    references = proof.get("eligibility")
+                    if not isinstance(references, list) or not references:
+                        raise _ReferenceError("missing capture 103/104 reference")
+                    for ref in references:
+                        if not isinstance(ref, Mapping):
+                            raise _ReferenceError("malformed cleanup eligibility reference")
+                        capture = ref.get("capture")
+                        if type(capture) is not int or capture not in (103, 104):
+                            raise _ReferenceError("incomplete cleanup eligibility capture")
+                        if result_order is None:
+                            raise _ReferenceError("cleanup result chronology unestablished")
+                        closed_order(capture, "eligibility", before=result_order)
+                        if (ref.get("binding") != evidence.get("binding")
+                                or ref.get("map") != evidence.get("map_digest")
+                                or ref.get("lifecycle") != evidence.get("lifecycle")
+                                or ref.get("fresh") is not True or ref.get("conflict") is not False
+                                or ref.get("sha256") != evidence["captures"][capture].get("payload_sha256")):
+                            raise _ReferenceError("stale/conflicting cleanup eligibility reference")
+                except (ValueError, TypeError, KeyError) as exc:
+                    predicate_errors.append(str(exc))
+            try:
+                if result_order is None:
+                    raise _ReferenceError("cleanup reference chronology unestablished")
+                admission = _q_reference(evidence, proof.get("target_admission"),
+                                         before=result_order, current=True)
+                authority = _q_reference(evidence, proof.get("chair_authority"),
+                                         before=result_order, current=True)
+                identity = _digest(proof.get("target_identity"), "cleanup target identity")
+                if (admission.get("kind") != "admit" or admission.get("binding") != evidence.get("binding")
+                        or admission.get("independently_verified") is not True
+                        or admission.get("closed") is not True
+                        or (target, identity) not in admission.get("targets", [])):
+                    raise _ReferenceError("target lacks exact F CHECKPOINT admission")
+                if (authority.get("kind") != "cleanup_authority" or authority.get("binding") != evidence.get("binding")
+                        or authority.get("target") != target or authority.get("identity") != identity
+                        or proof.get("observed_identity") != identity):
+                    raise _ReferenceError("target lacks exact specific Chair authority/fresh identity")
+            except (ValueError, TypeError, KeyError) as exc:
+                predicate_errors.append(str(exc))
+            result["errors"].extend(predicate_errors)
+            if proof.get("all_preconditions_passed") is not True:
+                result["errors"].append("cleanup preconditions did not all pass")
+            if claim == "not_dispatched":
+                if failed_observation_preserved and predicate_errors:
+                    result["dispatch"] = "not_dispatched"
+                else:
+                    result["errors"].append("not_dispatched lacks required failed-precondition evidence")
+                if "original_status" in proof:
+                    result["errors"].append("undispatched action cannot have an original action status")
+        except (ValueError, TypeError, KeyError, UnicodeError) as exc:
+            result["errors"].append(str(exc))
+        if number is not None and states[number + 1]["dispatch"] == "dispatched":
+            if result["dispatch"] != "dispatched":
+                result["errors"].append("absence capture dispatched without a dispatched cleanup action")
+            else:
+                try:
+                    if result_order is None:
+                        raise _ReferenceError("result must close before absence capture")
+                    absence_order = closed_order(number + 1, "absence")
+                    if absence_order <= result_order:
+                        raise _ReferenceError("result must close before absence capture")
+                except (ValueError, TypeError, KeyError) as exc:
+                    result["errors"].append(str(exc))
+        if result["dispatch"] == "dispatched" and result["errors"]:
+            result["errors"].append("violation: cleanup dispatched despite failed/unproven prerequisites")
+        # No result proves absence merely because the action was blocked.
+    return results
+
+
+def _q_accounting(evidence, retention_usage):
+    errors = []
+    ledger = evidence.get("accounting")
+    if not isinstance(ledger, Mapping):
+        return ["missing accounting/reservation ledger"]
+    limits = {
+        "generations": 16, "aborted_generations": 4, "items": 1024,
+        "physical_attempts": 3584, "phases": 24,
+    }
+    for key, maximum in limits.items():
+        value = ledger.get(key)
+        if type(value) is not int or not 0 <= value <= maximum:
+            errors.append("lifetime bound: " + key)
+    accounts = ledger.get("accounts")
+    if not isinstance(accounts, Mapping) or set(accounts) != set(spec.ORDINARY_ACCOUNT_BYTES):
+        errors.append("missing exact account ledger")
+    else:
+        for key, maximum in spec.ORDINARY_ACCOUNT_BYTES.items():
+            value = accounts[key]
+            if type(value) is not int or not 0 <= value <= maximum:
+                errors.append("account bound: " + key)
+            elif value < retention_usage.get(key, 0):
+                errors.append("retention undercharged: " + key)
+    generations = ledger.get("generation_usage")
+    if not isinstance(generations, list):
+        errors.append("missing per-generation ledger")
+    else:
+        ids, total_items, total_records = set(), 0, 0
+        for generation in generations:
+            number = generation.get("generation")
+            if type(number) is not int or not 0 <= number < 16 or number in ids:
+                errors.append("generation number/reuse")
+                continue
+            ids.add(number)
+            for key, maximum in (("items", 128), ("records", 512), ("bytes", 2097152)):
+                count = generation.get(key)
+                if type(count) is not int or not 0 <= count <= maximum:
+                    errors.append("per-generation bound: " + key)
+            if type(generation.get("items")) is int:
+                total_items += generation["items"]
+            if type(generation.get("records")) is int:
+                total_records += generation["records"]
+        for key, minimum in (("items", total_items), ("physical_attempts", total_records),
+                             ("generations", len(ids))):
+            if type(ledger.get(key)) is not int or ledger[key] < minimum:
+                errors.append("lifetime undercounts generations: " + key)
+    support = ledger.get("support")
+    if (not isinstance(support, list) or len(support) > 128
+            or any(not isinstance(raw, bytes) or len(raw) > 65536 for raw in support)
+            or sum(len(raw) for raw in support if isinstance(raw, bytes)) > 4194304):
+        errors.append("independent support bounds")
+    return errors
+
+
+def _q_retention(evidence, states, physical, declarations):
+    errors, covered, usage = [], set(), {key: 0 for key in spec.ORDINARY_ACCOUNT_BYTES}
+    generation_totals = {}
+    for item in evidence.get("retention", []):
+        try:
+            number = item["capture"]
+            if type(number) is not int or number not in physical or declarations is None:
+                raise _ReferenceError("unassigned retained capture")
+            state = states[number]
+            receipt, cell, payload = physical[number]
+            if state["physical_state"] == "EMPTY":
+                raise _ReferenceError("unused/proven-undispatched Q is not routine retention")
+            if item.get("cell") != cell or item.get("payload") != payload:
+                raise _ReferenceError("source-to-F bytes differ")
+            if receipt is None and item.get("unresolved_raw") is not True:
+                raise _ReferenceError("invalid/orphan cannot be promoted")
+            qualification = item.get("qualification")
+            if (state["closure"] == "closure_unproven" and qualification != "closure_unproven"
+                    or receipt is not None and receipt["completeness"] != "complete" and qualification != receipt["completeness"]):
+                raise _ReferenceError("retained closure/completeness qualification missing")
+            read = _q_reference(evidence, item.get("read_reference"), current=True)
+            if (read.get("kind") != "q_retention_read" or read.get("binding") != evidence.get("binding")
+                    or read.get("map") != evidence.get("map_digest")
+                    or read.get("lifecycle") != evidence.get("lifecycle")
+                    or read.get("capture") != number or read.get("object") != evidence.get("object")
+                    or read.get("identity_matches") is not True or read.get("custody_valid") is not True
+                    or read.get("writers_closed") is not True
+                    or read.get("cell_sha256") != hashlib.sha256(cell).hexdigest()
+                    or read.get("payload_sha256") != hashlib.sha256(payload).hexdigest()):
+                raise _ReferenceError("Q retention read identity/custody/closure mismatch")
+            account = declarations[number]["account"]
+            usage["review_correction"] += len(cell)
+            usage[account] += len(payload)
+            descriptors = (item["cell_descriptor"], item["payload_descriptor"])
+            roles = []
+            physical_bytes, records = 0, 0
+            for raw, data, encoding, schema in (
+                (descriptors[0], cell, "raw", None),
+                (descriptors[1], payload, declarations[number]["encoding"] if receipt else "raw",
+                 declarations[number]["schema"] if receipt else None),
+            ):
+                if not isinstance(raw, bytes) or len(raw) > 357:
+                    raise _ReferenceError("retention descriptor bound")
+                desc = cjson2.loads(raw)
+                _require_keys(desc, spec.ITEM_FIELDS, "retained ITEM")
+                _digest(desc["permit"], "retention permit")
+                _role(desc["role"], "retention role")
+                if (desc["encoding"] != encoding or desc["schema"] != schema
+                        or _uint(desc["length"], "retained length") != len(data)
+                        or desc["sha256"] != hashlib.sha256(data).hexdigest()):
+                    raise _ReferenceError("retained descriptor differs from source")
+                _uint(desc["category"], "retained category", maximum=11)
+                roles.append(desc["role"])
+                physical_bytes += (96 + len(raw) + 7) // 8 * 8
+                records += 1
+                for offset in range(0, len(data), 262048):
+                    chunk = data[offset:offset + 262048]
+                    physical_bytes += (96 + len(chunk) + 7) // 8 * 8
+                    records += 1
+            if roles != ["q_cell_" + str(number), "q_payload_" + str(number)] or roles != item.get("roles"):
+                raise _ReferenceError("receipt/payload roles not distinct/exact")
+            usage["descriptors_control_framing_padding"] += physical_bytes - len(cell) - len(payload)
+            generation = item.get("generation")
+            if type(generation) is not int or not 1 <= generation < 16:
+                raise _ReferenceError("invalid retention generation")
+            total = generation_totals.setdefault(generation, [0, 0, 0])
+            total[0] += 2
+            total[1] += records
+            total[2] += physical_bytes
+            checkpoint = _q_reference(evidence, item.get("checkpoint"), current=True)
+            if (checkpoint.get("kind") != "admit" or checkpoint.get("generation") != generation
+                    or checkpoint.get("binding") != evidence.get("binding")
+                    or checkpoint.get("independently_verified") is not True
+                    or checkpoint.get("closed") is not True):
+                raise _ReferenceError("missing independent F CHECKPOINT admission")
+            expected = [(roles[0], hashlib.sha256(cell).hexdigest()),
+                        (roles[1], hashlib.sha256(payload).hexdigest())]
+            if not all(pair in checkpoint.get("scope", []) for pair in expected):
+                raise _ReferenceError("admission does not cover exact bytes/roles")
+            covered.update((number, role, digest) for role, digest in expected)
+        except (ValueError, TypeError, KeyError) as exc:
+            errors.append(str(exc))
+    for generation, (items, records, size) in generation_totals.items():
+        ledger = next((row for row in evidence.get("accounting", {}).get("generation_usage", [])
+                       if row.get("generation") == generation), {})
+        if (ledger.get("items", -1) < items or ledger.get("records", -1) < records + 2
+                or ledger.get("bytes", -1) < size + 192):
+            errors.append("generation retention/framing undercharged")
+    errors.extend(_q_accounting(evidence, usage))
+    return errors, covered, usage
+
+
+def _q_release(evidence, covered, required, retention_valid, scope_complete):
+    """Eligibility only. No deletion authority, admission, outcome or F reopening."""
+    outstanding = set(required) - covered
+    result = {"normal_eligible": False, "exceptional_scope": [],
+              "preserve": sorted(outstanding, key=repr), "deletion_authorized": False,
+              "scope_established": scope_complete}
+    if not scope_complete:
+        return result
+    for release in evidence.get("chair_releases", []):
+        try:
+            ref = _q_reference(evidence, release, current=True)
+            if (ref.get("kind") != "chair_release" or ref.get("binding") != evidence.get("binding")
+                    or ref.get("object") != evidence.get("object")
+                    or not ref.get("reason_terminal_unavailable")
+                    or not ref.get("administrative_action")
+                    or ref.get("fresh_identity_custody") is not True):
+                raise _ReferenceError("incomplete exact exceptional Chair release")
+            scope = set(tuple(item) for item in ref.get("scope", []))
+            remaining = set(tuple(item) for item in ref.get("remaining", []))
+            if not scope or not scope <= set(required) or remaining != set(required) - scope:
+                raise _ReferenceError("exceptional release loses other required evidence")
+            if ref.get("evidence_ceasing") != ref.get("scope"):
+                raise _ReferenceError("missing exact evidence-loss disclosure")
+            action_scope = set(tuple(item) for item in ref.get("action_scope", []))
+            if (action_scope != scope or type(ref.get("destroys_object")) is not bool
+                    or ref["destroys_object"] and remaining):
+                raise _ReferenceError("release action exceeds exact evidence scope")
+            outstanding -= scope
+            result["exceptional_scope"].extend(sorted(scope, key=repr))
+        except (ValueError, TypeError, KeyError):
+            continue
+    terminal = evidence.get("terminal")
+    try:
+        ref = _q_reference(evidence, terminal, current=True)
+        valid_terminal = (ref.get("kind") in ("final_complete", "final_failed", "final_unresolved")
+                          and ref.get("binding") == evidence.get("binding")
+                          and ref.get("r2_terminal_established") is True)
+    except (ValueError, TypeError, KeyError):
+        valid_terminal = False
+    result["normal_eligible"] = retention_valid and not outstanding and valid_terminal
+    result["preserve"] = sorted(outstanding, key=repr)
+    return result
+
+
+def verify_q(image: bytes, evidence: Mapping[str, Any]) -> dict[str, Any]:
+    """Level-1, supplied-bytes-only Q evaluation (Amendment 1a §§3–13).
+
+    Evidence is a Python adapter of independently established external facts:
+    map_bytes/map_view/map_attestation, binding/lifecycle/object, a trusted
+    references registry, exact schemas, captures/history, optional build/J and
+    cleanup projections, retention/CHECKPOINT scope, accounting and releases.
+    Neither the adapter vocabulary nor its synthetic test schemas are adopted
+    operational wire formats. Missing facts never establish a positive result.
+    No paths, callbacks, clocks, processes, services or filesystem objects are
+    consulted. The F entry point and its closed result schema are independent.
+    """
+    input_errors = []
+    if not isinstance(evidence, Mapping):
+        evidence = {}
+        input_errors.append("missing evidence mapping")
+    evidence = dict(evidence)
+    original_scope_supplied = isinstance(evidence.get("originals"), list)
+    for key in ("references", "captures", "schemas", "accounting"):
+        if not isinstance(evidence.get(key, {}), Mapping):
+            input_errors.append("malformed evidence mapping: " + key)
+            evidence[key] = {}
+    for key in ("history", "retention", "cleanup", "originals", "chair_releases"):
+        if not isinstance(evidence.get(key, []), list):
+            input_errors.append("malformed evidence list: " + key)
+            evidence[key] = []
+    for key in ("references", "captures"):
+        source = evidence.get(key, {})
+        evidence[key] = {name: value if isinstance(value, Mapping) else {}
+                         for name, value in source.items()}
+        if any(not isinstance(value, Mapping) for value in source.values()):
+            input_errors.append("malformed evidence entries: " + key)
+    for key in ("retention", "cleanup", "originals"):
+        if any(not isinstance(value, Mapping) for value in evidence.get(key, [])):
+            input_errors.append("malformed evidence entries: " + key)
+        evidence[key] = [value if isinstance(value, Mapping) else {} for value in evidence.get(key, [])]
+    ledger = dict(evidence.get("accounting", {}))
+    if "generation_usage" in ledger:
+        if not isinstance(ledger["generation_usage"], list):
+            input_errors.append("malformed generation ledger")
+            ledger["generation_usage"] = []
+        elif any(not isinstance(row, Mapping) for row in ledger["generation_usage"]):
+            input_errors.append("malformed generation entries")
+            ledger["generation_usage"] = [row for row in ledger["generation_usage"] if isinstance(row, Mapping)]
+    evidence["accounting"] = ledger
+    errors = list(input_errors)
+    try:
+        map_digest, declarations = _q_map(evidence)
+    except (ValueError, TypeError, KeyError) as exc:
+        errors.append(str(exc))
+        map_digest, declarations = None, None
+    # Local projection only: caller evidence is never mutated.
+    supplied = dict(evidence, map_digest=map_digest)
+    states, physical = {}, {}
+    valid_image = isinstance(image, bytes) and len(image) == 3_145_728
+    frozen = evidence.get("prior_freeze") is not False
+    if valid_image:
+        for start, end in ((110592, 131072), (524288, 655360), (2883584, 3145728)):
+            if any(image[start:end]):
+                errors.append("nonzero unassigned/nonborrowable space")
+                frozen = True
+    else:
+        errors.append("required Q bytes unreadable or wrong size")
+        frozen = True
+    for number in range(108):
+        entry = declarations[number] if declarations else None
+        state, receipt, cell, payload = _q_physical(image, number, entry, supplied, map_digest)
+        observation = supplied.get("captures", {}).get(number, {})
+        if isinstance(observation, Mapping) and (
+                observation.get("cell_sha256") != hashlib.sha256(cell).hexdigest()
+                or observation.get("payload_sha256") != hashlib.sha256(payload if receipt else b"").hexdigest()
+                and state["physical_state"] not in ("INVALID", "ORPHAN")):
+            state["errors"].append("capture observation does not match supplied bytes")
+            state["observation_mismatch"] = True
+            if receipt is not None:
+                frozen = True
+        _q_capture_evidence(number, entry, state, receipt, supplied)
+        if state["errors"]:
+            state["usable"] = False
+        states[number] = state
+        physical[number] = receipt, cell, payload
+        if state["physical_state"] in ("INVALID", "ORPHAN") or state["closure"] == "closure_unproven":
+            frozen = True
+    history_errors, history_frozen = _q_history(supplied, states, declarations)
+    errors.extend(history_errors)
+    frozen |= history_frozen
+    errors.extend(_q_build_and_j(supplied, states))
+    retention_errors, covered, usage = _q_retention(supplied, states, physical, declarations)
+    errors.extend(retention_errors)
+    required = set()
+    for number, state in states.items():
+        if state["physical_state"] != "EMPTY":
+            _, cell, payload = physical[number]
+            required.add((number, "q_cell_" + str(number), hashlib.sha256(cell).hexdigest()))
+            required.add((number, "q_payload_" + str(number), hashlib.sha256(payload).hexdigest()))
+    # Other originals stay preserved unless their exact bytes/roles are supplied
+    # and admitted by the corresponding externally established CHECKPOINT.
+    release_scope_complete = original_scope_supplied and not input_errors
+    for original in evidence.get("originals", []):
+        try:
+            identity, role, data = original["identity"], original["role"], original["bytes"]
+            if not isinstance(identity, str) or not isinstance(data, bytes):
+                raise _ReferenceError("unobserved required original")
+            _role(role, "original role")
+            key = (identity, role, hashlib.sha256(data).hexdigest())
+            required.add(key)
+            cp = _q_reference(supplied, original.get("checkpoint"), current=True)
+            if (cp.get("kind") == "admit" and cp.get("independently_verified") is True
+                    and cp.get("closed") is True and cp.get("binding") == evidence.get("binding")
+                    and (role, key[2]) in cp.get("scope", [])):
+                covered.add(key)
+        except (ValueError, TypeError, KeyError) as exc:
+            errors.append(str(exc))
+            if not isinstance(original.get("bytes"), bytes) or not isinstance(original.get("identity"), str):
+                release_scope_complete = False
+    cleanup = _q_cleanup(supplied, states, physical, declarations, frozen)
+    blocked = bool(errors or frozen or any(result["errors"] for attempts in cleanup.values() for result in attempts) or any(
+        state["errors"] or state["dispatch"] == "uncertain"
+        or state["dispatch"] == "dispatched" and not state["usable"]
+        for state in states.values()
+    ))
+    stop = False
+    try:
+        ref = _q_reference(supplied, evidence.get("independent_stop"), current=True)
+        stop = (ref.get("kind") == "independent_stop" and ref.get("binding") == evidence.get("binding")
+                and ref.get("f_identity_custody_valid") is True
+                and ref.get("requires_new_q_capture") is False)
+    except (ValueError, TypeError, KeyError):
+        pass
+    return {
+        "level": 1, "captures": states, "errors": errors,
+        "q_frozen": frozen, "progression_blocked": blocked,
+        "independent_stop_available": stop, "j_reopen_allowed": False,
+        "cleanup": cleanup, "retention_valid": not retention_errors and not input_errors,
+        "retention_usage": usage,
+        "release": _q_release(
+            supplied, covered, required,
+            not retention_errors and not input_errors and declarations is not None and valid_image
+            and all(s["dispatch"] == "not_dispatched" or s["physical_state"] != "EMPTY"
+                    for s in states.values()),
+            release_scope_complete,
+        ),
+        "authorizes_action": False,
+    }

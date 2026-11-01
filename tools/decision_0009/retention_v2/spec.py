@@ -608,3 +608,111 @@ D_FINAL_DECLARATION = MappingProxyType(
         "terminal_item_allowed": False,
     }
 )
+
+
+# M0-1, Amendment 1a §§4–5, 12. Level-1 declarations only.
+Q_SIZE = 3_145_728
+Q_CELL_SIZE = 1_024
+Q_CELL_COUNT = 128
+Q_ASSIGNED_COUNT = 108
+Q_RECEIPT_JSON_MAX = 976
+Q_MAP_BYTES_MAX = 65_536
+Q_MAGIC = b"D9M0CAP\0"
+Q_FORMAT = "mcl-d0009-q1a"
+Q_CHECKSUM_DOMAIN = b"MCL-D0009-M0-CAPTURE-1A\0"
+Q_RECEIPT_FIELDS = (
+    "format", "map", "binding", "lifecycle", "authorization", "producer",
+    "writer", "encoding", "schema", "length", "sha256", "completeness",
+)
+Q_RECEIPT_LAYOUT = (
+    ("magic", 0, 8), ("capture", 8, 4), ("length", 12, 4),
+    ("checksum", 16, 32), ("receipt", 48, 976),
+)
+Q_PHYSICAL_STATES = (
+    "EMPTY", "RECEIPTED_COMPLETE", "RECEIPTED_PARTIAL",
+    "RECEIPTED_UNRESOLVED", "ORPHAN", "INVALID",
+)
+Q_COMPLETENESS = ("complete", "partial", "unresolved")
+Q_REGIONS = (
+    Region("receipts", 0, 131_072),
+    Region("a2", 131_072, 655_360),
+    Region("provisioning", 655_360, 2_228_224),
+    Region("process", 2_228_224, 2_752_512),
+    Region("cleanup", 2_752_512, 2_883_584),
+    Region("unused", 2_883_584, 3_145_728),
+)
+Q_ZERO_REGIONS = (
+    Region("unassigned_cells", 110_592, 131_072),
+    Region("released_a2", 524_288, 655_360),
+    Region("unused", 2_883_584, 3_145_728),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class QCapture:
+    number: int
+    offset: int
+    capacity: int
+
+
+# Consecutive fixed extents within each region; never a free-space allocator.
+Q_EXTENT_GROUPS = (
+    (0, 11, 131_072, 32_768),
+    (12, 19, 655_360, 12_288),
+    (20, 20, 753_664, 524_288),
+    (21, 21, 1_277_952, 131_072),
+    (22, 22, 1_409_024, 16_384),
+    (23, 23, 1_425_408, 131_072),
+    (24, 24, 1_556_480, 16_384),
+    (25, 25, 1_572_864, 524_288),
+    (26, 27, 2_097_152, 65_536),
+    (28, 43, 2_228_224, 28_672),
+    (44, 45, 2_686_976, 32_768),
+    (46, 102, 2_752_512, 1_024),
+    (103, 104, 2_810_880, 16_384),
+    (105, 105, 2_843_648, 8_192),
+    (106, 106, 2_851_840, 24_576),
+    (107, 107, 2_876_416, 7_168),
+)
+Q_CAPTURES = tuple(
+    QCapture(number, offset + (number - first) * capacity, capacity)
+    for first, last, offset, capacity in Q_EXTENT_GROUPS
+    for number in range(first, last + 1)
+)
+Q_UNDISPATCHED = (100, 101, 102)
+Q_CLEANUP_TARGETS = (
+    "temporary_account", "temporary_group", "I/probe", "I/probe.plist",
+    "O/result.bin", "O/stderr.bin", "J", "O", "I/private", "I",
+    "P/probe.c", "P/probe.plist", "P/package.json", "P/probe.o", "P/probe",
+    "P/build.stdout", "P/build.stderr", "P", "W/work",
+)
+Q_CAPTURE_ROLES = (
+    "a2_inputs", "toolchain", "sdk", "compile_intent", "compile_result",
+    "object_inspection", "link_intent", "link_result", "macho_dependencies",
+    "signature", "entitlements", "output_inventory", "privileged_transition",
+    "i_intent", "i_result", "private_intent", "private_result", "j_intent",
+    "j_result_import_verification", "bootstrap_complete", "pre_provision",
+    "pre_group", "group_readback", "pre_account", "account_readback",
+    "post_provision", "installed_objects", "output_creation", "bootstrap_result",
+    "kickstart_result", "ready_structures", "ready_print", "ready_list",
+    "observer_attachment", "observation_release", "pre_final_structures",
+    "pre_final_raw_state", "final_release", "terminal_event", "terminal_print",
+    "terminal_list", "final_process_custody", "sigterm", "sigkill",
+    "bootout", "service_absence",
+) + tuple(
+    target + ":" + part
+    for target in Q_CLEANUP_TARGETS
+    for part in ("intent", "composite_result", "absence")
+) + ("cleanup_eligibility_1", "cleanup_eligibility_2", "residue", "preservation", "final_privileged")
+Q_GENERATION_BOUNDS = MappingProxyType({
+    "a2": (29, 60, 751_432),
+    "provisioning": (32, 70, 1_609_536),
+    "process": (39, 81, 992_568),
+    "cleanup": (124, 250, 265_248),
+})
+Q_ACCOUNT_RESERVATIONS = MappingProxyType({
+    "a2_evidence": 720_896,
+    "gate_b_ordinary_evidence": 2_654_208,
+    "review_correction": 110_592,
+    "descriptors_control_framing_padding": 926_208,
+})
