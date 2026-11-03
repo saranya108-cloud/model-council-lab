@@ -49,6 +49,8 @@ Key comparisons and constraints:
 
 **Authority follows role, not confidence, verbosity, or model prestige.**
 
+**Binding operational cross-family review rule:** [Decision 0010 — Mandatory Cross-Family Review and Role Rotation](0010-mandatory-cross-family-review.md) requires an independent reviewer from a foundation-model family different from every substantive model author. This follows artifact authorship across role rotations, blocks unqualified independent approval, and preserves the intentionally self-review and homogeneous experimental controls below without treating them as operational cross-family approval.
+
 | Role | Owns | Key prohibitions |
 |---|---|---|
 | Solver | Initial solution, patch/artifact, supporting evidence | Cannot approve own work; cannot touch tests/config/evaluator |
