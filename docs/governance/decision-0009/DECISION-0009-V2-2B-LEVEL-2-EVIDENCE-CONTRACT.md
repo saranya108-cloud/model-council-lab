@@ -1,5 +1,22 @@
 # Decision 0009 — V2-2B Level-2 Evidence Contract
 
+## H18 Draft 4 architectural adoption — November 7, 2026
+
+Human Chair **Amy architecturally adopts “V2-2B Concrete H18 Evidence Acquisition, Transfer, and Provenance Architecture — Draft 4” (November 7, 2026)**. Fresh-family formal reviewer **Kimi K3.1 Pro / Moonshot AI** returned **ACCEPT WITH NON-BLOCKING NOTES** and found **no new blocking defect**.
+
+The adoption retains Kimi’s two non-blocking cautions:
+
+1. **Source-write cutoff clarity.** Implementation/conformance records must make explicit that the pre-seal source-write route is fenced before `L-S`/source-manifest final state is captured. A return arriving after that fence remains confined until the declared `X-L` route rather than making `L-S`/manifest stale.
+2. **Do not broaden the E3 claim implicitly.** If E3 is later treated as an independent pass/fail qualification proposition, its own independent expected-outcome source and native-result mapping must also be bound before the first governed effect.
+
+**Adoption is architecture-only.** It does not constitute backend selection or qualification, empirical H18 satisfaction, capacity sufficiency, implementation authority, execution authority, host/platform observation authority, P0 qualification, B5 progression, Approval B, F/Q/O creation or qualification, cleanup, custody transition, or successor authority. **CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT** remains the capacity disposition.
+
+**Unchanged gates:** B5 G1 **HOLD**; both P0 candidates **NOT QUALIFIED**; Approval B **unauthorized**; V2-2B implementation and execution **unauthorized**.
+
+Current [Decision 0010](../../decisions/0010-mandatory-cross-family-review.md), amended November 7, 2026, applies **revision-scoped reviewer independence**: no qualifying self-review of an authored or materially co-authored current revision; historical family contribution alone is not permanent disqualification. Kimi’s fresh-family formal review is recorded for this Draft 4 adoption gate, not as a permanent-family exclusion rule.
+
+**Recording provenance and scope:** [Sol 5.6 Analyze Progress Plan](chatgpt-conversation://6aef8068-27b0-83e8-92f8-9e914d10baf0) and Amy’s explicit November 7 repository-recording instruction supply the adoption and review disposition recorded here. This entry records that decision; it does not transcribe Draft 4 or claim a new independent review. The November 6 adoption record, verbatim Draft 2, and review appendix below remain historical records unchanged. Their statements that adoption of the general contract alone leaves the concrete H18 architecture separately unresolved are now read alongside this subsequent architecture-only adoption; they do not establish empirical H18 satisfaction or additional authority.
+
 ## Adoption and recording metadata
 
 - **Human Chair:** Amy.
