@@ -1,5 +1,20 @@
 # Decision 0009 — V2-2B Level-2 Evidence Contract
 
+## H18 Proof-Obligation Register Draft 4 adoption — November 8, 2026
+
+Human Chair **Amy adopts “Decision 0009 — Backend-Neutral H18 Conformance and Continuity Proof-Obligation Register — Draft 4” on 2026-11-08** as the governing backend-neutral H18 conformance and continuity proof-obligation register for the current Decision 0009 architecture. This is architectural/governance adoption of the register only.
+
+**Completed review lineage:** OpenAI-family authoring and correction; Anthropic/Claude correction-verification; **Gemini 4 Argon / Google-Gemini family fresh-family qualifying independent review — ACCEPT WITH NON-BLOCKING NOTES; no blocking findings**. This records the completed review under the Decision 0010 rules applicable at that review gate; it does not change reviewer rules, retroactively reclassify reviews, or claim a new independent review of this recording.
+
+1. **NB-R1 — retained downstream conformance caution.** Future documentary backend comparison and concrete conformance review should explicitly evaluate all five rows of the adopted H18 architecture Draft 4 §8.6 evaluated-producer independence table. A co-located accountant is not an independent witness merely because it has a different logical role or name. This caution does not reopen the adopted register or require another correction revision.
+2. **NB-R2 — superseded historical pre-verification footer.** Register Appendix E's original “NOT YET VERIFIED / NOT ADOPTED” status and recommendation for Claude/Anthropic correction-verification describe the candidate when authored. The completed review lineage and this Human Chair adoption supersede that historical status. No candidate-body revision is required.
+
+**Unchanged capacity:** **64 governed-support objects / 2,531,328 aggregate bytes**; **CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT**. Architectural arithmetic fit does not establish actual backend route sufficiency. No capacity is allocated or replenished by this adoption or recording.
+
+**Unchanged authority and gates:** H18 architecture and the proof-obligation register are adopted; backend conformance and empirical H18 satisfaction remain **NOT ESTABLISHED**. B5 G1 remains **HOLD**; both P0 candidates remain **NOT QUALIFIED**; Approval B remains **unauthorized**; V2-2B implementation and execution remain **unauthorized**. Adoption does not establish or authorize backend selection or qualification, actual capacity sufficiency, implementation, execution, host/platform observation, P0 inspection or qualification, B5 progression, Approval B, F/Q/O creation or qualification, cleanup, custody transition, or successor operational activity.
+
+**Recording provenance and scope:** [Sol 5.6 Analyze And Plan Session](chatgpt-conversation://6af0b2a4-f430-83e8-98f6-02aa30eb0f0c), Human Chair adoption turn `42b1e18d-32c0-40a2-bbc0-9ff5446902a0`, the supplied Argon review (`Pasted text(20261108-192107).txt`, §§1–5 and 12), and Amy's explicit November 8 repository-recording instruction supply this adoption and review record. The read-only recording checkpoint is `m1-live-adapter-dev` at `9e9ad946bab6b46b857635c7e941ebf3146900d1`. This entry records the decision without transcribing or revising the register candidate body. The November 7 adoption, its retained cautions, and all historical contract/candidate/review text below remain unchanged and are read alongside this subsequent register-only adoption. This bounded recording grants no Git mutation or successor authority; stop for Human Chair review.
+
 ## H18 Draft 4 architectural adoption — November 7, 2026
 
 Human Chair **Amy architecturally adopts “V2-2B Concrete H18 Evidence Acquisition, Transfer, and Provenance Architecture — Draft 4” (November 7, 2026)**. Fresh-family formal reviewer **Kimi K3.1 Pro / Moonshot AI** returned **ACCEPT WITH NON-BLOCKING NOTES** and found **no new blocking defect**.
