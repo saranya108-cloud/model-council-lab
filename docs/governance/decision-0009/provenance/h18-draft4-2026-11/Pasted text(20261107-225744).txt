@@ -1,0 +1,239 @@
+FORMAL REVIEWER ELIGIBLE
+ACCEPT WITH NON-BLOCKING NOTES
+Draft 4 is architecturally coherent and complete enough for Human Chair architectural adoption. I found no new blocking defect. Its remaining dependencies are backend-specific implementation, assurance, authorization, and evidence obligations—not concealed architectural decisions.
+1. Eligibility and independence
+I reviewed as Kimi K3.1 Pro, model ID moonshotai/kimi-k3.1-pro, supplied through OpenRouter, underlying Moonshot AI Kimi family.
+At checkpoint a247b2e1c61abc57ab5ae662d13bddf4efa40910, amended Decision 0010 applies revision-scoped independence. The current Draft 4 author/correction cycle is attributed to OpenAI/Astra and Anthropic/Opus. Moonshot/Kimi’s earlier upstream concurrency work and prior review of the general Level-2 contract do not constitute material authorship or co-authorship of Draft 4 or its O1–O3 corrections.
+I therefore am not judging my own current revision or the specific corrections being qualified. I did not use Gemini’s B1–B6 or Opus’s O1–O3 dispositions as evidence of correctness.
+2. Sources inspected
+Read-only inspection included:
+- Amended Decision 0010 at the synchronized checkpoint.
+- Adopted H1–H20 and retained N1–N6.
+- Adopted V2-2B Level-2 Evidence Contract and its Human Chair concurrency disposition.
+- Experiment-scoped support-object identity policy.
+- Lifecycle Governance Bindings, including Part C §§8 and 10.
+- November 3 progress/handoff and preserved gate statuses.
+- Failure-Time Finalization Policy and Effect Acceptance Boundary Clarification where relevant to stopping and late effects.
+- Preserved implementation-plan and Retention V2/M0 adoption records.
+The implementation plan and retention adoption record are identified by the committed governance record as untracked preserved local files. I inspected those local files read-only but do not represent them as committed contents of checkpoint a247b2e…. The exact r2 and Amendment 1a texts remain controlling over those derived aids.
+Direct archive retrieval succeeded:
+Source	Verification
+r2	Message msg_0e71e34095ccc4de016ade20d4c7488190a647e7411cef9cf4; 1,190 lines; SHA-256 b9a1ce67aa5c8050a95de324969a25046f13d2f6e4bf56f92832dea96fce6b05 matched
+Final Amendment 1a	Message msg_0e71e34095ccc4de016ade53b724d88190a94e4eb4d86951d1; 960 lines; SHA-256 9869dd6ec374677a8150de725e05e705bc4ac8798ec5b7b20ed705e0a6f49144 matched
+I inspected the clauses relevant to capacity, terminal finalization, unresolved endpoints, writer and dispatch semantics, no-retry behavior, custody/continuity, preservation, release, and stopping. This was documentary archive extraction, not a host/platform observation.
+3. Architectural review
+3.1 Claim profile, oracle, and event schedule
+The two-case profile is adequately bounded. It does not claim general exclusive-creation qualification and expressly excludes link variants, races, allocation, comprehensive zero coverage, crash survival, resource limits, operational custody, and universal side-effect freedom. That is a permissible narrowing under the adopted Level-2 contract, not an unacknowledged omission of negative-case coverage.
+The E5 refusal oracle must be independently sourced, revision-bound, mapped to native results, and fixed before the first governed effect. Observed outcomes cannot retrospectively select or alter it.
+The seven-event schedule is closed:
+- E1–E5 are the complete ordinary acquisition sequence.
+- E6/E7 are fixed, predeclared terminal capability-closure actions, not unspecified cleanup.
+- E5 always ends ordinary dispatch after its single attempt, including on timeout or interruption.
+- No slot can be repeated, replaced, or supplemented by an eighth subject event.
+- Failure or uncertainty in E1–E4 prevents dependent dispatch.
+- X-L is an evidence exception record, not another subject operation.
+Dispatch eligibility is properly separated from predicates that can only be evaluated over the later dispatch interval. In particular, Draft 4 does not pretend that a pre-dispatch check alone proves E2 absence or E3→E5 continuity through the subsequent dispatch boundary.
+3.2 In-flight execution and no-overlap guarantees
+Draft 4’s separation of execution state from reporting disposition is sound.
+Both IN_FLIGHT and EXECUTOR_LOST — EFFECT_INTERVAL_UNRESOLVED prevent every later subject operation, including E6/E7, whenever the earlier operation or its delegated effects may continue. Definite and merely possible dispatch both invoke this prohibition.
+The architecture correctly provides that:
+- Timeout, abandonment, cancellation intent, reporting interruption, and a stop decision are not completion.
+- Component loss is not effect cessation.
+- A hung component is not automatically a lost component.
+- An asynchronous submission acknowledgement is not a terminal operation return.
+- No cancellation operation or completion probe is silently introduced.
+- Parent or target closure cannot be inferred from missing output.
+- A frozen “unavailable” report does not assert physical quiescence.
+A synchronous backend can conform without artificial asynchronous machinery, provided its normal terminal return has the required effect-interval completion semantics. If a synchronous call hangs or its completion meaning cannot be established, later dispatch remains blocked and reporting may be incomplete.
+I found no path that permits a later subject event or premature parent/subject closure while an earlier operation may still act.
+3.3 Dispatch evidence and complete mediation
+The five dispatch/evidence classifications do not replace execution state. Positive non-dispatch proof must cover the interval beginning when the slot first became reachable or eligible; missing prepared, issued, completion, or journal records is insufficient.
+The mediation scope includes the relevant bypass surfaces:
+- Direct, inherited, and aliased references.
+- Ambient namespace access.
+- Helpers, callbacks, controllers, subprocesses, and privileged intermediaries.
+- Framework mechanisms.
+- Independent indexing, backup, synchronization, cleanup, and comparable system agents.
+G’s own journal cannot establish the absence of bypass. The required independent execution-path, configuration, restriction, and interval evidence prevents the design from becoming self-certifying. System-agent exclusions remain subject to separate observation authority and do not reopen B5.
+3.4 Late E1/E3/E5 returns and residual capabilities
+The general confinement rule safely handles late returns from E1, E3, and E5.
+A late return cannot:
+- Establish a new P or L3.
+- Become an E6/E7 target.
+- Reopen ordinary dispatch or a frozen slot.
+- Create an eighth subject event.
+- Authorize inspection, retry, cancellation, cleanup, closure, or continuation.
+- Rewrite an earlier frozen reporting disposition.
+- Manufacture a new source record outside the declared routes.
+- Establish an otherwise unavailable positive qualification.
+“Confined, not proven closed” is the correct treatment. It distinguishes technical non-invocability from unproven capability destruction or physical cessation. No destructor, process exit, passive expiration, or teardown is treated as an implicit cleanup mechanism.
+E6/E7 must neither invoke nor invalidate confined capabilities through aliasing, ownership, lifetime, or parent dependencies. If that independence is unavailable, the affected terminal action becomes unavailable rather than becoming a substitute cleanup operation.
+3.5 X-L boundedness
+X-L is architecturally bounded under the stated conformance obligations:
+- It occupies one of the four already reserved attempt-level exception slots.
+- It does not replace or mutate a sealed source record.
+- It preserves the original event association, prior disposition, arrival interval, result, confinement state, and limitations.
+- It is accounted through M-R/J-R before final reconciliation.
+- G has only the declared bounded route; receiver/store admission remains constrained.
+- It requires no unassigned governed object or additional transport intermediary.
+- It closes before the final creation/accounting frontier.
+Serial dispatch and freezing on unresolved execution leave at most one original subject operation unresolved at the stop. Thus the normal X-L case is bounded to one original late return, not an open-ended callback log. Duplicate or multiplied arrivals are a completeness failure, not permission to allocate more records or select a favorable version.
+A backend needing an additional spool, callback log, transport intermediate, or receiver artifact fails X-L route fit. It cannot silently enlarge the architecture.
+Returns outside the authorized capture window remain unavailable to the experiment. Their prior unresolved execution state remains visible, and their capabilities remain confined. Post-window arrival cannot repair closure or create an undeclared finalization artifact.
+3.6 Source sealing and finite finalization
+The source-sealing order is correct:
+1. Ordinary dispatch ends.
+2. E6/E7 receive attempted, withheld, or unavailable treatment under their predicates.
+3. All E1–E7 reporting dispositions freeze while execution state remains distinct.
+4. Source records settle as complete, partial, missing, or unavailable.
+5. L-S and the source manifest record the resulting state.
+6. Source writing closes and the designated source set seals.
+An unresolved operation can therefore be reported honestly without waiting indefinitely or claiming physical quiescence. Later observations use the declared pre-seal source route or post-seal X-L route according to the cutoff; they do not mutate the sealed ten-source transfer set.
+Finalization is finite:
+- X-L closes within its fixed window.
+- R-I/R-C reconcile production and charges.
+- E, C, T0, and T1 are established and charged before the creation frontier.
+- The frontier then closes to every new governed artifact.
+- E/T0, C, and T1 are produced or recorded once in their pre-established objects.
+- Processing ends after T1 or its unavailability.
+The pre-establishment rule resolves the apparent frontier/production ordering issue: later writes do not create new governed artifacts after the frontier.
+There is no T2, recursive self-authentication, post-closure repair, or unbounded wait. C does not certify its own future write or T1; T1 does not certify its own persistence or delivery. Missing T1 means incomplete or unproven closure.
+3.7 Enforcement model and protection domains
+The effective-capability definition is objectively assessable. It covers callable interfaces, ambient rights, inherited references, mutable configuration, dynamic code, helpers, credentials, debug facilities, and escape paths. A policy statement alone cannot remove a technically reachable operation.
+The closed enforcing set—G, store-enforcement mechanisms, M-S, M-T, and M-R—is coherent because:
+- Exact implementation/configuration and deployment identities must be fixed.
+- Permitted entry points, operations, targets, parameters, phases, and bounds must be enumerated.
+- Initialization, return, timeout, callback, failure, and teardown paths are included.
+- Raw primitives, code loading, debugging, credentials, helpers, and mutable dependencies require escape analysis.
+- Reviewed behavioral enforcement is unacceptable where callers can bypass it or obtain raw capabilities.
+G may hold a broader primitive only if its assured implementation exposes and executes the bounded event paths and no other component can acquire or command the unrestricted primitive.
+M-* may enforce their own bounded transitions without their ledgers becoming independent completeness evidence. Expanding the enforcing set is correctly classified as an architectural revision.
+The protection-domain union rule prevents fictitious documentation-only separation. Shared process, address space, credential, runtime, memory, mutable configuration, or raw-access helpers must be evaluated for shared effective capability. Reliance on internal isolation requires implementation, enforcement, deployment, and bypass evidence.
+3.8 Evaluated-producer independence
+Draft 4 identifies independent bases for all five material evidence questions:
+- G/source observations.
+- Source-production completeness.
+- Transfer completeness.
+- Receiver-production completeness.
+- Accounting and finalization.
+No completeness claim is permitted to rest solely on the evaluated producer’s account. External store constraints, fixed schedules, route analysis, original emission/receipt correspondence, protected bindings, independent configuration evidence, and cross-scope reconciliation supply the required separate bases.
+Co-located accountants are not independent witnesses merely because they have different component names. Shared-domain cases remain subject to the capability-union analysis.
+3.9 Continuity and evidence handoff
+E2→E3: The same parent binding and fixed leaf designation must be covered through E3’s dispatch boundary, including intervening creation, replacement, rebinding, and namespace changes. An unproven interval prevents reliance on the absence premise without erasing E3’s original result.
+E3→E5: E4 and subsequent evaluation cover origin, parent binding, same-object designation, regular-file state, substitution and identifier-reuse exclusion, continuing reference/leaf relationships, namespace continuity, and intervening effects through E5 dispatch. This is backend-neutral without reducing identity to a universal POSIX attribute or digest.
+Routes A and B: Both are sufficient as architectural route classes:
+- Route A requires uninterrupted origin/admission and store-held binding.
+- Route B requires protected provenance covering store/container, attempt/slot, origin/version, writer history, seal state, extent, integrity, and substitution exclusions.
+- Route B anchors cannot be modified by the artifact writer, reader, sender, receiver, or another party whose account they validate, including through shared domains.
+- Digest equality and unverified pathname reopening satisfy neither route.
+- Concrete reopening/live-transfer methods remain separately reviewed and adopted as required.
+3.10 Production scopes, transfer, retention, and anti-selection
+Source admission occurs before source reliance. The eight-input allowance is global, not eight per accounting domain. Cross-domain counting once requires sameness/continuity proof; distinct copies receive distinct charges.
+Each source artifact has at most one forward transfer. Declaration, start, emission, receipt, validation, acceptance, and retention remain distinct. Partial transfer is a failure state and grants no retransmission, fallback store, replacement representation, or recapture.
+The architecture fails closed against the requested selection and recovery attacks:
+- Favorable selection, stale/replayed evidence, wrong-attempt evidence, regenerated records, reordered evidence, and conflicts remain visible and cannot be replaced by a favorable candidate.
+- Missing output is not proof of non-dispatch or non-creation.
+- Unexpected E5 success is adverse where the occupied-target premise is established; otherwise its premise uncertainty remains explicit.
+- Retransmission, resumed attempts, hidden cleanup, first-success stopping, post-hoc recovery, and later-review reconstruction are unauthorized.
+- Late returns cannot rewrite earlier dispositions or repair missing positive evidence.
+- Retention must be fixed before execution and survives through required review and later proposition-level evaluation until separate release authority.
+BP1–BP3 accurately consolidate these obligations without converting their backend evidence prerequisites into already-satisfied facts.
+4. H5 classification
+The H5 treatment is complete:
+- Disposable parent: contextual object.
+- Primary E3 leaf: test subject.
+- Potential E5-produced object: test subject by origin.
+- Reference/return compartments: contextual control state unless separately materialized evidence requires support accounting.
+- Observation records remain governed support.
+Only the E5 product’s same/distinct/unresolved relationship may remain unresolved. Its predefined subject classification is not pending, and conservative separate treatment does not assert proven distinctness. No provisional governed-support classification is triggered merely by that identity uncertainty.
+5. Independent inventory recomputation
+Object count
+8 + 7 + 2 + 1 + 20 + 10 + 2 + 4 + 4 + 2 + 2 + 2
+= 64 objects
+Aggregate bytes
+  524,288   admitted inputs
+   28,672   seven source event records
+   16,384   acquisition journal and L-S
+    8,192   source manifest
+ 1,310,720   twenty transport intermediates
+   53,248   ten receiver copies
+   16,384   J-T and J-R
+  262,144   four platform/framework outputs
+  262,144   four exception records, including X-L
+   16,384   R-I/R-C
+   16,384   E/C
++  16,384   T0/T1
+----------
+ 2,531,328 bytes
+H10 headroom
+4,194,304 − 2,531,328 = 1,662,976 bytes
+The arithmetic and stated headroom are correct. The receiver-copy total also correctly equals the ten-source set:
+7 × 4,096 + 2 × 8,192 + 1 × 8,192 = 53,248 bytes
+Every listed per-object reservation remains within 65,536 bytes. The candidate deliberately has no unassigned object slots despite H10’s larger 128-object ceiling.
+CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT remains the correct status. Numerical consistency does not establish encoded fit, complete route coverage, actual platform-output bounds, X-L route fit, or finalization-frontier conformance.
+6. External-dependency audit
+Material item	Classification and reason
+Exact backend mapping	LEGITIMATE EXTERNAL DEPENDENCY — architecture defines required semantics; a concrete backend must demonstrate them
+Platform premises/system-agent exclusions	LEGITIMATE EXTERNAL DEPENDENCY — requires separately authorized observations and evidence; B5 remains unchanged
+Concrete continuity methods	LEGITIMATE EXTERNAL DEPENDENCY — abstract predicates are fixed, while applicable methods require separate review/adoption
+Exact codec, digest, and encoding	LEGITIMATE EXTERNAL DEPENDENCY — bounded implementation choice subject to fit and provenance requirements
+Oracle source and native-result mapping	LEGITIMATE EXTERNAL DEPENDENCY — binding time and independence are architecturally fixed
+Production-route expansion	LEGITIMATE EXTERNAL DEPENDENCY — backend must enumerate routes against the closed inventory and stop on excess production
+Assurance-input fit	LEGITIMATE EXTERNAL DEPENDENCY — actual artifacts and sizes cannot be proven by the generic profile
+X-L route fit	LEGITIMATE EXTERNAL DEPENDENCY — no additional artifact or intermediary is permitted
+Actual capacity	LEGITIMATE EXTERNAL DEPENDENCY — explicitly unresolved by the candidate-envelope verdict
+Exact bounded windows	LEGITIMATE EXTERNAL DEPENDENCY — values must be finite, pre-fixed, enforced, and outcome-independent
+Retention interval and conditions	LEGITIMATE EXTERNAL DEPENDENCY — exact duration and release conditions require pre-execution authority
+P0	LEGITIMATE EXTERNAL DEPENDENCY — no candidate inspection or qualification is inferred
+Approval B	LEGITIMATE EXTERNAL DEPENDENCY — protected inspection remains unauthorized
+Full interface-tailored V2-2B scope	LEGITIMATE EXTERNAL DEPENDENCY — the narrow profile does not claim to settle it
+I found no item on this list that conceals an unresolved architectural semantic decision.
+7. Fresh-defect search and non-blocking notes
+New K-series blocking findings: none.
+Two cautions should accompany adoption without requiring another architectural revision:
+1. Source-write cutoff clarity. The implementation record should make explicit that §5.3’s pre-seal source-write route is fenced before L-S/source-manifest final state is captured. A return arriving after that fence must remain confined until the declared X-L route, rather than making L-S or the manifest stale. Sections 6, 8.2, and BP2 already require a coherent sealed set and enforced cutoffs; this is a conformance clarification, not a new mechanism.
+2. Do not broaden the E3 claim implicitly. Draft 4 expressly supplies the semantic collision oracle for E5. E3 is the required successful creation/setup observation for this bounded profile. If a later evaluation also treats E3 as an independent pass/fail qualification proposition, the adopted Level-2 contract requires that proposition’s independent expected-outcome source and native-result mapping to be bound before the first effect as well.
+8. Explicit final answers
+ 1. Is the seven-event state machine complete and bounded?  
+Yes. E1–E7 cover the entire subject schedule; no eighth subject event or substitute slot exists.
+ 2. Are in-flight semantics sufficient?  
+Yes. Possible continuing effects block all later subject operations and E6/E7; reporting closure is not execution completion.
+ 3. Are late E1/E3/E5 returns safely contained?  
+Yes, through non-invocable confinement, frozen dispositions, bounded recording routes, and terminal-action independence.
+ 4. Is X-L architecturally bounded?  
+Yes. It uses one existing exception slot, has a finite window, requires no additional intermediary, and fails fit on multiplication or route expansion.
+ 5. Is source sealing correctly ordered?  
+Yes, subject to the non-blocking cutoff-clarity note above.
+ 6. Does finalization genuinely terminate?  
+Yes. The pre-established final objects and E/T0/C/T1 sequence terminate without T2 or recursive authentication, while physical effects may remain explicitly unresolved.
+ 7. Is the enforcement model objectively assessable?  
+Yes. It requires concrete implementation, configuration, deployment, entry-point, raw-capability, and escape-surface evidence.
+ 8. Is the enforcing set coherent?  
+Yes. G/store/M-* have bounded roles, and their own records are not independent completeness proof.
+ 9. Is the protection-domain union rule sufficient?  
+Yes. It prevents documentation-only separation and requires evidence for claimed internal isolation.
+10. Are evaluated producers and independent bases adequately identified?  
+Yes. All five producer/evidence roles have independent-basis requirements, including co-location treatment.
+11. Are E2→E3 and E3→E5 continuity predicates sufficient?  
+Yes architecturally; concrete methods and interval evidence remain downstream obligations.
+12. Are Routes A and B sufficient?  
+Yes. Neither permits digest-only identity, sender/receiver-modifiable anchors, or unverified pathname reopening.
+13. Is the H5 classification complete?  
+Yes. In particular, the potential E5 product is a test subject by origin even when sameness remains unresolved.
+14. Is the 64-object / 2,531,328-byte envelope internally coherent?  
+Yes. The object count, aggregate, receiver-copy total, and 1,662,976-byte headroom all recompute correctly.
+15. Is “CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT” the correct capacity status?  
+Yes.
+16. Does Draft 4 hide any retry, cleanup, recovery, or successor authority?  
+No. E6/E7 are declared capability closures, not hidden cleanup; all recovery, retry, retransmission, and successor paths remain closed.
+17. Are all remaining downstream dependencies genuinely external?  
+Yes, as classified above. Each has a fail-closed conformance boundary rather than an implicit license to alter architecture.
+18. Did I identify any new blocking defect?  
+No.
+19. Is Draft 4 ready for Human Chair architectural adoption?  
+Yes, with the two non-blocking cautions stated above. Adoption must remain architecture-only and must not be represented as backend qualification, capacity sufficiency, H18 empirical satisfaction, or implementation/execution authority.
+Authority boundary
+This review changed no repository files or Git state. I performed no backend selection, implementation, experiment, test execution, host/platform observation, P0 inspection, B5 progression, Approval B activity, F/Q/O activity, cleanup, custody transition, or successor action. Existing working-tree modifications and untracked files were left untouched.
+Draft 4 is returned for Human Chair consideration only.
+Build · Kimi K3.1 Pro · 6m 12s · 91.9 tok/s
+Build·Kimi K3.1 ProOpenRouter

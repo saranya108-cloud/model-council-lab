@@ -1,0 +1,268 @@
+Analyzed DECISION-0009-RETENTION-V2-M0-IMPLEMENTATION-PLAN.md:L220-300
+
+# Decision 0009 — Fresh-Family Qualifying Independent Review
+**Candidate:** *Decision 0009 — Backend-Neutral H18 Conformance and Continuity Proof-Obligation Register — Draft 4*  
+**Date:** November 8, 2026  
+
+---
+
+## 1. Reviewer identity and eligibility
+
+**FORMAL REVIEWER ELIGIBLE**
+
+* **Observed / Runtime Model Identity:** Gemini 4 Argon.
+* **Underlying Foundation-Model Family:** Google / Gemini.
+* **Review Purpose and Gate:** Qualifying independent review of *Decision 0009 — Backend-Neutral H18 Conformance and Continuity Proof-Obligation Register — Draft 4* under [Decision 0010](file:///Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md) (amended November 7, 2026).
+* **Current-Revision Authorship and Contribution Lineage:**
+  * The Proof-Obligation Register (Drafts 1–4) was authored within the OpenAI-family workstream.
+  * The Anthropic/Claude family provided the prior blocking/cleanup findings (`PR1–PR5`, `PN1–PN13`, `CR1–CR6`, `N1–N6`, `CV1`, and the four Draft 3 cleanup items) that materially shaped Draft 4, and subsequently performed narrow correction-verification of Draft 4.
+  * Neither I nor the Google/Gemini family authored or materially co-authored the Proof-Obligation Register or the specific Draft 4 revisions under review.
+  * Under [Decision 0010](file:///Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md) Rules 1–5, **Author ≠ Reviewer for the current revision**, historical participation earlier in the Decision 0009 lineage (such as B1–B6 on earlier H18 drafts) does not create permanent family exclusion, and a fresh third-family reviewer outside the OpenAI–Anthropic author/correction-verification cycle satisfies the requirement for genuine independent challenge at a formal adoption/qualification gate.
+
+---
+
+## 2. Source access and limitations
+
+I directly inspected the following complete primary sources:
+
+1. **Candidate under review (Document 1):** *Decision 0009 — Backend-Neutral H18 Conformance and Continuity Proof-Obligation Register — Draft 4* (548 lines, supplied in full in the review prompt).
+2. **Controlling H18 Architecture (Document 2):** *V2-2B Concrete H18 Evidence Acquisition, Transfer, and Provenance Architecture — Draft 4* (November 7, 2026, §§1–17, Correction Ledger, and Adoption Readiness, supplied in full in the review prompt).
+3. **Adopted Level-2 Evidence Contract and H18 Draft 4 Adoption Record (Document 3):** [DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md) (lines 1–643, read in full from the repository, including the November 7, 2026 H18 Draft 4 architectural adoption record and Kimi’s two retained cautions at lines 3–18, and the verbatim adopted Contract §§1–18 at lines 94–535).
+4. **Adopted H1–H20 Identity and Accounting Policy (Document 4):** [DECISION-0009-V2-2B-EXPERIMENT-SCOPED-SUPPORT-OBJECT-IDENTITY-POLICY.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-V2-2B-EXPERIMENT-SCOPED-SUPPORT-OBJECT-IDENTITY-POLICY.md) (lines 1–309, read in full from the repository, including H1–H20 and retained notes N1–N6).
+5. **Amended Reviewer-Independence Governance (Document 5):** [0010-mandatory-cross-family-review.md](file:///Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md) (lines 1–48, read in full from the repository).
+6. **Corroborating Governance/Sequencing Record:** [DECISION-0009-RETENTION-V2-M0-IMPLEMENTATION-PLAN.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-RETENTION-V2-M0-IMPLEMENTATION-PLAN.md) (§D1 and §E, lines 220–300, read from the repository to verify the cited tranche/gate sequence).
+
+**Access limitations:**
+* The external archive `/Users/aclab/.codex/sessions/2026/10/25/rollout-2026-10-25T06-03-33-01a17328-c2be-7930-aa54-f5f668900d59.jsonl.zst` containing raw `r2` and `Final Amendment 1a` lies outside the workspace sandbox boundary and was not directly accessed. For `r2` and `Amendment 1a` clauses, I relied on the verified requirement map and verbatim excerpts preserved in [DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md#L424-L457) (§14), together with the five complete primary documents above.
+* All inspections were strictly read-only. No files were created or modified.
+
+---
+
+## 3. Overall disposition
+
+**ACCEPT WITH NON-BLOCKING NOTES**
+
+Proof-Obligation Register Draft 4 is a faithful, complete, internally coherent, and assessable translation of the adopted H18 Draft 4 architecture, the adopted Level-2 Evidence Contract (including both retained H18 adoption cautions), and the adopted H1–H20 policy into a backend-neutral conformance instrument. No blocking defects were identified. Two material non-blocking notes are recorded in §5 below.
+
+---
+
+## 4. Blocking findings, if any
+
+**NONE.**
+
+---
+
+## 5. Material non-blocking notes
+
+### Note NB-R1 — Explicit cross-reference of evaluated-producer independence table (H18 Draft 4 §8.6) across PO-05, PO-15, and PO-16
+* **Location:** Register §6 (`H18-PO-05`, `H18-PO-15`, `H18-PO-16`).
+* **Observation:** Adopted H18 Draft 4 §8.6 defines a five-row table mapping each evidence question (*Source observations*, *Source production completeness*, *Transfer completeness*, *Receiver production/completeness*, *Accounting/finalization*) to the specific evaluated producer roles and the required independent basis, and explicitly notes that a co-located accountant is not an independent witness merely because it has a different name. While Register Draft 4 distributes these requirements across `PO-02` (G's journal alone cannot prove absence of bypass), `PO-05` (an accountant's membership in the enforcing set supplies no independent proof of completeness), `PO-15` (reject if relying solely on the evaluated producer or accountant for completeness), and `PO-16` (completeness basis independent of the evaluated producer's unsupported account), future documentary comparison at CP1/CP2 should explicitly verify all five rows of H18 Draft 4 §8.6, including the rule that co-located accountants cannot serve as independent witnesses for their co-located producer without external boundary/assurance evidence.
+
+### Note NB-R2 — Stale pre-verification footer in Register Appendix E
+* **Location:** Register Appendix E (`Status` and `Recommended next action`, lines 541–548).
+* **Observation:** Appendix E still carries the pre-verification footer from when Draft 4 was first produced (`DRAFT 4 — NARROW CORRECTION CANDIDATE / NOT YET VERIFIED / NOT ADOPTED` and `Recommended next action: Claude/Anthropic narrow correction-verification...`). This is a harmless artifact of verbatim candidate preservation prior to correction-verification and this qualifying review; if the Human Chair adopts and authorizes recording of the register, the surrounding adoption metadata can record the completed review lineage without requiring a text edit to the candidate body.
+
+---
+
+## 6. Proof-obligation completeness assessment
+
+Every material requirement in adopted H18 Draft 4, the Level-2 Evidence Contract (including its November 7, 2026 H18 adoption record), and H1–H20 is represented by an enforceable criterion, admissible `S`/`E`/`X` proof standard, explicit rejection condition, and non-circular closure point (`CP0`–`CP6`):
+
+| Requirement area | Controlling source | Register coverage and assessment |
+|---|---|---|
+| **Exact proposition, independent oracle, and E3 non-broadening** | H18 §2; Contract adoption caution #2 | **Complete (`H18-PO-01`).** Binds E5 refusal oracle, authoritative source/revision, and native mapping before first effect (`CP3`); explicitly incorporates Kimi's caution #2 that if E3 is treated as an independent pass/fail proposition, its own oracle and native-result mapping must also be bound before first effect. |
+| **Mediation and bypass prevention (BP1)** | H18 §§7.2, 15 (BP1); Contract §3 | **Complete (`H18-PO-02`).** Covers direct, inherited, and aliased references, ambient namespace access, callbacks, helpers, subprocesses, privileged intermediaries, frameworks, and independent system agents (indexing, backup, sync, cleanup), while preserving `B5 G1 HOLD`. |
+| **Execution state, completion, and no-overlap semantics** | H18 §§3.1–3.4, 4.1–4.2; Contract §6 | **Complete (`H18-PO-03`).** Separates execution state from reporting disposition; defines `IN_FLIGHT` and `EXECUTOR_LOST — EFFECT_INTERVAL_UNRESOLVED`; distinguishes hung vs. lost components; blocks all later subject dispatch and `E6`/`E7` while `Q` is false. |
+| **Effective capability and protection-domain unions** | H18 §§8.1, 8.4, 8.5 | **Complete (`H18-PO-04`).** Evaluates unseparated protection domains as holding the union of reachable capabilities (credentials, inherited refs, shared memory/runtime, callable interfaces, debugging/injection, helpers, escape paths). |
+| **Closed enforcing set and substrate assurance** | H18 §§8.2, 8.3, 8.6 | **Complete (`H18-PO-05`).** Restricts the enforcing set to `G`, store-enforcement mechanisms, and `M-S`/`M-T`/`M-R` for their bounded gates; requires external technical restriction for ordinary components; treats platform substrate as an explicit assurance issue; treats enforcing-set expansion as an architectural revision. |
+| **Subject/reference origin and five identity categories** | H18 §§1, 9; H2, H5–H7 | **Complete (`H18-PO-06`).** Separates evidence-artifact, live-object, reference, accounting, and later operational identity; bars unverified reacquisition after complete binding loss. |
+| **Continuity (`E2→E3` and `E3→E5`)** | H18 §§4.3, 9.1, 9.2; Contract §§3, 6 | **Complete (`H18-PO-07`, `H18-PO-08`, §7).** Separates `CP4` dispatch eligibility from `CP6` through-dispatch continuity; requires `E4` five-point sameness check without imposing universal POSIX or link-count-one rules on disposable subjects. |
+| **Positive non-dispatch proof** | H18 §7.1; Amendment 1a §7 | **Complete (`H18-PO-09`).** Requires positive admissible evidence that dispatch "could not have crossed" from the earliest point the slot became technically reachable (where reachability precedes eligibility, reachability controls). |
+| **Evidence-store Route A and Route B** | H18 §9.3; Contract §§6, 7 | **Complete (`H18-PO-10`, `H18-PO-11`).** Covers uninterrupted store binding (`Route A`) and verified slot binding (`Route B`) with independent anchor protection surviving capability-union analysis. |
+| **Source-write cutoff and source sealing** | H18 §6; Contract adoption caution #1 | **Complete (`H18-PO-12`).** Incorporates Kimi's caution #1 verbatim: fences the pre-seal source-write route *before* capturing final `L-S` and source-manifest state, preventing post-fence returns from making `L-S`/manifest stale or mutating the 10-source transfer set. |
+| **Late returns and `X-L` confinement** | H18 §§5.2–5.4 | **Complete (`H18-PO-13`).** Generalizes confinement to late returns from any slot; records `"confined, not proven closed"`; enforces terminal independence for `E6`/`E7`; restricts post-seal recording to a single pre-assigned `X-L` exception slot within a fixed pre-frontier window. |
+| **Outcome classification, anti-selection, and stopping** | H18 §§3.4, 5.1, 14; Contract §§6, 8, 9; H3, H4, H9, H11, H13, H14 | **Complete (`H18-PO-14`).** Preserves `supported`, `violated/adverse`, `uncertain`, and `unobserved/unavailable`; enforces all mandatory stops (`E1–E4` failure/uncertainty, single `E5` termination regardless of result, continuity conflict, `H9`, `H11`, Contract §6 loss); bars retry, resumption, and favorable selection. |
+| **Production-route completeness (BP2)** | H18 §§10, 15 (BP2); Contract §5; H8, H9 | **Complete (`H18-PO-15`).** Requires finite inventory expansion across all routes and scope owners (`M-S/L-S`, `M-T/J-T`, `M-R/J-R`, `R-I/R-C`, `C`), source-side input charging before source reliance, and shared-input continuity proof within the global 8-input bound. |
+| **Transfer integrity and completeness** | H18 §13; Contract §7; H18 | **Complete (`H18-PO-16`).** Enforces at most one forward transfer per sealed source artifact; requires detection and reporting of all nine failure/tampering modes; bars retransmission, fallback, repair, or self-certifying producer logs. |
+| **Finite finalization and creation frontier** | H18 §11 | **Complete (`H18-PO-17`).** Translates the exact 8-step finalization sequence, fixed 8,192-byte establishment for `E`, `C`, `T0`, and `T1` before frontier closure, and the prohibition on `C`/`T1` self-certification and any `T2`. |
+| **Native-result mapping and 4,096-byte encoding fit** | H18 §13 | **Complete (`H18-PO-18`).** Reproduces the exact 8-group 4,096-byte event-record budget and bars truncation, summary substitution, or uncharged framing. |
+| **Role-specific capacity and conditional envelope** | H18 §12; Contract §10; H5, H10–H12 | **Complete (`H18-PO-19`).** Reproduces all 12 governed-support classes (`64` objects / `2,531,328` bytes), contextual and test-subject rules (including the `E5` product), zero free framing, and the `CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT` disposition. |
+| **Provenance and retention (BP3)** | H18 §§14, 15 (BP3); Contract §4; H15, H16 | **Complete (`H18-PO-20`).** Binds retention from admission/acquisition through transfer, closure, independent review, and later proposition-level evaluation until separate release authority. |
+| **Platform premises (Class A vs. Class B)** | H18 §15; Contract §4; H15, Retained N5 | **Complete (`H18-PO-21`).** Distinguishes pre-execution `Class A` premises (`CP3`) from execution-observable `Class B` premises (`CP4`/`CP5`/`CP6`) to prevent circular prerequisites. |
+| **P0, B5, Approval B, and reviewer governance** | H18 §§2, 7.2, 15, 17; Contract §§11, 12; Plan §E; Decision 0010 | **Complete (`H18-PO-22`, `H18-PO-23`, `H18-PO-24`, §§5, 12).** Preserves the categorical gate sequence, separates design-level sufficiency from execution-level reconciliation, and enforces amended Decision 0010. |
+
+---
+
+## 7. State-machine / continuity / late-return assessment
+
+I challenged the interactions among `IN_FLIGHT`, `EXECUTOR_LOST — EFFECT_INTERVAL_UNRESOLVED`, `Q`, `U(k)`, possible vs. definite dispatch, post-loss evidence, `E6`/`E7`, frozen dispositions, source sealing, and `X-L`:
+
+1. **No O1 overlap hazard:** Under §2 and `PO-03`, every slot `E1`–`E7` requires `Q` (`No earlier subject operation remains in flight or has an unresolved continuing-effect interval`) and `U(k)`. Whenever dispatch crosses or *may* have crossed the governed boundary, the slot enters `IN_FLIGHT` and `Q` becomes `false`. While `Q` is `false`, neither `E2`–`E5` nor `E6`/`E7` can dispatch.
+2. **Timeout and component loss are not completion:** `PO-03` explicitly mandates that timeout, abandonment, cancellation intent, interruption, and stopping do not establish completion. Component disappearance does not prove cessation; if delegated, kernel-mediated, or other effects may continue, the state transitions to `EXECUTOR_LOST — EFFECT_INTERVAL_UNRESOLVED` and `Q` stays `false`. Hung/blocked components are kept distinct from lost components.
+3. **Post-loss evidence cannot improperly restore `Q`:** Under `PO-03` (as repaired by `CV1`), `PO-09`, `PO-13`, `PO-14`, and §7, if an executing component, `G`, or another relevant subject, writer, child, framework component, evaluator, runner, or the OS is lost, post-loss evidence can resolve `EXECUTOR_LOST` or possible dispatch **only if** that exact post-loss observation was included in the original authorized sequence and has an applicable adopted continuity method under [Level-2 Evidence Contract §6](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md#L217-L218). Unplanned process reap/exit status, non-dispatch arguments, or diagnostic observations cannot restore `Q`.
+4. **Possible-dispatch resolution vs. definite dispatch and `U(k)`:** Under `PO-03` and `PO-09`, if a slot *only possibly dispatched*, positive interval-wide evidence from earliest technical reachability (meeting the post-loss rules if loss occurred) may resolve that dispatch never crossed, restoring `Q` for a *later* bounded terminal action (`E6`/`E7`). However:
+   * It **cannot** rewrite a definite dispatch as non-dispatch.
+   * It **cannot** reopen or authorize redispatch of slot `k`, because `U(k)` has three independent negative clauses (`has not been attempted, has not become dispatch-uncertain, and has not received a final unavailable/withheld disposition`), and `PO-03` explicitly states that `U(k)` remains `false` once the slot became dispatch-uncertain.
+5. **Source-sealing order and late returns (`PO-12`, `PO-13`):**
+   * Before dispositions freeze and within the source-finalization bound, an original return can establish completion for `Q` only if `PO-03` (including the Contract §6 post-loss requirement where applicable) is satisfied.
+   * Once `E1`–`E7` reporting dispositions are frozen (`PO-12`), the pre-seal source-write route is fenced *before* `L-S` and the source manifest are captured and sealed.
+   * A late return arriving after its admission window closes or after dispositions freeze enters a non-invocable compartment (`"confined, not proven closed"`), cannot establish `P` or `L3`, cannot become an `E6`/`E7` target, cannot reopen a frozen slot or alter a reporting disposition, and after source sealing can only be recorded once in the pre-assigned receiver-side `X-L` exception slot within the fixed pre-frontier capture window.
+   * `E6`/`E7` must be proven independent of any confined capability (no shared aliasing, ownership, lifetime, or parent invalidation); if independence is unproven, `E6`/`E7` are unavailable (`PO-13`).
+6. **Continuity and outcome taxonomy (`PO-07`, `PO-08`, `PO-14`):**
+   * `CP4` dispatch eligibility is strictly separated from `CP6` through-dispatch continuity.
+   * If continuity through dispatch is **unproven**, the original observation is preserved and the intended proposition is classified as `uncertain`.
+   * If continuity through dispatch is **contradicted**, the original observation and contradiction are preserved, the intended proposition is classified as `uncertain` for that attempt, and the mandatory continuity-conflict stop is applied.
+   * Missing original observations are classified as `unobserved/unavailable`.
+   * Directly adverse observations (such as an unexpected `E5` success) remain visible on their own terms with their premise state, and a failed premise never generates a bogus pass or an unrelated adverse finding.
+
+---
+
+## 8. Enforcement / provenance / transfer assessment
+
+1. **Enforcing set and capability unions (`PO-04`, `PO-05`):** The register faithfully enforces H18 Draft 4 §8. Ordinary components (`dispatch controller`, `sender`, `receiver/validator`, `evaluator`, helpers) must be externally constrained. Shared protection domains are evaluated as the union of reachable capabilities. The closed enforcing set (`G`, store enforcement, `M-S`, `M-T`, `M-R`) requires exact implementation/configuration identity, entry-point confinement, and escape analysis.
+2. **Route A and Route B (`PO-10`, `PO-11`):** `Route A` requires continuous store-held binding from admission through write, seal, and read. Where `Route A` is unproven, `Route B` connects the artifact via a bounded method to a pre-established independently protected provenance anchor. `PO-11` accurately reflects H18 Draft 4 §9.3: the anchor cannot be modified through effective capabilities available to the writer, reader, sender, receiver, or any component whose account it validates (surviving `PO-04` capability-union analysis), and store enforcement may establish/preserve that protection only through a fixed, assured interface without overrides.
+3. **Transfer integrity and non-circularity (`PO-15`, `PO-16`, `PO-17`, `PO-20`):**
+   * Each of the 10 designated sealed source artifacts (7 event records, 2 acquisition journal/`L-S` objects, 1 source manifest) has at most one forward transfer.
+   * `PO-16` requires detection and reporting of omission, truncation, partial transfer, duplication, reordering, conflicting versions, regeneration/re-derivation, replay/stale evidence, wrong-attempt substitution, and selective emission. If a required failure condition can neither be detected nor validly excluded, positive qualification is blocked.
+   * No provenance or completeness argument is circular or self-certifying: `G`'s journal alone cannot establish non-dispatch or absence of bypass (`PO-02`, `PO-09`); an accountant's membership in the enforcing set does not prove producer completeness (`PO-05`, `PO-15`); matching digests prove only byte correspondence, not acquisition truth or completeness (`PO-16`); and `C`/`T1` cannot self-certify their own writes or delivery (`PO-17`).
+
+---
+
+## 9. Capacity recomputation
+
+I independently recomputed the object counts and byte bounds from the 12 governed-support classes in H18 Draft 4 §12.2 and Register `H18-PO-19`, as well as the per-record group allocation in H18 Draft 4 §13 and Register `H18-PO-18`:
+
+### A. Event-record envelope check (`H18-PO-18` / H18 §13)
+$$64 + 192 + 512 + 512 + 768 + 512 + 1{,}024 + 512 = 4{,}096\text{ bytes}$$
+* Matches the `4,096`-byte per-event-record limit.
+
+### B. Governed-support inventory recomputation (`H18-PO-19` / H18 §12.2)
+
+| # | Governed-support class | Max objects | Max bytes | Implied max bytes / object | Within H10 per-object ceiling (`65,536` B)? |
+|---:|---|---:|---:|---:|---|
+| 1 | Admitted inputs (including assurance & required history) | 8 | 524,288 | 65,536 | Yes (`8 × 65,536 = 524,288`) |
+| 2 | Seven source event records | 7 | 28,672 | 4,096 | Yes (`7 × 4,096 = 28,672`) |
+| 3 | Acquisition journal and `L-S` | 2 | 16,384 | 8,192 | Yes (`2 × 8,192 = 16,384`) |
+| 4 | Source manifest | 1 | 8,192 | 8,192 | Yes (`1 × 8,192 = 8,192`) |
+| 5 | Transport intermediates (at most 2 distinct per transfer across 10 transfers) | 20 | 1,310,720 | 65,536 | Yes (`20 × 65,536 = 1,310,720`) |
+| 6 | Ten byte-exact receiver copies (`7 × 4,096 + 3 × 8,192`) | 10 | 53,248 | 4,096 / 8,192 | Yes (`28,672 + 24,576 = 53,248`) |
+| 7 | `J-T` and `J-R` | 2 | 16,384 | 8,192 | Yes (`2 × 8,192 = 16,384`) |
+| 8 | Platform/framework outputs | 4 | 262,144 | 65,536 | Yes (`4 × 65,536 = 262,144`) |
+| 9 | Attempt-level exception records (including `X-L`) | 4 | 262,144 | 65,536 | Yes (`4 × 65,536 = 262,144`) |
+| 10 | `R-I` / `R-C` | 2 | 16,384 | 8,192 | Yes (`2 × 8,192 = 16,384`) |
+| 11 | `E` / `C` | 2 | 16,384 | 8,192 | Yes (`2 × 8,192 = 16,384`) |
+| 12 | `T0` / `T1` | 2 | 16,384 | 8,192 | Yes (`2 × 8,192 = 16,384`) |
+| **Total** | | **64** | **2,531,328** | | **All role limits internally consistent** |
+
+### C. Sum and headroom verification
+* **Total governed-support object count:**
+  $$8 + 7 + 2 + 1 + 20 + 10 + 2 + 4 + 4 + 2 + 2 + 2 = 64\text{ objects}$$
+  * Candidate profile headroom: **0 objects** (all 64 candidate profile slots are assigned; a 65th object requires architectural revision).
+  * H10 object ceiling (`128` objects) headroom: `64` objects (explicitly non-usable without architectural revision).
+* **Total aggregate bytes:**
+  $$524{,}288 + 28{,}672 + 16{,}384 + 8{,}192 + 1{,}310{,}720 + 53{,}248 + 16{,}384 + 262{,}144 + 262{,}144 + 16{,}384 + 16{,}384 + 16{,}384 = 2{,}531{,}328\text{ bytes}$$
+* **H10 aggregate byte headroom:**
+  $$4{,}194{,}304 - 2{,}531{,}328 = 1{,}662{,}976\text{ bytes}$$
+* **Role-specific consistency and accounting safeguards:**
+  * The 10 sealed source artifacts (`7` source event records = `28,672` B + `2` acquisition journal/`L-S` = `16,384` B + `1` source manifest = `8,192` B) sum to exactly **10 objects** and **53,248 bytes**, which matches the **10 byte-exact receiver copies (`53,248` bytes)** with **zero free framing allowance**.
+  * No role-to-role capacity transfer, no 65th object, no refund on deletion/shrinking/packaging/phase transition, and full reservation for uncertain creation are strictly enforced.
+  * `X-L` occupies one of the 4 existing attempt-level exception slots.
+  * The `E5`-produced object is classified by origin as a **test subject** (`H5`) and consumes **0 governed-support slots and 0 governed-support bytes** under `H10`/`H11` even when treated conservatively as distinct from the `E3` subject, while separately materialized evidence about it is charged as governed support.
+  * Capacity disposition remains: **`CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT`**.
+
+---
+
+## 10. CP0–CP6 and gate-sequencing assessment
+
+1. **Closure-point ladder (`CP0`–`CP6`) non-circularity:**
+   * `CP0` fixes comparison criteria before documentary backend comparison.
+   * `CP1` requires the 5-part feasibility showing across all 24 obligations (§9 maps `PO-01`–`PO-23` directly to `CP1`, with `PO-24` anchored through `PO-22` at `CP1` and its formal package at `CP2`).
+   * `CP2` closes concrete design methods, routes, native mappings, and capacity sufficiency before concrete-design adoption or implementation authorization.
+   * `CP3` closes specific execution authority, fixed schedule, independent oracle binding, reservations, and `Class A` pre-execution premises before the first governed effect.
+   * `CP4` closes pre-dispatch eligibility predicates (`P`, `L3`, `A`, `Q`, `U(k)`, `T(k)`) before each dependent dispatch, explicitly leaving through-dispatch continuity to `CP6`.
+   * `CP5` closes frozen dispositions, source fence, final-state capture, `X-L` window closure, and the creation frontier in their exact 8-step order (`PO-12`, `PO-13`, `PO-17`).
+   * `CP6` closes execution evidence, through-dispatch continuity (`PO-07`, `PO-08`), transfer integrity (`PO-16`), and execution-level reconciliation (`PO-23`).
+   * `PO-21` eliminates circularity between execution and premises by separating `Class A` (establishable before execution, closed by `CP3`) from `Class B` (execution-observable only, with routes, bounds, and fail-closed stops fixed by `CP3` and observations evaluated at `CP4`/`CP5`/`CP6`).
+2. **Strict gate discipline (`UNRESOLVED — GATED`):** Section 4 restricts `UNRESOLVED — GATED` to questions that genuinely depend on unavailable empirical/execution evidence, `P0`, `B5`, `Approval B`, separate method adoption, or explicit Chair governance decisions, and prohibits using it to defer compatibility questions answerable now through static/documentary analysis.
+3. **Preservation of P0 / B5 / Approval B sequence:** Sections 5, 12, `PO-22`, and `PO-24` explicitly preserve:
+   $$\text{P0 qualification} \rightarrow \text{separately authorized Approval B} \rightarrow \text{interface-tailored V2-2B} \rightarrow \text{any later implementation or execution decision}$$
+   for **all** V2-2B implementation authorization and execution, including elements that appear interface-independent. `B5 G1` remains `HOLD`, `P0` candidates remain `NOT QUALIFIED`, generic narrow-H18 work cannot qualify `P0` or substitute for `Approval B`, and neither H18 adoption nor register acceptance authorizes backend selection, implementation, or execution.
+4. **Backend neutrality:** The register makes no unstated assumptions of POSIX filesystems, file descriptors, `inode`/`st_dev`/`st_nlink`, `fsync`, processes, threads, containers, kernel mechanisms, CJSON2, or specific transport products. Where `RLIMIT_FSIZE` is mentioned in §2, it is explicitly cited as an example of a Level-2 Evidence Contract §3 requirement that lies *outside* this narrow profile.
+
+---
+
+## 11. Answers to the 15 highest-risk questions
+
+1. **Is every material adopted H18 requirement represented by an assessable obligation?**  
+   **Yes.** `H18-PO-01` through `H18-PO-24`, together with §§2–9, cover every material requirement in H18 Draft 4, the Level-2 Evidence Contract (including both retained H18 adoption cautions), and H1–H20, each with an explicit criterion, `S`/`E`/`X` proof standard, rejection condition, and closure point.
+2. **Can any backend pass the register while violating Draft 4?**  
+   **No.** Every normative and architectural invariant of H18 Draft 4 is guarded by explicit rejection conditions in `PO-01`–`PO-24` and the minimum `CP1` viability gate in §9.
+3. **Can any conforming backend be rejected because the register accidentally strengthened Draft 4?**  
+   **No.** Prior over-strengthenings were removed or aligned with Draft 4: no universal durable pre-effect journal is required (`PO-09`), no universal identifier or link-count-one rule is added (`PO-08`), `Route B` explicitly permits store enforcement to maintain anchor protection through its fixed, assured interface per Draft 4 §9.3 (`PO-11`), and single-execution continuity uncertainty is not treated as design incompatibility (`PO-07`).
+4. **Can post-loss evidence improperly restore Q?**  
+   **No.** Under `PO-03`, `PO-09`, `PO-13`, `PO-14`, and §7, post-loss evidence can resolve `EXECUTOR_LOST` or possible dispatch only if that exact post-loss observation was in the original authorized sequence and has an applicable adopted method under Contract §6. Unplanned reap/exit status, non-dispatch arguments, and diagnostics cannot restore `Q`.
+5. **Can E6/E7 execute while an earlier effect may still continue?**  
+   **No.** `E6` and `E7` both require `Q` (§2, `PO-03`), which is `false` whenever any earlier subject slot is in flight, only possibly dispatched (until positively resolved across the full reachability interval), or in `EXECUTOR_LOST — EFFECT_INTERVAL_UNRESOLVED`.
+6. **Can a late return reopen a frozen slot or change a disposition?**  
+   **No.** Under `PO-03`, `PO-12`, and `PO-13`, once slot dispositions freeze, a late return cannot reopen any slot, change a frozen reporting disposition, establish `P` or `L3`, or supply a new `E6`/`E7` target.
+7. **Can source sealing become stale?**  
+   **No.** `PO-12` requires fencing the pre-seal source-write route *before* capturing the final `L-S` and source-manifest state (satisfying Kimi's retained caution #1). Any return arriving after the fence remains confined until the receiver-side `X-L` route records it without mutating the sealed 10-source transfer set.
+8. **Can provenance or completeness become self-certifying?**  
+   **No.** `PO-02`, `PO-05`, `PO-09`, `PO-11`, `PO-15`, `PO-16`, and `PO-17` reject reliance on `G`'s journal alone, an accountant's membership in the enforcing set alone, unprotected hashes/labels, sender-only/regenerated logs, or `C`/`T1` self-certification.
+9. **Can a 65th support object appear implicitly?**  
+   **No.** `PO-19` fixes all 64 governed-support slots across 12 roles with zero object-count headroom and explicitly requires rejection (and architectural revision) if a 65th governed-support object is needed.
+10. **Can framing or transport intermediates escape accounting?**  
+    **No.** `PO-18` charges framing within the 4,096-byte event record (`512` bytes), and `PO-19` mandates that the 10 byte-exact receiver copies (`53,248` bytes) have no free framing allowance—any framing, metadata, serialization, or `X-L` buffering must fit already-assigned slots/bytes (such as the 20 transport intermediates at `1,310,720` bytes) or the backend is rejected.
+11. **Are design-level sufficiency and execution-level reconciliation kept separate?**  
+    **Yes.** `PO-23` explicitly separates design-level sufficiency (`S`/`E` worst-case route and capacity proof at `CP1`/`CP2`) from execution-level reconciliation (`X` original evidence of actual adherence at `CP6`).
+12. **Is the P0/B5/Approval-B sequence preserved?**  
+    **Yes.** Section 5 and `PO-22` preserve `P0 qualification → separately authorized Approval B → interface-tailored V2-2B → any later implementation or execution decision` categorically across all V2-2B implementation authorization and execution, and keep `B5 G1` at `HOLD`.
+13. **Are CP0–CP6 non-circular?**  
+    **Yes.** `CP0`–`CP6` follow a strict causal progression: criteria (`CP0`) → feasibility (`CP1`) → concrete design (`CP2`) → pre-execution bindings and `Class A` premises (`CP3`) → pre-dispatch eligibility (`CP4`) → cutoff/frontier sealing (`CP5`) → post-execution continuity and reconciliation (`CP6`).
+14. **Is the register genuinely backend-neutral?**  
+    **Yes.** All obligations are expressed in terms of capabilities, bindings, protection domains, enforcing-set properties, and byte/object bounds, with no unstated OS, filesystem, process, container, or codec assumptions.
+15. **Did you identify any new blocking defect?**  
+    **No.**
+
+---
+
+## 12. Authority boundary
+
+This review does not authorize:
+
+* repository mutation;
+* register adoption;
+* backend comparison or selection;
+* method adoption;
+* implementation;
+* execution;
+* host/platform observation;
+* P0 activity;
+* B5 progression;
+* Approval B;
+* F/Q/O activity;
+* cleanup;
+* custody transition;
+* successor activity.
+
+B5 G1 remains:
+
+**HOLD**
+
+P0 candidates remain:
+
+**NOT QUALIFIED**
+
+Capacity remains:
+
+**CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT**
+
+V2-2B implementation remains:
+
+**UNAUTHORIZED**
+
+V2-2B execution remains:
+
+**UNAUTHORIZED**
+
+**STOP FOR HUMAN CHAIR REVIEW.**

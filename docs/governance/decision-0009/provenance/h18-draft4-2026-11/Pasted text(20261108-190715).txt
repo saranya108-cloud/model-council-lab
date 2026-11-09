@@ -1,0 +1,548 @@
+# Decision 0009 — Backend-Neutral H18 Conformance and Continuity Proof-Obligation Register — Draft 4
+
+**Date** November 8, 2026  
+**Human Chair** Amy  
+**Repository** `/Users/aclab/aclab/model-council-lab`  
+**Branch and checkpoint** `m1-live-adapter-dev` at `9e9ad946bab6b46b857635c7e941ebf3146900d1`  
+**Predecessor** Proof-Obligation Register Draft 3  
+**Role** Bounded correction author
+
+## 1. Purpose and source precedence
+
+This register translates the adopted H18 Draft 4 architecture into proof obligations for future documentary backend comparison and concrete-design review. Register Draft 4 retains all 24 obligations and addresses CV1 and the four cleanup clarifications from Claude Opus’s correction-verification of Register Draft 3.
+
+The complete adopted H18 Draft 4 controls the architecture. Adopted H1–H20 and retained notes, the Level-2 Evidence Contract, and applicable governance records control their respective requirements. Decision 0010 controls reviewer independence. Register Draft 3 supplies the baseline, and Claude’s Draft 3 correction-verification identifies the corrections. Where the review’s proposed wording differs from the adopted architecture, the adopted text controls. [Adopted H18 Draft 4 source chat](codex://threads/01a1b790-6adc-7b42-957a-ee46853dbd3e) · [Level-2 Evidence Contract and H18 adoption record](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md:3) · [H1–H20 and retained notes](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-V2-2B-EXPERIMENT-SCOPED-SUPPORT-OBJECT-IDENTITY-POLICY.md:36) · [Decision 0010](/Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md)
+
+The local branch and commit were checked read-only. This register confers no authority for repository changes, backend comparison or selection, method adoption, implementation, execution, platform observation, P0 inspection or qualification, B5 progression, Approval B, F/Q/O creation or qualification, cleanup, custody transition, or successor activity.
+
+## 2. Profile, exclusions, and predicates
+
+The profile covers one bounded attempt with two predetermined cases. The first observes one exclusive-create request against an absent ordinary-file leaf, its original result, and the relationship between its returned reference and the resulting regular-file entry. The second observes one predetermined collision request against that occupied leaf, conditional on the first case and the required continuity. Case 2 is part of the original schedule. Failure or uncertainty in Case 1 withholds it.
+
+Actual F/Q/O, their actual parents, protected P/I/O, and P0 candidates are excluded as subjects and destinations. The profile supplies no general qualification of exclusive creation, link variants, races, allocation, complete zero-range coverage, crash survival, resource limits, operational custody, universal absence of side effects, unrestricted concurrency, or protected-interface facts. Applicable contract requirements apply as the contract states them. For example, a proposition targeting the r2 §13 F-writer constraint must establish and read back the required soft and hard `RLIMIT_FSIZE` values before writable capability. That proposition lies outside this narrow profile. [Level-2 Evidence Contract §3](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md:135)
+
+| Predicate | Adopted meaning |
+|---|---|
+| **P** | The E1 parent capability was admitted while its slot was open and remains held with unambiguous binding. |
+| **L3** | The E3 subject capability was admitted while its slot was open and remains held with unambiguous binding. |
+| **A** | Applicable acquisition prerequisites remain established. |
+| **Q** | No earlier subject operation remains in flight or has an unresolved continuing-effect interval. |
+| **U(k)** | Slot k has not been attempted, has not become dispatch-uncertain, and has not received a final unavailable/withheld disposition. |
+| **T(k)** | Original bounded terminal authority, a surviving execution path, a safe origin-specific target, and applicable capability restrictions permit closure k. |
+
+| Slot | Operation | Dispatch eligibility |
+|---|---|---|
+| **E1** | Establish the approved disposable-parent binding | Initial authority, inventory, assurance, and observation prerequisites, plus Q and U(1). |
+| **E2** | Observe the designated leaf as absent | P, intact E1 acquisition, A, Q, U(2), and no prior stop. |
+| **E3** | Make one exclusive-create request | Established E2 absence, continuing P, no known intervening contradiction, applicable absence-preservation controls, A, Q, U(3), and no prior stop. |
+| **E4** | Observe the E3-reference/leaf relationship | Successful E3 prerequisites, P, L3, A, Q, U(4), and no prior stop. |
+| **E5** | Make one predetermined collision request | E4 success, continuing P and L3, no known contrary event, applicable continuity controls, A, Q, U(5), and no prior stop. |
+| **E6** | Close only the admitted E3-origin subject capability | Ordinary dispatch ended, L3, Q, T(6), and U(6). |
+| **E7** | Close only the admitted E1-origin parent capability | E6 completed, withheld, or unavailable, plus P, Q, T(7), and U(7). |
+
+E6 and E7 are fixed normal-completion actions where appropriate and originally authorized bounded terminal actions after a stop. Each requires its own eligibility. A reference arriving after its admission window closes cannot establish P or L3 for a terminal action. The schedule has seven slots, each with at most one attempt and no substitution.
+
+## 3. Evidence classes
+
+| Class | What it can establish |
+|---|---|
+| **S — Static assurance** | Design and feasibility from exact implementation/configuration, authoritative semantics, capability and route analysis, accounting, or representation analysis. Static assurance alone is insufficient for actual deployment or execution claims. |
+| **E — Empirical premise evidence** | Actual deployment, configuration, platform, agent population, runtime properties, or protection boundaries. Acquisition requires specific authority and all applicable predecessor gates. |
+| **X — Execution evidence** | Original observations from a specifically authorized governed attempt. Documentation, simulation, reconstruction, and favorable selection cannot supply missing original observations. |
+
+## 4. Closure-point ladder
+
+| Point | Required closure |
+|---|---|
+| **CP0 — Before documentary backend comparison** | Define each applicable obligation, evidence standard, rejection condition, and trigger sufficiently for consistent comparison. |
+| **CP1 — Before backend selection** | Establish credible architectural feasibility for each applicable major obligation using the five-part standard below. |
+| **CP2 — Before concrete-design adoption or implementation authorization** | Resolve or expressly disposition the applicable concrete methods, routes, capacity allocations, dependencies, and design-level conformance arguments. An explicit disposition cannot waive an applicable prerequisite. |
+| **CP3 — Before the first governed effect** | Establish specific execution authority, the fixed schedule, independent oracle and source bindings, reservations, configuration and applicable Class A premises, enforcement, observation obligations, and stops. |
+| **CP4 — Before each dependent dispatch** | Establish the applicable dispatch-eligibility predicates, including earlier original observations where required. Continuity through the future dispatch boundary remains a separate evaluation. |
+| **CP5 — Before the applicable sealing or finalization cutoff** | Establish the applicable slot dispositions, source fence, final-state capture, fixed objects and charges, and creation-frontier conditions in their required order. |
+| **CP6 — Before positive H18 qualification** | Establish required execution evidence, through-dispatch continuity, transfer integrity, production and capacity reconciliation, and remaining qualification predicates. A CP6 evaluation does not defer a predicate, control, or stop required earlier. |
+
+**CP1 feasibility.** Identify (1) a named candidate mechanism or property, (2) an authoritative source for its claimed semantics, (3) the evidence class of every remaining premise, (4) its expected closure point, and (5) the absence of a known contradiction with Draft 4.
+
+Use **UNRESOLVED — GATED** only when closure genuinely requires evidence or authority unavailable at the current architectural stage. Eligible dependencies include empirical or execution evidence, P0, B5, Approval B, separate method adoption, or another explicit governance gate. Record the dependency, required evidence or decision, and closure point. Resolve compatibility questions that documentary or static analysis can answer at the current stage. An unrecorded gap, a known incompatibility, or a gated unknown that prevents a credible feasibility showing cannot satisfy CP1.
+
+## 5. Gate joins
+
+- **Generic narrow-H18 work.** Separately authorized backend-neutral criteria, documentary comparison, generic continuity-method architecture, proof-obligation analysis, and generic route or capacity reasoning may precede P0 and Approval B where they use no protected facts. The narrow H18 architecture can be defined within that scope.
+- **P0.** Any reliance on actual Q-parent qualification or another P0-gated fact remains blocked until the applicable qualification succeeds through its own process.
+- **B5.** Reliance on B5-governed characterization or exclusion of indexing, backup, synchronization, autonomous cleanup, or comparable agents remains subject to **B5 G1 HOLD**.
+- **Approval B and V2-2B.** Regardless of whether a particular element appears interface-independent, **V2-2B implementation authorization and V2-2B execution remain behind P0 qualification → separately authorized Approval B → interface-tailored V2-2B → any later implementation or execution decision**, unless the Human Chair changes the sequence through a separately authorized governance decision. The arrows preserve the gate order and leave other adopted prerequisites in force. Protected-interface claims require the authorized evidence before reliance. A generic design argument does not confer implementation authority.
+
+[Level-2 Evidence Contract §§11–12](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md:327) · [Implementation plan §E, working-copy corroboration](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-RETENTION-V2-M0-IMPLEMENTATION-PLAN.md:242)
+
+## 6. Core proof-obligation register
+
+### H18-PO-01 — Exact proposition and independent oracle
+
+**Requirement and criterion.** Fix the E5 proposition and expected result independently of observation. The semantic oracle is refusal because the designated leaf is occupied. Identify the exact proposition, authoritative expected-outcome source and revision, native-result mapping, scope, and limitations. If the design treats E3 as an independent pass/fail qualification proposition, bind its own independent oracle and native-result mapping before the first governed effect.
+
+**Admissible proof.** **S** for the oracle and native semantics. **E** for deployment-dependent applicability. **X** for the original result, separately assessed.
+
+**Reject if** the design derives its oracle or mapping retrospectively, relies on an ambiguous source revision, or broadens E3 without its own oracle package.
+
+**Closure.** Credible oracle and native-mapping feasibility at **CP1**. Mapping sufficient for design and encoding analysis at **CP2**. Exact source, revision, and oracle binding at **CP3**. Original-result evaluation at **CP6**.
+
+### H18-PO-02 — BP1 complete mediation
+
+**Requirement and criterion.** All relevant subject-effect paths during the reliance interval must pass through G or be prevented by evidenced controls. Cover direct, inherited, and aliased references, ambient namespace access, callbacks, helpers, subprocesses, privileged intermediaries, frameworks, and independent agents such as indexing, backup, synchronization, and autonomous cleanup.
+
+**Admissible proof.** **S** for G’s exact implementation/configuration, callable surface, capability controls, and bypass analysis. **E** for deployed correspondence and agent/configuration premises. **X** where the authorized design requires original interval observations.
+
+**Reject if** an ambient route is unaccounted for, G’s journal alone supports absence of bypass, an agent’s external status is treated as evidence of noninterference, or a B5-dependent exclusion is assumed while G1 is HOLD.
+
+**Closure.** Criteria at **CP0**, credible mechanism and evidence plan at **CP1**, concrete assurance at **CP2**, and required actual-state premises at **CP3**.
+
+### H18-PO-03 — Execution state, completion, and no overlap
+
+**Requirement and criterion.** A slot enters `IN_FLIGHT` when dispatch crossed or may have crossed and no admissible original completion establishes that the operation ended. Track execution state independently of reporting disposition. A final unavailable disposition can coexist with unresolved execution.
+
+**Component loss alone never establishes completion.** If delegated, kernel-mediated, or other effects may continue, transition to `EXECUTOR_LOST — EFFECT_INTERVAL_UNRESOLVED`. Q remains false while the interval remains unresolved. A hung or blocked component is distinct from a lost component.
+
+Ending an active in-flight state for an operation requires separate admissible evidence establishing that the original operation ended under the applicable backend semantics. Normally this is its original terminal return under a backend contract establishing that the return ends the relevant effect interval. An asynchronous submission acknowledgement is insufficient.
+
+Where the executing component, G, or another relevant subject, writer, child, framework component, evaluator, or runner has been lost, or an OS crash/reboot has occurred, evidence acquired after the loss may resolve `EXECUTOR_LOST` or possible dispatch only if **that exact post-loss observation was included in the original authorized sequence and has the applicable adopted method** under Level-2 Evidence Contract §6. Otherwise the interval remains unresolved, Q remains false, and E6/E7 are unavailable. An unplanned reap or exit status, non-dispatch argument, or diagnostic observation cannot restore Q. Later review cannot supply the missing observation or its original authority. The profile remains non-recovering.
+
+For a slot that **only possibly dispatched**, later positive interval-wide evidence under PO-09 that it never dispatched may resolve that uncertainty, subject to the post-loss requirements above whenever loss has occurred. U(k) stays false because the slot became dispatch-uncertain. The finding cannot erase a definite dispatch, reopen a frozen slot, or authorize redispatch.
+
+While Q is false, no later subject operation may dispatch, including E6 and E7. A missing result supplies no basis for closing a target or parent. Timeout, abandonment, cancellation intent, interruption, and stopping establish no completion and grant no probe or cancellation authority.
+
+**Admissible proof.** **S** for exact backend completion semantics and state mapping. **E** for deployed applicability. **X** for original completion evidence or admissible interval evidence resolving possible dispatch.
+
+**Reject if** the design equates component disappearance or elapsed time with cessation, treats a hung component as lost, restores Q merely from a state label or reporting disposition, or permits dependent dispatch with an unresolved interval.
+
+**Closure.** Credible completion mechanism at **CP1**, exact state mapping at **CP2**, applicable deployment premises at **CP3**, and admissible resolution of any earlier in-flight or possibly dispatched operation before dependent dispatch at **CP4**. Preserve unresolved execution in closure and qualification evidence.
+
+### H18-PO-04 — Effective capability and protection-domain union
+
+**Requirement and criterion.** Assess components in an unseparated protection domain as holding the union of capabilities reachable within that domain. Include credentials, inherited references, shared memory and runtime access, callable interfaces, debugging and injection paths, configuration authority, helpers, modification rights, and escape paths. A claimed internal boundary requires assurance of its implementation, deployment, and bypass resistance.
+
+**Admissible proof.** **S** for topology, capability maps, and enforcement design. **E** for deployed correspondence. **X** may support a specific claim but is ordinarily secondary.
+
+**Reject if** role names substitute for isolation, shared authority is ignored, or a supposedly constrained component can use prohibited rights through its domain.
+
+**Closure.** Criteria at **CP0**, credible separation or conforming capability union at **CP1**, exact design at **CP2**, and deployment correspondence at **CP3**.
+
+### H18-PO-05 — Closed enforcing set
+
+**Requirement and criterion.** The enforcing set consists of G, store-enforcement mechanisms, and M-S, M-T, and M-R for their declared bounded gates and transitions. For each, establish exact implementation/configuration identity, deployment correspondence, entry points, permitted operations and bounds, initialization and failure paths, returns, timeouts, callbacks, teardown, raw-primitive confinement, code loading, debugging, credentials, helpers, and mutable dependencies. Ordinary components require external technical restriction. An accountant’s membership in the enforcing set supplies no independent proof of its completeness.
+
+Treat platform substrate as a premise or mechanism where it realizes a restriction of a named enforcer. Flag reliance on an additional active trusted enforcer for architectural review. Expansion of the enforcing set requires architectural revision.
+
+**Admissible proof.** **S** for exact code/configuration, enforcement ownership, topology, and bypass analysis. **E** for deployment and actual protection. **X** where an applicable execution claim requires it.
+
+**Reject if** ordinary components can self-exempt, callers can bypass or reconfigure enforcement, enforcement ownership is ambiguous, an enforcer is silently added, or deployment differs materially from the assured design.
+
+**Closure.** Credible arrangement at **CP1**, reviewed design at **CP2**, and deployed correspondence at **CP3**.
+
+### H18-PO-06 — Subject/reference origin and uninterrupted binding
+
+**Requirement and criterion.** Identify origin, admission, the binding interval, transitions, and every dependent observation. Keep evidence-artifact identity, live-object identity, reference identity, accounting identity, and later operational identity distinct.
+
+**Admissible proof.** **S** for binding semantics and continuity methods. **E** for relevant actual binding state. **X** for original acquisition and interval evidence.
+
+**Reject if** name, bytes, digest, or namespace identity alone substitutes for the required origin or reference binding, or if complete binding loss is followed by ungoverned reacquisition.
+
+**Closure.** Credible mechanism at **CP1**, concrete method at **CP2**, relevant dispatch binding at **CP4**, and execution proof at **CP6**.
+
+### H18-PO-07 — E2→E3 absence continuity
+
+**Requirement and criterion.** Connect E2’s absence observation to the same parent binding and fixed leaf targeted by E3. Cover relevant creation, replacement, rebinding, and other intervening namespace changes through E3’s dispatch boundary.
+
+At **CP4**, establish the E3 eligibility predicates in §2. At **CP6**, use original evidence to assess continuity through dispatch. If the premise is **unproven**, preserve E3’s original result and classify the intended proposition as uncertain. A single uncertain execution does not establish design incompatibility. If the premise is **contradicted**, preserve the result and contradiction, classify the intended proposition as **uncertain** for that attempt, and apply the applicable continuity-conflict stop. Record a missing original observation as **unobserved/unavailable** under PO-14. Preserve directly adverse observations on their own terms. Failure of the premise supplies no unrelated adverse finding.
+
+**Admissible proof.** **S** for the method, **E** for applicable deployed controls, and **X** for original interval evidence.
+
+**Reject if** the design treats eligibility as proof through dispatch, evaluates the case as though a failed premise held, or lacks a conforming method.
+
+**Closure.** Credible route at **CP1**, concrete method at **CP2**, eligibility at **CP4**, and through-dispatch proof at **CP6**.
+
+### H18-PO-08 — E3→E5 sameness and continuity
+
+**Requirement and criterion.** E4 must connect the original E3 return and the E1 parent-relative observation to the same intended object during comparison, establish the required regular-file state, and exclude unresolved substitution, identifier recycling, and mere byte/name equality. Evaluation of E5 also requires continuing parent and subject bindings, the leaf-entry relationship, and coverage of intervening effects through dispatch. Holding a reference alone is insufficient. This profile adds no universal identifier, primitive, or link-count rule.
+
+At **CP4**, establish the E5 eligibility predicates in §2. At **CP6**, assess original through-dispatch continuity. If the premise is **unproven**, preserve the original result and classify the intended proposition as uncertain. If the premise is **contradicted**, preserve the result and contradiction, classify the intended proposition as **uncertain** for that attempt, and apply the applicable continuity-conflict stop. Record a missing original observation as **unobserved/unavailable** under PO-14. An unexpected success remains a directly adverse observation with its premise limitation. A violation of the intended collision proposition requires the occupied-target premise to be established.
+
+**Admissible proof.** **S** for binding and namespace continuity methods, **E** for applicable deployed control state, and **X** for original E4/E5 interval evidence.
+
+**Reject if** the design lacks a conforming continuity method, assumes continuity from a pre-dispatch check, or assigns favorable or adverse qualification to the intended proposition despite a failed premise.
+
+**Closure.** Credible route at **CP1**, concrete method at **CP2**, eligibility at **CP4**, and through-dispatch proof at **CP6**.
+
+### H18-PO-09 — Positive non-dispatch and withholding proof
+
+**Requirement and criterion.** For any slot reported as proven withheld or not dispatched, positive admissible evidence must establish that dispatch **“could not have crossed”** its governed boundary throughout the relevant interval. The interval begins at the **earliest point the slot became technically reachable**. If reachability precedes eligibility, reachability controls. A later inhibit or stop decision cannot substitute for proof of the earlier interval. Any use of evidence acquired after a relevant loss to resolve possible dispatch must meet PO-03 and Level-2 Evidence Contract §6.
+
+**Admissible proof.** **S** for enforcement and evidence design, **E** for deployed correspondence, and **X** for original interval evidence. No universal durable pre-effect journal is required.
+
+**Reject if** the proof omits the early reachability interval, treats absence of a prepared, issued, observed, or completion record as sufficient, or rests on G’s journal alone. Loss of the required admissible evidence leaves dispatch uncertain.
+
+**Closure.** Credible mechanism at **CP1**, concrete method at **CP2**, and interval-wide proof for the claim at **CP6**. Apply PO-03 at **CP4** where a later dispatch depends on resolving possible prior dispatch.
+
+### H18-PO-10 — Evidence-store Route A
+
+**Requirement and criterion.** Establish origin and admission, then demonstrate uninterrupted store-held binding through authorized writing, sealing, and reader access. Where Route A remains unproven, the design may use a conforming Route B.
+
+**Admissible proof.** **S** for the store and binding design, **E** for deployed correspondence, and **X** for original write, seal, and read evidence.
+
+**Reject reliance if** continuity is claimed despite an unproved reopening, a substitution opportunity, or a broken binding.
+
+**Closure.** Credible route at **CP1**, method at **CP2**, deployment at **CP3**, and original continuity proof at **CP6**.
+
+### H18-PO-11 — Evidence-store Route B
+
+**Requirement and criterion.** Connect the retrieved artifact through a bounded method to pre-established protected provenance covering store/container identity, attempt and slot, origin/version, writer history, seal state, byte extent, integrity, and substitution exclusions.
+
+The relevant anchor cannot be modified through capabilities available to the artifact/slot writer, reader, sender, receiver, or another component whose account it validates. Protection must survive the capability-union analysis. Draft 4 §9.3 expressly permits store enforcement to establish and preserve that protection only through its fixed, assured interface. The interface cannot expose an override to the validated parties. The provenance claim still requires independent assurance of the anchor’s protection.
+
+**Admissible proof.** **S** for the protected provenance and assurance design, **E** for deployed protection, and **X** for original provenance and retention evidence.
+
+**Reject if** an unprotected hash or label substitutes for provenance, substitution remains possible, the protection claim is circular, or validated parties can modify the anchor through effective capabilities.
+
+**Closure.** Credible mechanism at **CP1**, reviewed method at **CP2**, deployment premise at **CP3**, and execution evidence at **CP6**.
+
+### H18-PO-12 — Source-write cutoff and source sealing
+
+**Requirement and criterion.** End ordinary dispatch and resolve E6/E7 under their adopted rules. Freeze all seven reporting dispositions while retaining separate execution state. Establish each source event record’s complete, partial, missing, or unavailable status. Fence the pre-seal source-write route before capturing the final L-S and source-manifest state. Record the frozen dispositions and known or uncertain production, then seal the designated source artifacts.
+
+A return after the fence stays confined until the declared X-L route can record it within the authorized window. No source artifact, including an E6/E7 record, may first appear after the sealing point. If source sealing cannot complete, the handoff remains unavailable.
+
+**Admissible proof.** **S** for the fence, ordering, and write authority, **E** for deployed enforcement, and **X** for the actual cutoff, capture, and seal.
+
+**Reject if** a writer can alter source state after capture, a late return mutates the ten-source transfer set, or the design claims successful handoff without the required seal.
+
+**Closure.** Credible mechanism at **CP1**, exact design at **CP2**, deployment premises at **CP3**, actual fence and seal at **CP5**, and reconciliation at **CP6**.
+
+### H18-PO-13 — Late-return confinement and X-L
+
+**Requirement and criterion.** Pre-establish event and attempt attribution for original returns from any slot. A late capability enters a non-invocable compartment and remains **confined, not proven closed**. It supplies no new P, L3, E6/E7 target, inspection, closure, cancellation, cleanup, retry, or recovery authority. E6/E7 must neither use a confined capability nor change its validity through aliasing, ownership, lifetime, or parent dependencies. If independence cannot be established, the affected terminal action is unavailable.
+
+Before its disposition freezes and within the original source-finalization bound, E6 or E7 may be evaluated under the adopted predicates. A late original return can establish completion for Q at that point only if PO-03 is satisfied, including the original authority and applicable adopted-method requirements for the exact observation when loss has occurred. Once the disposition is frozen and source sealing advances, a later return cannot reopen the slot or change the disposition.
+
+An authorized pre-fence source write may record an original late return in its still-available assigned record, without retrying failed production. After source sealing, only the declared receiver-side X-L route may record an eligible original late return within the fixed window. X-L occupies **one** existing attempt-level exception slot. Record origin, prior disposition, arrival interval, original result, confinement, and limitations. M-R/J-R account for it before final reconciliation. The route must satisfy PO-05 without relying solely on G’s account of an unprotected receiver write.
+
+Serial dispatch leaves at most one unresolved original subject operation at the stop. The capture window ends before the creation frontier closes. Seal X-L with its original observation or unavailable disposition. Returns outside the window remain unavailable as experimental observations. Capability confinement must continue within the established restrictions without undeclared evidence production.
+
+**Admissible proof.** **S** for the route, capability controls, windows, and admission design, **E** for deployed enforcement, and **X** for original late-return or unavailability evidence.
+
+**Reject if** the design requires more than one late-return object, an unassigned intermediary or buffer, an eighth subject event, a revived slot, post-frontier creation, or new authority from a late return.
+
+**Closure.** Credible route at **CP1**, exact design at **CP2**, enforcement premises and bounds at **CP3**, sealing and finalization at **CP5**, and reconciliation at **CP6**.
+
+### H18-PO-14 — Outcome classification, anti-selection, and stopping
+
+**Requirement and criterion.** Preserve supported, violated/adverse, uncertain, and unobserved/unavailable conclusions. Keep conflicting observations, their sources, and their dependencies separately visible. Keep dispatch and execution state distinct from original outcomes, admissibility, and claim conclusions.
+
+For E5, expected refusal supports only the narrow collision proposition with established premises. Preserve unexpected success, unexpected references, malformed or partial results, missing original outcomes after known dispatch, and possible dispatch with potential effects. Confine unexpected returned capabilities under PO-13. Apply the adopted fail-closed treatment to unexpected outcomes according to the applicable condition. Known unauthorized production, producers, or destinations remain violations for Chair disposition. Later classification or admission can address its own evidentiary question but cannot retroactively cure unauthorized production. Later review cannot repair or overwrite invalid experimental history or manufacture original evidence.
+
+Failure or uncertainty at E1–E4 ends ordinary dispatch. Completion, timeout, interruption, or another stop of the single E5 attempt ends ordinary dispatch regardless of result. Enforce the applicable continuity-conflict stop, H9 stop for unexpected or unreconciled potentially governed production, H11 capacity-failure treatment, and the dependent-dispatch stop on loss under Level-2 Evidence Contract §6, including applicable producer or observer loss. Any later positive reliance must meet PO-03 and §7. Such reliance grants no resumption or new dispatch authority. Unresolved material continuity conflict or completeness failure blocks overall positive qualification under the contract. Other unresolved issues block affected claims and actions according to their dependencies. Required stopping takes effect without waiting for reporting. The ordinary execution, source-finalization, original-return capture, and terminal/finalization bounds are fixed in advance and independent of outcomes. Only originally authorized bounded terminal actions may follow a stop.
+
+**A stopped or terminated attempt does not resume.** Later experimental activity is a new attempt. Except for separately governed predetermined replication under H4, the earlier attempt must have stopped, its complete or incomplete closure record must be available to the Chair, the Chair must have dispositioned it, and the later attempt must have new specific authority. Review, classification, new naming or domain labels, and new authority cannot revive the terminated live identity domain.
+
+Prohibit favorable-candidate and first-valid selection, first-success stopping, failure-triggered extra attempts, retry, repair, replay, replacement, and omission of adverse or conflicting lineage. Predetermined replication remains finite and outcome-independent, with every attempted repetition and applicable stop preserved.
+
+**Admissible proof.** **S** for the fixed schedule, classification and stop policy, windows, and attempt structure, **E** for deployed enforcement, and **X** for original outcomes, classifications, and stops.
+
+**Reject if** outcomes control the addition or favorable selection of attempts, adverse or conflicting evidence is removed or merged away, reporting delays a stop, retrospective classification cures unauthorized production, or a stopped attempt resumes.
+
+**Closure.** Credible feasibility at **CP1**, concrete rules and mechanisms at **CP2**, fixed outcome-independent windows and stops at **CP3**, enforced eligibility and stops at **CP4** or when triggered, and final classification and reconciliation at **CP6**.
+
+### H18-PO-15 — BP2 complete production-route coverage
+
+**Requirement and criterion.** Expand normal, failure, interruption, callback, helper, platform/framework, transport, receiver, exception, and finalization routes into a finite inventory. For each route declare the class, producer, permitted operation, destination, bounds, accounting owner, reservation, retention, and failure treatment, or provide an evidenced exclusion.
+
+M-S/L-S own source admission and production accounting. M-T/J-T account for transfer and intermediates. M-R/J-R account for receiver admission and production, including X-L. J-R and R-I/R-C support reconciliation. C uses the reconciled state and fixed final charges for closure. Route terminal and failure observations to the original owner or an already assigned bounded exception or terminal record. Admit and charge source-side inputs before source reliance. A shared input counts once only with proven continuity or sameness. A separately created copy receives a separate charge within the global eight-input allowance.
+
+**Admissible proof.** **S** for complete route analysis and independent assurance, **E** for actual configuration and applicability, and **X** for original production observations and reconciliation.
+
+**Reject if** the design presumes an exemption, treats unknown output as zero, requires an unassigned artifact, or relies solely on the evaluated producer or accountant for completeness.
+
+**Closure.** Criteria at **CP0**, credible route feasibility at **CP1**, complete design route map at **CP2**, applicable pre-execution reservations and premises at **CP3**, and actual reconciliation at **CP6**.
+
+### H18-PO-16 — Transfer integrity and completeness
+
+**Requirement and criterion.** Each designated sealed source artifact has at most one forward transfer. Keep declaration, start, emission, receipt, validation, acceptance for stated use, and retention distinct. Partial transfer is an original failure state.
+
+The design must **detect and report** applicable omission, truncation, partial transfer, duplication, reordering, conflicting versions, regeneration or re-derivation, replay or stale evidence, wrong-attempt substitution, and selective emission. If a required failure condition can neither be detected nor validly excluded, the transfer design cannot support positive qualification for that reliance. The affected conclusion remains uncertain or unproven.
+
+Require a completeness basis independent of the evaluated producer’s unsupported account and independent reconstruction from retained evidence without reopening live subjects. Preserve the distinction between original artifacts and authorized derivatives. Digest equality can support byte correspondence. It cannot establish acquisition truth, currentness, authority, identity, or completeness.
+
+**Admissible proof.** **S** for the sealed source set, correspondence method, and independent route/configuration assurance, **E** for applicable deployed transport and storage premises, and **X** for original emission, receipt, and validation observations.
+
+**Reject if** failure triggers retransmission, fallback storage, replacement representation, repair, or recapture, or if a sender-only log or regenerated record is accepted as proof of original completeness.
+
+**Closure.** Credible mechanism at **CP1**, concrete transfer design at **CP2**, deployment premises at **CP3**, and original transfer reconciliation at **CP6**.
+
+### H18-PO-17 — Finite finalization and creation frontier
+
+**Requirement and criterion.** Before the pre-evaluation frontier closes, establish E, C, T0, and T1 as fixed **8,192-byte** objects with original creation and extent evidence and full incurred charges. Establish and charge R-I/R-C before sealing. Distinguish known objects, uncertain creations, and unused reservations.
+
+The Draft 4 §11 sequence has eight steps.
+
+1. Freeze all seven subject-slot dispositions and seal source evidence, or report the handoff unavailable.
+2. Complete the bounded original-return capture window and seal X-L with its observation or unavailable status.
+3. Reconcile all pre-evaluation production and establish final-object charges.
+4. Close the creation frontier. No new governed artifact may appear afterward.
+5. Produce E and applicable T0 once.
+6. Produce C once, recording facts known at that point, including unresolved operations and residual capabilities.
+7. Acquire C’s original finalization result and record it once in T1.
+8. End after the T1 attempt or its unavailability.
+
+C records the unresolved operations, last known executing or holding components, open effect intervals, blocked terminal actions, and known or potentially arriving capabilities. C cannot certify its own future write or T1. T1 cannot certify its own write, synchronization, or delivery history. There is no T2. Missing T1 leaves closure incomplete or unproven. Final writes leave the established charges in force.
+
+**Admissible proof.** **S** for ordering, fixed-object establishment, timing, and accounting design, **E** for applicable deployed enforcement and retention, and **X** for original creation, extent, frontier, and finalization observations.
+
+**Reject if** the design creates a post-frontier object, introduces T2 or an equivalent, reproduces failed E/T0/C as substitute success, relies on C/T1 self-certification, or equates reporting closure with physical quiescence.
+
+**Closure.** Credible mechanism at **CP1**, exact design at **CP2**, exact bounds at **CP3**, frontier and sealing at **CP5**, and actual reconciliation at **CP6**.
+
+### H18-PO-18 — Native-result mapping and encoding fit
+
+**Requirement and criterion.** Demonstrate bounded, lossless representation of the original request, native result or error, malformed/partial/adverse observations, uncertainty, provenance, and framing. Show that the representation fits each applicable Draft 4 limit. The event-record envelope remains **4,096 bytes**.
+
+| Draft 4 §13 group | Bytes |
+|---|---:|
+| Header/version/status | 64 |
+| Attempt/authority/case/event correlation | 192 |
+| Bounded request | 512 |
+| Original result/error | 512 |
+| Subject/reference state | 768 |
+| Ordering/acquisition provenance | 512 |
+| Premise/coverage references | 1,024 |
+| Integrity/length/framing | 512 |
+| **Total** | **4,096** |
+
+**Admissible proof.** **S** for authoritative native semantics and exact encoding and size analysis, **E** for deployment-dependent result modes, and **X** for the actual native result.
+
+**Reject if** required original content can truncate, a summary substitutes for it, framing goes uncharged, or malformed and error cases lack a supported bound.
+
+**Closure.** Credible feasibility at **CP1**, native mapping and worst-case fit at **CP2**, exact deployment binding at **CP3** where required, and actual result reconciliation at **CP6**.
+
+### H18-PO-19 — Role-specific capacity and conditional envelope
+
+**Requirement and criterion.** Every role-specific object-count and byte bound in Draft 4 §12 is independently binding. The complete governed-support table applies.
+
+| Class | Maximum objects | Maximum bytes |
+|---|---:|---:|
+| Admitted inputs, including assurance and required history | 8 | 524,288 |
+| Seven source event records | 7 | 28,672 |
+| Acquisition journal and L-S | 2 | 16,384 |
+| Source manifest | 1 | 8,192 |
+| Transport intermediates, at most two distinct per transfer | 20 | 1,310,720 |
+| Ten byte-exact receiver copies | 10 | 53,248 |
+| J-T and J-R | 2 | 16,384 |
+| Platform/framework outputs | 4 | 262,144 |
+| Attempt-level exception records, including X-L | 4 | 262,144 |
+| R-I/R-C | 2 | 16,384 |
+| E/C | 2 | 16,384 |
+| T0/T1 | 2 | 16,384 |
+| **Total** | **64** | **2,531,328** |
+
+The H10 ceilings remain independently applicable at 128 objects, 65,536 bytes per object, and 4,194,304 aggregate bytes, subject to smaller authorization limits. The candidate profile assigns all 64 slots. Its 1,662,976 bytes of aggregate headroom under H10 confer no additional slot or role capacity. E/C/T0/T1 retain their individual fixed 8,192-byte extents. Each event record and its groups retain PO-18’s bounds.
+
+**Byte-exact receiver copies contain no free framing allowance.** Framing, metadata, serialization, or additional representations must fit another already assigned route or object. If they cannot, the architecture is insufficient. The same accounting applies to any buffering or communication used by X-L. Keep uncertain creation fully charged against the applicable reservation. Deletion, reuse, shrinking, packaging, or phase transitions provide no refund.
+
+Keep the disposable parent and reference compartments in their contextual roles. The E3 leaf and any E5-produced object are test subjects by origin. For the E5 product, report its relationship to E3 as same, distinct, or unresolved on the evidence. Conservative distinct treatment consumes no governed-support slot or byte reservation under H10/H11 and establishes no identity claim. Zero requested payload supplies no proof of actual extent. Separately materialized evidence about these objects is governed support.
+
+**Admissible proof.** **S** for complete worst-case route, encoding, and accounting analysis, **E** for applicable platform-output bounds or exclusions, and **X** for actual production reconciliation.
+
+**Reject if** only the aggregate fits, capacity moves between roles, a ninth global input, fifth exception object, third intermediate for any transfer, or 65th object is required, a copy or framing is uncharged, or the design relies on a refund. A required object beyond the assigned roles requires architectural revision. Compression, truncation, splitting, omitted history, and uncharged temporaries cannot cure a shortfall.
+
+**Closure.** Credible fit at **CP1**, design-level sufficiency at **CP2**, fixed reservations at **CP3**, applicable frontier accounting at **CP5**, and actual reconciliation at **CP6**.
+
+**CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT**
+
+### H18-PO-20 — BP3 provenance, binding, enforcement, and retention
+
+**Requirement and criterion.** For each relied-upon artifact identify origin, attempt/slot, Route A or B, writer and modification capabilities, applicable protected anchor, seal, integrity, retention conditions and duration, and dependent claim. Retention spans admission and acquisition through transfer, closure, required independent review, and applicable later proposition-level evaluation until separate release authority. Fix the interval and preservation conditions before execution. B5 G1 HOLD controls any B5-governed retention or system-agent noninterference premise.
+
+**Admissible proof.** **S** for the protection and retention design, **E** for actual protections and conditions, and **X** for the original evidence chain.
+
+**Reject if** retention rests on convention, a modifying actor is ignored, origin or binding is unestablished, sealing leaves prohibited modification available, or missing evidence is inferred retrospectively.
+
+**Closure.** Credible mechanism at **CP1**, exact design at **CP2**, required actual premises and retention conditions at **CP3**, and evidence-chain assessment at **CP6**.
+
+### H18-PO-21 — Platform-premise classification and acquisition
+
+**Requirement and criterion.** Classify every material platform premise by how and when it can be established.
+
+- **Class A — Pre-execution.** A premise required for lawful or safe first effect and establishable without performing that governed operation. Examples include deployed identity, configuration, protections, permissions, and required agent exclusions. Establish applicable facts under specific authority and predecessor gates by CP3.
+- **Class B — Execution-observable.** A fact obtainable only from the governed operation, such as actual native result or actual produced output. Before execution, reserve its route, define admissible observation and failure or uncertainty classification, show safe bounded behavior if the premise is false, and specify the applicable stop. Acquire the fact at the authorized event. Apply its consequence at the applicable decision point, including CP4 or CP5 where dependent dispatch or finalization requires it.
+
+**Admissible proof.** **S** for the premise inventory, taxonomy, and acquisition feasibility, **E** for Class A actual-state observations, and **X** for original Class B observations.
+
+**Reject if** an operation requires the fact it is meant to produce, a required pre-execution premise is deferred to execution, generic documentation substitutes for deployed correspondence, or platform inspection lacks authority.
+
+**Closure.** Credible feasibility at **CP1**, complete classification and concrete acquisition design at **CP2**, Class A evidence and Class B readiness controls at **CP3**, and Class B reconciliation at **CP6** with required earlier decisions enforced when triggered.
+
+### H18-PO-22 — P0, B5, and Approval B gate preservation
+
+**Requirement and criterion.** Mark applicable dependencies for each element as generic/pre-gate, P0-dependent, B5-dependent, Approval-B-dependent, or later operational. Apply the categorical §5 sequence to **all** V2-2B implementation authorization and execution, including apparently interface-independent elements. Only a separately authorized Human Chair governance decision can change that sequence.
+
+**Admissible proof.** **S** for the governing records and dependency analysis. **E/X** only through the applicable separately authorized gated processes.
+
+**Reject if** disposable evidence qualifies an actual Q parent, B5 G1 is presumed cleared, protected-interface facts are inferred before Approval B, or adoption or generic work is used to bypass a V2-2B predecessor.
+
+**Closure.** Identify criteria and dependencies at **CP0**, establish credible gate compatibility at **CP1**, and satisfy dependencies through their own processes before the affected CP2 or CP3 reliance. Apply the §5 sequence before V2-2B implementation authorization or execution.
+
+### H18-PO-23 — Design-level sufficiency and execution-level reconciliation
+
+**Requirement and criterion.** Establish two distinct conclusions. Design-level sufficiency requires a complete supported worst-case route and capacity argument. Execution-level reconciliation requires original evidence that the authorized attempt followed the approved design and preserved the required evidence.
+
+**Admissible proof.** **S/E** for applicable design and deployment assurance. **X** for actual production, transfer, capacity, and closure reconciliation.
+
+**Reject if** a paper bound stands in for actual production, a feasible design stands in for empirical H18 satisfaction, or reconciliation is assumed from design validity.
+
+**Closure.** Credible route and capacity feasibility at **CP1**, aligned with PO-15 and PO-19. Concrete design sufficiency at **CP2**. Execution-level reconciliation at **CP6**.
+
+### H18-PO-24 — Final review and authorization package
+
+**Requirement and criterion.** The implementation-authorization package identifies the exact design, backend-conformance showing, continuity methods, route and capacity analysis, premise schedule, applicable gates, stops, limitations, reviewer eligibility and disposition, and Human Chair decision. Execution requires its own authority and required pre-execution state.
+
+**Decision 0010 principle. Author ≠ Reviewer for the current revision.** A reviewer whose findings shape a correction may verify whether those findings were addressed. Correction-verification and qualifying independent acceptance serve separate functions. Establish formal reviewer eligibility from the current revision, scope, material contributions, review purpose, and required independence. Historical family participation alone is insufficient to determine eligibility.
+
+**Admissible proof.** **S** for the design and governance package, with **E/X** evidence incorporated only where applicable and lawfully obtained.
+
+**Reject if** recommendation is treated as authority, an author independently certifies their own current revision, correction-verification is presented as qualifying acceptance, or architecture or implementation approval is used as execution authority.
+
+**Closure.** Gate compatibility at **CP1** through PO-22. Concrete implementation-authorization package at **CP2** and separate execution authority and pre-execution state at **CP3**.
+
+## 7. Conditional method triggers
+
+| Trigger | Required treatment |
+|---|---|
+| Live cross-process or protection-boundary transfer of a subject capability | Establish an applicable separately reviewed and adopted continuity method and authority. Historical evidence handoff uses the H18 transfer and provenance requirements. |
+| Intended reacquisition after complete binding loss | Require a separately adopted bounded method and applicable original authority. Otherwise stop as applicable and record unavailability. A terminated domain stays closed. |
+| Backend-introduced pathname reopening, including with another surviving binding | Require the applicable adopted reopening method. Establish the reopened reference’s relationship to the original subject and namespace history. |
+| Unexpected loss of a relevant subject, writer, child, framework component, evaluator, or runner, or OS crash/reboot | Stop dependent dispatch. Preserve established facts, uncertainty, termination, and known partial effects. Grant no resumption, retry, repair, or replacement. Later positive reliance requires that the exact post-loss observation was included in the original authorized sequence and has the applicable adopted method under Level-2 Evidence Contract §6. Otherwise the observation remains unavailable for positive reliance. Runner restart cannot reopen the terminated attempt. |
+| Materially overlapping concurrent non-replication attempts | Preserve the adopted ambiguity disposition and require a separate Human Chair policy decision before authorization or dispatch. Preserve attribution, interference analysis, and applicable adverse lineage. Predetermined replication remains governed by H4. |
+
+For planned writer termination, Level-2 Evidence Contract §6 continues to require the originally specified post-writer-loss observation and continuity, with the applicable adopted method.
+
+## 8. Documentary comparison questions
+
+For each applicable obligation, record the candidate mechanism or property, authoritative semantic basis, evidence class, unresolved gated dependency, closure point, and exact rejection condition. Check whether the candidate triggers a separate continuity method, introduces a production route or additional trusted enforcer, fits every assigned count and byte bound, relies on a Class A or Class B premise, remains safe and bounded if a Class B premise is false, or depends on P0, B5, or Approval B.
+
+An architecture-supplied control requires realization through an authorized enforcing-set mechanism with concrete assurance. The architecture’s statement of the control defines the obligation.
+
+## 9. Minimum CP1 backend viability
+
+Apply the five-part CP1 standard to every applicable major obligation. The following mapping makes the minimum threshold explicit.
+
+| Viability area | CP1 obligations |
+|---|---|
+| Independent oracle and native mapping | PO-01, PO-18 |
+| BP1 mediation, non-dispatch, completion, and no overlap | PO-02, PO-03, PO-09 |
+| Effective capability and closed enforcing set | PO-04, PO-05 |
+| Subject and evidence continuity, protected provenance, and retention | PO-06 through PO-08, PO-10, PO-11, PO-20 |
+| Source fence, late-return confinement, and finite finalization | PO-12, PO-13, PO-17 |
+| Outcome classification, anti-selection, and stopping | PO-14 |
+| Production-route coverage, transfer integrity, and bounded representation | PO-15, PO-16, PO-18 |
+| Role-specific fit and credible design sufficiency | PO-19, PO-23 |
+| Premise acquisition and gate compatibility | PO-21, PO-22, with PO-24’s formal package due at CP2 |
+
+For each applicable evidence handoff, demonstrate a credible conforming Route A or Route B. Record legitimate empirical, execution, method-adoption, or governance dependencies with their later closure points. A known incompatibility or an unanswered present-stage compatibility question cannot satisfy the threshold.
+
+## 10. Draft 1 correction lineage
+
+| Finding | Treatment carried forward |
+|---|---|
+| PR1 | Separate CP4 eligibility from CP6 through-dispatch continuity. Preserve the original outcome and classify the intended proposition according to the established premise. |
+| PR2 | Keep positive non-dispatch proof, outcome and stop rules, and transfer integrity independently assessable under PO-09, PO-14, and PO-16. |
+| PR3 | Bind counts and byte limits role by role. Separate in-flight execution, admissible completion, and final reporting disposition. |
+| PR4 | Use a **five-part** CP1 standard with explicit gated-dependency treatment. |
+| PR5 | Distinguish pre-execution Class A premises from execution-observable Class B premises. |
+
+## 11. Prior non-blocking note lineage
+
+| Note | Treatment carried forward |
+|---|---|
+| PN1 | Platform substrate is an explicit assurance issue. A genuine enforcing-set expansion remains architectural. |
+| PN2 | One assigned X-L object, terminal independence, and the pre-freeze/post-freeze distinction remain explicit. |
+| PN3–PN4 | Source artifacts cannot first appear after sealing. Finalization has eight steps and bars C/T1 self-certification. |
+| PN5 | The full protected-anchor definition applies, including other components whose accounts the anchor validates. |
+| PN6–PN7 | Native mapping closes for design at CP2 and binds to the applicable source/deployment by CP3. The deployed enforcing set must correspond to the reviewed design. |
+| PN8–PN9 | Preserve B5 coupling. A conservative Route A assessment may lead to reliance on a conforming Route B. |
+| PN10–PN11 | Preserve categorical gate sequencing, the protected-subject exclusions, the concurrency trigger, and contract requirements as stated by their sources. |
+| PN12–PN13 | Architecture-supplied controls require concrete assurance. Review roles remain separate, and each PO identifies its applicable S/E/X evidence. |
+
+## 12. Current governance disposition
+
+| Item | Disposition |
+|---|---|
+| H18 Draft 4 | **ARCHITECTURALLY ADOPTED** |
+| H18 backend conformance and empirical satisfaction | **NOT ESTABLISHED** |
+| Conditional capacity | **CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT** |
+| B5 G1 | **HOLD** |
+| P0 candidates | **NOT QUALIFIED** |
+| Approval B | **UNAUTHORIZED** |
+| V2-2B implementation and execution | **UNAUTHORIZED** |
+| F/Q/O creation or qualification authority | **ABSENT** |
+
+---
+
+## A. Draft 3 → Draft 4 correction ledger
+
+| Item | Exact correction | Controlling source | Effect |
+|---|---|---|---|
+| **CV1** | PO-03 requires both original authorization for the exact post-loss observation and the applicable adopted method before evidence acquired after loss can resolve executor loss or possible dispatch. It excludes unplanned reap/exit status, non-dispatch arguments, and diagnostics as routes to restoring Q. PO-09, PO-13, and PO-14 apply the same requirement to withholding proof, pre-freeze late returns, and loss stops. Section 7 covers the full unexpected-loss scope and expressly retains the planned-writer-termination requirement. | Level-2 Evidence Contract §6, especially lines 216–218 and 226. Adopted H18 Draft 4 §§3–5. H3–H4. | Closes the register’s permissive reading of post-loss evidence. The governing architecture, termination rule, and non-recovering profile are unchanged. |
+| **PO-19 charging wording** | Replaces “conservative worst-case distinct charging” with “conservative distinct treatment” and explicitly excludes any governed-support slot or byte reservation for the E5 test subject under H10/H11. | Adopted H18 Draft 4 §12.1 and H5, H10–H11. | Clarifies the existing classification and accounting. It changes no inventory, byte bound, or identity claim. |
+| **U(k) wording** | States three separate negative conditions. PO-03 explicitly says U(k) remains false after possible dispatch is resolved because the slot became dispatch-uncertain. | Adopted H18 Draft 4 §§3.2, 4.1–4.2. | Grammar and consistency clarification. The eligibility predicates are unchanged. |
+| **PO-11 source attribution** | Attributes the fixed, assured store-enforcement interface and the prohibition on overrides directly to §9.3, while retaining independent assurance of anchor protection. | Complete adopted H18 Draft 4 §§8, 9.3. Section 9.3 expressly contains the condition. | Source-attribution clarification. The enforcing set and independent protection standard are unchanged. |
+| **PO-07/08 outcome labels** | Uses **uncertain** for the intended proposition where continuity is unproven or contradicted and **unobserved/unavailable** for a missing original observation. Retains the applicable conflict stop and directly adverse observations. | Adopted H18 Draft 4 §§4.3, 5.1, 9.1–9.2 and Level-2 Evidence Contract §8. PO-14 supplies the register labels. | Terminology harmonization. The substantive treatment of observations, claims, and stops is unchanged. |
+
+The exact Route B text was checked directly in the complete adopted H18 Draft 4. Claude’s Draft 3 review reported that its own assessment of this clause was source-dependent.
+
+## B. Regression check
+
+**No substantive change was made to CR1, CR2, CR3, CR5, CR6, or N1–N6.** This is the correction author’s consistency check.
+
+| Check | Result |
+|---|---|
+| **CR1 / PO-03 × PO-09** | Earliest technical reachability and the full positive non-dispatch proof standard remain in force. Post-loss proof can restore Q only through the exact originally authorized observation with the applicable adopted method. |
+| **CR2 / PO-03 × PO-14** | Applicable loss stops dependent dispatch. Any permissible later reliance meets Contract §6 and grants no resumption, retry, repair, replacement, or new dispatch authority. The H4 later-attempt and replication rules remain intact. |
+| **CR3** | Transfer detection and reporting, independent completeness and reconstruction, and the prohibitions on retransmission, fallback, repair, replacement representation, and recapture remain intact. |
+| **CR5** | The CP1 viability map and closure points remain intact. |
+| **CR6** | The categorical P0 qualification → separately authorized Approval B → interface-tailored V2-2B → later implementation or execution decision remains in force. |
+| **N1** | Every role-specific count and byte limit remains intact. PO-19 clarifies subject classification without reallocating capacity. |
+| **N2** | Fail-closed classification, retention of adverse and conflicting evidence, and adopted stops remain intact. CV1 makes the existing Contract §6 loss stop and reliance condition explicit. |
+| **N3 / PO-07 and PO-08 × PO-14** | Unproven and contradicted premises remain distinct. The labels align with PO-14, original observations are retained, and contradicted continuity still triggers the applicable stop. |
+| **N4** | `UNRESOLVED — GATED` still requires a genuine unavailable-evidence or authority dependency. |
+| **N5 / PO-03 × U(k)** | All six predicates and the seven-slot schedule retain their meaning. Resolving possible dispatch cannot make the same slot eligible for redispatch. |
+| **N6** | The CP1 standard remains five-part. |
+| **PO-03 × PO-13** | A late return can affect Q before freeze only under the original authority and, when loss has occurred, the applicable adopted method for the exact observation. Frozen slots remain closed. Reporting disposition remains separate from execution state. |
+| **PO-11** | The fixed, assured interface neither adds an enforcing component nor makes provenance self-certifying. |
+| **PO-17** | The eight steps, X-L’s single assigned exception slot, and the end after T1 or its unavailability remain in force. There is no T2. |
+
+## C. Capacity check
+
+The 12 governed-support rows match the adopted H18 Draft 4 limits and sum to **64 objects / 2,531,328 bytes**. The **1,662,976 bytes** of aggregate H10 headroom supply no object-count headroom within the candidate envelope, role-to-role capacity transfer, or free framing.
+
+The E5 product’s test-subject classification consumes no governed-support slot or byte reservation, including when its relationship to E3 is unresolved and treated conservatively as distinct. Evidence artifacts concerning it remain governed support.
+
+**CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT**
+
+## D. Governance check
+
+| Item | Disposition |
+|---|---|
+| B5 G1 | **HOLD** |
+| P0 candidates | **NOT QUALIFIED** |
+| Approval B | **UNAUTHORIZED** |
+| V2-2B implementation | **UNAUTHORIZED** |
+| V2-2B execution | **UNAUTHORIZED** |
+
+The correction was produced in chat using read-only source checks. No repository mutation, persistent file creation, or backend selection occurred. This correction grants no implementation or execution authority. Decision 0010’s distinction between correction-verification and qualifying independent acceptance remains in force.
+
+## E. Status
+
+**DRAFT 4 — NARROW CORRECTION CANDIDATE / NOT YET VERIFIED / NOT ADOPTED**
+
+**Recommended next action**  
+**Claude/Anthropic narrow correction-verification of CV1 and the four cleanup clarifications.**
+
+**STOP FOR HUMAN CHAIR REVIEW.**

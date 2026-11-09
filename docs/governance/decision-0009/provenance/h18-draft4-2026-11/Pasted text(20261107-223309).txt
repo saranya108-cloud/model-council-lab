@@ -1,0 +1,673 @@
+# V2-2B Concrete H18 Evidence Acquisition, Transfer, and Provenance Architecture — Draft 4
+
+**Decision:** 0009  
+**Human Chair:** Amy  
+**Date:** November 7, 2026  
+**Status:** Chat-only architectural correction candidate; not adopted  
+**Independent acceptance:** PENDING / NOT QUALIFIED  
+**Authority:** Draft 4 architectural corrections only
+
+## 1. Purpose, sources, and requirement status
+
+Draft 4 replaces Draft 3 as the proposed H18 architecture. It corrects O1–O3 from the supplied Claude Opus 5.5 formal review, incorporates NB1–NB11 where applicable, and preserves the earlier B1–B6 repairs.
+
+The controlling sources are:
+
+- Adopted H1–H20 and retained N1–N6.
+- Adopted V2-2B Level-2 Evidence Contract.
+- Exact preserved r2 and Final Amendment 1a.
+- Applicable adoption, lifecycle, sequencing, and gate records.
+- **Decision 0010 as amended November 7, 2026: Revision-Scoped Reviewer Independence and Role Rotation.**
+
+The amended Decision 0010 was inspected for this correction. Its current-revision and review-scope requirements replace Draft 3’s permanent-family exclusion language.
+
+The supplied Opus review reports that direct access to the r2/Amendment archive was denied and that it used the adopted contract’s preserved excerpts. That limitation remains part of the review provenance. This correction also draws on the exact normative clauses retrieved and hash-verified earlier in this drafting session; it does not represent Opus as having retrieved them.
+
+Labels used below:
+
+| Label | Meaning |
+|---|---|
+| **N — Normative** | An already adopted requirement |
+| **D — Architecture** | A proposed rule of this bounded profile |
+| **B — Backend conformance** | A defined obligation a concrete implementation must satisfy |
+| **I — Implementation choice** | A choice permitted within those obligations |
+| **E — Empirical evidence** | Evidence requiring later specific authority |
+
+The five identity categories remain separate: evidence artifact, live experimental object, reference, accounting, and later operational identity. Names, equal bytes, digests, or serialized labels do not independently establish any required identity relationship.
+
+No provision authorizes implementation, execution, observation, backend selection, or successor activity.
+
+## 2. Claim profile and prerequisites
+
+**D.** One attempt contains two predetermined cases:
+
+1. Observe one exclusive-create request for an absent ordinary-file leaf, its original result, and the relationship between its returned reference and the resulting regular-file entry.
+2. While the required bindings and namespace premises remain established, observe one predetermined exclusive-create request against that occupied leaf.
+
+Case 2 is not a retry. Failure or uncertainty in Case 1 withholds it.
+
+This profile does not establish general exclusive-creation qualification. It excludes link variants, races, allocation, complete zero-range coverage, crash survival, resource limits, operational custody, and universal absence of side effects.
+
+The semantic E5 oracle is refusal because the designated leaf is occupied. The independent expected-outcome source, its exact revision, native-result mapping, scope, and limitations must be bound **before the first governed effect**, together with the authorization, schedule, inventory, reservations, observation obligations, and stops. Observed results cannot determine the oracle retrospectively.
+
+No protected-interface information is needed to define this narrow profile. It does not settle full V2-2B scope, Approval B inspection, or interface-tailored qualification requirements.
+
+Actual F/Q/O, their actual parents, protected P/I/O, and P0 candidates are excluded as subjects and destinations.
+
+## 3. Execution state, in-flight operations, and stopping
+
+### 3.1 Two separate state dimensions
+
+Each subject slot has:
+
+- **Execution state:** what is known about whether its original operation may still execute or produce effects.
+- **Reporting disposition:** how the experiment finally records that slot.
+
+A final reporting disposition of “unavailable” does not mean the operation ceased. Closing the evidence report does not prove that all physical effects ended.
+
+### 3.2 In-flight state
+
+**D.** A slot enters **IN_FLIGHT** when dispatch crossed, or may have crossed, its governed boundary and no admissible original completion has established that the operation ended.
+
+Evidence may establish definite dispatch or only possible dispatch. Both prohibit later subject dispatch.
+
+A slot leaves the active in-flight state only when admissible evidence establishes that the original operation has ended. Normally this is its original terminal return, under a backend contract showing that the return ends the relevant effect interval. An acknowledgement of asynchronous submission is not such a return.
+
+Component loss does not automatically prove cessation. If delegated, kernel-mediated, or other effects may continue, the state becomes **EXECUTOR_LOST — EFFECT_INTERVAL_UNRESOLVED**, with the same prohibition on later subject operations. A hung or blocked component is not a lost component.
+
+Timeout, abandonment, cancellation intent, reporting interruption, or a decision to stop does not establish completion. This architecture grants no cancellation operation or completion probe.
+
+### 3.3 No overlap
+
+While any earlier subject operation remains in flight or has an unresolved continuing-effect interval:
+
+- No later subject slot may dispatch.
+- E6 and E7 may not dispatch.
+- No target or parent may be closed merely because a result has not appeared.
+
+A synchronous backend can satisfy this rule without asynchronous machinery. Its normal return must still have the required completion meaning.
+
+If the attempt stops while an operation remains in flight, later slots are frozen as unavailable/withheld according to the available evidence. A later return cannot reopen those slots.
+
+### 3.4 Bounded stopping and reporting
+
+Before the first governed effect, the profile must fix:
+
+- The maximum ordinary execution interval.
+- A finite source-finalization bound.
+- A finite original-return capture window.
+- A finite terminal/finalization bound.
+- The originally authorized mechanisms that enforce those bounds.
+
+These are outcome-independent bounds; a late result cannot extend them.
+
+A stop ends further ordinary dispatch immediately. Bounded terminal reporting may follow under its original authority. Neither stopping nor reporting waits indefinitely for an in-flight operation.
+
+If no surviving authorized mechanism can seal or report, those outputs remain unavailable. Their absence does not authorize restart, recovery, or delay of the stop.
+
+## 4. Total seven-event schedule
+
+### 4.1 Eligibility predicates
+
+Let:
+
+- **P** mean the E1 parent capability was admitted while its slot was open, remains held, and has an unambiguous binding.
+- **L3** mean the E3 subject capability was similarly admitted and remains unambiguously bound.
+- **A** mean the applicable acquisition prerequisites remain established.
+- **Q** mean no earlier subject operation is in flight or has an unresolved continuing-effect interval.
+- **U(k)** mean slot k has not already been attempted, become dispatch-uncertain, or received a final unavailable/withheld disposition.
+- **T(k)** mean the original bounded terminal authority, surviving execution path, safe origin-specific target, and applicable capability restrictions permit closure k.
+
+A reference arriving after its admission window closes never establishes P or L3 for a new terminal action.
+
+### 4.2 Event table
+
+| Slot | Operation | Dispatch eligibility |
+|---|---|---|
+| **E1** | Establish approved disposable-parent binding | Initial authority, inventory, assurance, and observation prerequisites; Q; U(1) |
+| **E2** | Observe designated leaf as absent | P; intact E1 acquisition; A; Q; U(2); no prior stop |
+| **E3** | One exclusive-create request | Established E2 absence; continuing P; no known intervening contradiction; applicable absence-preservation controls; A; Q; U(3); no prior stop |
+| **E4** | Observe E3-reference/leaf relationship | Successful E3 prerequisites; P; L3; A; Q; U(4); no prior stop |
+| **E5** | One predetermined collision request | E4 succeeded; P and L3 still held; no known contrary event; applicable continuity controls remain established; A; Q; U(5); no prior stop |
+| **E6** | Close only admitted E3-origin subject capability | Ordinary dispatch ended; L3; Q; T(6); U(6) |
+| **E7** | Close only admitted E1-origin parent capability | E6 completed, withheld, or unavailable; P; Q; T(7); U(7) |
+
+E6/E7 are fixed normal-completion actions where appropriate and bounded terminal capability-closure actions after an earlier stop. Their status is not left to an unspecified future design. A future authorization must cover these predicates exactly or the profile cannot begin.
+
+E7 does not require E6 success, but it requires Q and its own independently established eligibility.
+
+Failure or uncertainty at E1–E4 ends ordinary dispatch. **Completion, timeout, interruption, or other stop of the single E5 attempt ends ordinary dispatch regardless of its result.** The operation may nevertheless remain in flight.
+
+No slot is repeated or substituted. No eighth subject event exists.
+
+### 4.3 Dispatch conditions versus evaluation premises
+
+Pre-dispatch checks cannot prove facts about a future interval.
+
+For E3, evidence must ultimately establish that the absence observed at E2 remained the relevant premise through E3’s dispatch boundary. For E5, evidence must establish the required same-object and namespace continuity through its dispatch boundary.
+
+These later evaluations use only the originally declared observations, enforcement evidence, and histories. They do not authorize a new probe.
+
+If the premise is unproven, preserve the original result but classify the intended case conclusion as uncertain. For example, E3 refusal under an unproven absence premise is not, by itself, adverse evidence against exclusive creation.
+
+## 5. Original outcomes, late returns, and confinement
+
+### 5.1 E5 outcomes
+
+| Original outcome | Treatment |
+|---|---|
+| Expected refusal | Supports only the narrow collision-response claim, subject to proven premises |
+| Unexpected success | Adverse/violated result where the intended occupied-target premise is established; otherwise preserve the adverse observation with its premise uncertainty |
+| Unexpected reference | Record original provenance and confine it; no new subject operation |
+| Partial/malformed result | Preserve available original information and uncertainty |
+| Known dispatch, missing result | Dispatch known; outcome unavailable; continuing execution remains separately assessed |
+| Possible dispatch | Preserve dispatch uncertainty and potential effects |
+| Conflicting observations | Retain sources; stop; block dependent positive reliance |
+
+### 5.2 General late-return rule
+
+**D.** The pre-established confinement rule applies to returns from **any slot**, including E1 and E3, when the return arrives after:
+
+- Ordinary dispatch ended;
+- Its slot became uncertain or was finally marked unavailable;
+- Its capability-admission window closed; or
+- An applicable earlier stop.
+
+A return is attributed through its pre-established event/attempt association. No subject lookup is performed to discover its origin.
+
+Any returned capability enters a non-invocable compartment on the original return path. It cannot become a new P, L3, E6 target, or E7 target. It grants no inspection, closure, cancellation, cleanup, retry, or continuation.
+
+The record states **“confined, not proven closed.”** No process-exit, destructor, passive-expiration, or teardown mechanism is presumed or authorized.
+
+### 5.3 Bounded recording route
+
+Before source sealing, a late original return may be recorded in its still-available source record/journal, only through a predeclared write that is not a retry of failed evidence production.
+
+After source sealing, the source record is immutable. An original late return arriving within the fixed capture window is recorded through a pre-established receiver-side exception record **X-L**, assigned to **one of the existing four exception slots**.
+
+X-L:
+
+- Preserves origin event, prior disposition, arrival interval, original result, confinement status, and limitations.
+- Does not replace or rewrite the source record.
+- Does not reopen any subject slot.
+- Is accounted by M-R/J-R before final reconciliation.
+- Is an original observation route, not retransmission of a failed source artifact.
+- Must require no additional unassigned governed artifact or transport intermediary.
+
+Because subject dispatch is serial and freezes on unresolved execution, at most one original subject operation can remain unresolved at the stop. X-L is not an unbounded callback log. Any unexpected multiplication remains a completeness failure.
+
+The capture window ends before the final creation/accounting frontier closes. X-L is then sealed with its original return or an explicit missing/unavailable disposition.
+
+There is **no promise to retain a return arriving outside that authorized window**. The original slot and closure record already preserve its open effect interval and possible late return. Such a result remains unavailable to this experiment; it cannot silently create a new record, repair closure, or authorize later recovery. Its capability must still enter the already-established non-operational compartment.
+
+A backend must demonstrate that continued confinement does not create undeclared governed evidence after the window closes. Otherwise it does not conform to this profile.
+
+### 5.4 Terminal independence
+
+E6/E7 must neither use nor change the validity of any confined capability through aliasing, ownership, lifetime, or parent dependencies.
+
+If that independence cannot be established, the affected terminal action is unavailable. It is not replaced with another close or cleanup action.
+
+An original return can clarify what occurred. It cannot erase a stop, revive the domain, or establish an otherwise unavailable positive qualification.
+
+## 6. Source disposition and L-S sealing
+
+**D.** Source sealing follows this order:
+
+1. Ordinary dispatch ends through completion or stop.
+2. E6/E7 are either attempted once under their predicates or finally marked withheld/unavailable.
+3. Every E1–E7 slot receives a frozen architectural disposition, retaining its separate execution state.
+4. Each source event record is complete, partial, missing, or unavailable under the declared acquisition method.
+5. L-S and the source manifest record those dispositions and known/uncertain production.
+6. Source writing is closed; L-S and the designated source artifacts are sealed.
+
+“In-flight unresolved at cutoff” is a final reporting disposition, not a claim of operation completion.
+
+No subject slot may dispatch after source sealing. No E6/E7 event record may first appear after L-S was sealed. Subsequent permitted original-return observations use X-L; they do not mutate the ten-source transfer set.
+
+If source sealing itself cannot complete, successful source handoff is not claimed. Available evidence may be preserved only through existing bounded authority.
+
+C must identify every unresolved operation, its last known executing/holding component, open effect interval, blocked terminal actions, and known or potentially arriving capabilities. Reporting closure remains distinct from physical quiescence.
+
+## 7. Dispatch proof and complete mediation
+
+### 7.1 Evidence classifications
+
+Each slot distinguishes:
+
+- Proven withheld/not dispatched.
+- Dispatch uncertain.
+- Dispatch observed; original outcome unavailable.
+- Original outcome observed.
+- Material conflict.
+
+These classifications do not replace the in-flight state.
+
+A slot is proven not dispatched only where positive admissible evidence establishes that it could not have crossed the boundary throughout the relevant interval, **beginning when that slot first became reachable/eligible**, not merely after a stop decision.
+
+Absence of prepared, issued, observed, or completion records is insufficient.
+
+No universal durable pre-effect journal is imposed. A journal is a possible implementation technique. This non-recovering architecture may instead retain uncertainty where original evidence is lost.
+
+### 7.2 Scope of mediation
+
+All relevant subject-effect paths during the reliance interval must pass through G or be prevented by evidenced controls. The scope includes:
+
+- Direct, inherited, and aliased references.
+- Ambient pathname/namespace access.
+- Controllers, callbacks, helpers, subprocesses, and privileged intermediaries.
+- Framework mechanisms.
+- Independent indexing, backup, synchronization, autonomous-cleanup, and comparable system agents.
+
+An agent is not excluded merely because the experiment did not invoke it. “Outside the producer” is not a proof of noninterference.
+
+No disposable parent is presumed exempt from such agents. B5 G1 HOLD remains unchanged. This draft neither observes those agents nor opens B5 work or system-wide scanning.
+
+G’s journal cannot prove that no bypass exists. The assurance package must establish the relevant execution paths, restrictions, configuration, and interval coverage independently of the evaluated producer’s unsupported account.
+
+## 8. Enforcement standard, protection domains, and producers
+
+### 8.1 Effective technical capability
+
+**D.** An effective technical capability is an operation reachable through the component’s actual execution environment—including callable interfaces, ambient rights, inherited references, configuration, dynamic code, helpers, and available escape paths.
+
+A policy prohibition alone does not remove it.
+
+For ordinary components, prohibited capability must be absent through enforcement outside that component.
+
+For the designated enforcing components below, a broader underlying primitive may be restricted by the reviewed implementation/configuration. This exception is explicit and bounded; it is not a general “trusted code” exemption.
+
+### 8.2 Closed enforcing set
+
+The enforcing set is:
+
+1. **G:** slot eligibility, serial dispatch, deadlines, original-return attribution, capability admission, and confinement.
+2. **Store-enforcement mechanisms:** slot admission, writer/phase restrictions, size limits, binding, sealing, protected provenance state, and source/finalization cutoffs.
+3. **M-S, M-T, and M-R:** their declared production/admission gates and bounded accounting transitions. Their code does not independently establish completeness merely because they are in this set.
+
+For each, the assurance package must fix:
+
+- Exact implementation and relevant configuration identity.
+- Deployment correspondence and permitted entry points.
+- Permitted operations, targets, phases, parameters, and bounds.
+- Initialization, failure, return, timeout, callback, and teardown paths.
+- Raw primitive access and how it is confined to those paths.
+- Code loading, extension, debugging, credential, and helper behavior relevant to escape.
+- Relevant dependencies and their mutable configuration.
+
+Reviewed behavioral enforcement is acceptable only where unreviewed callers or components cannot bypass it, modify it, inject arbitrary execution, substitute configuration, obtain raw capabilities, or invoke an unbounded escape surface.
+
+For example, G may hold a parent primitive capable of operations beyond E1–E7. Conformance requires that the fixed G implementation exposes and executes only the permitted event paths; no other component may acquire that primitive or command arbitrary operations through G.
+
+An accountant may restrict its own bounded journal transitions through reviewed code. Its ledger still cannot serve as the sole proof that its producer had no unobserved production route.
+
+### 8.3 Non-enforcing components
+
+The dispatch controller, sender, receiver/validator, evaluator, and user-space/framework helpers receive only externally constrained capabilities.
+
+Their own promise, convention, or reviewed business logic is insufficient to remove a prohibited capability. They must not hold raw access allowing them to bypass G or store enforcement.
+
+Expanding the enforcing set is an architectural revision, not an implementation convenience.
+
+### 8.4 Co-location
+
+Components sharing an unseparated protection domain are evaluated as holding the **union of capabilities reachable within that domain**.
+
+Shared process, address space, credential, runtime, or memory access must therefore be examined as a potential shared domain. A documentation-level component split establishes no separation.
+
+Co-location conforms only if the resulting union satisfies every applicable restriction. Otherwise the backend must establish a genuine internal/external protection boundary or use a different arrangement. Merely calling both components “reviewed” does not create isolation.
+
+If purported internal isolation is relied upon, its implementation, enforcement, bypass paths, and deployment must be included in the assurance argument. Shared ambient credential rights remain relevant even where memory is separated.
+
+### 8.5 Capability matrix
+
+All creation requires a predeclared slot and applicable authority.
+
+| Component | Permitted effective surface | Prohibited surface |
+|---|---|---|
+| Authorization source | Chair-controlled external authority/disposition history | Experiment-selected or rewritten authority |
+| Dispatch controller | Read fixed schedule; submit bounded requests to G | Direct subject effects; evidence/store modification |
+| G | Eligible E1–E7; original acquisition; designated source writes; metadata-only X-L route; return confinement | Unscheduled operations, overlap, confined-capability use, arbitrary receiver/source modification |
+| M-S | Source admission/production accounting and own unsealed ledger | Accounting for future events as already observed; sealed-evidence mutation |
+| M-T | Transfer accounting and own journal | Extra transfers, destinations, or source mutation |
+| M-R | Receiver admission/production accounting and assigned records | Hidden creation, favorable replacement, source mutation |
+| Sender | Read established sealed source bindings; assigned intermediates | Source/copy rewrite, fallback, retransmission, destination substitution |
+| Receiver/validator | Assigned copies and unsealed receipt/validation state | Source mutation or modification of sealed copies |
+| Evaluator/closure | Read retained evidence; write fixed E/C/T0/T1 outputs as assigned | Subject access, original-evidence repair, new reporting objects |
+| Store enforcement | Exact admitted slot/phase operations and protected binding state | Caller-accessible override, arbitrary cross-store mutation |
+| Helpers/system producers | Only covered output routes and assigned slots | Unmediated subject effects or alteration of other evidence |
+
+Shared physical failure domains may be disclosed where compatible with the profile. Prohibited common modification rights remain nonconforming.
+
+### 8.6 Evaluated producer roles and independence
+
+| Evidence question | Producer whose account is being assessed | Independent basis required |
+|---|---|---|
+| Source observations | G and the bound subject-effect implementation | Exact acquisition-boundary assurance, original state observations, independent implementation/configuration evidence |
+| Source production completeness | G, M-S, and relevant source/framework producers | Fixed schedule, complete route analysis, externally established store/admission constraints, original production evidence |
+| Transfer completeness | Sender and transport mechanisms | Sealed source set, original emission/receipt correspondence, receiver observations, protected bindings |
+| Receiver production/completeness | Receiver/validator, M-R, and receiver-side mechanisms | Predeclared slots, source correspondence, store enforcement, independent route/configuration evidence |
+| Accounting/finalization | M-* and evaluator/closure producers | Original creation/extent evidence, cross-scope reconciliation, finite frontier, protected retention bindings |
+
+A co-located accountant is not an independent witness merely because it has a different name. Where co-location is otherwise conforming, independent assurance and original boundary evidence outside that producer’s unsupported account remain required. If unavailable, completeness is unproven.
+
+The threat model does not include arbitrary coordinated hostile kernel/hardware compromise. Ordinary privileged user-space components cannot be relabeled as foundation to escape these requirements.
+
+## 9. Subject and evidence continuity
+
+### 9.1 E2–E3 absence continuity
+
+The E2 absence observation must refer to the same parent binding and fixed leaf designation targeted by E3.
+
+The acquisition record and applicable controls must cover intervening creation, replacement, rebinding, and other relevant namespace changes through E3’s dispatch boundary.
+
+If this interval is unproven, preserve E3’s original result but do not evaluate it as if the absent-target premise were established.
+
+### 9.2 E3–E5 sameness
+
+E4 must establish:
+
+1. The returned reference originated in E3.
+2. The parent-relative observation uses the established E1 parent.
+3. Both references designate the same intended object during comparison.
+4. The required regular-file state is observed.
+5. No unresolved substitution, recycled identifier, or mere byte/name equality explains the relationship.
+
+Evaluation of E5 additionally requires continued parent/reference bindings, continued leaf-entry relationship, and coverage of intervening effects through dispatch.
+
+Holding a parent or leaf reference alone proves neither namespace continuity nor unchanged state.
+
+Backend identifiers and attributes are evidence components, not universal proof. No universal POSIX primitive or link-count-one requirement is added. Actual Q’s requirements are not silently applied to this disposable subject.
+
+### 9.3 Evidence handoff routes
+
+Each writer/store/reader handoff must use:
+
+- **Route A — uninterrupted binding:** established origin/admission and continuous store-held binding through authorized writes, sealing, and reader access; or
+- **Route B — verified slot binding:** a bounded method connects the retrieved artifact to pre-established protected provenance, including store/container identity, attempt/slot, origin/version, writer history, seal state, byte extent, integrity, and substitution exclusions.
+
+For Route B, “independently protected” means that the relevant anchor cannot be modified through capabilities available to the artifact/slot writer, reader, sender, receiver, or another component whose account it validates. Protection must survive the §8 union-of-capabilities analysis.
+
+Store enforcement may establish and preserve that protection only through its fixed, assured interface; it cannot expose an override to the validated parties.
+
+An unverified pathname lookup or matching digest satisfies neither route. Applicable reopening/live-transfer methods remain separately reviewed/adopted requirements. Loss of all bindings does not authorize reacquisition.
+
+## 10. Production scopes and admission ownership
+
+All scopes below belong to one experimental identity domain and one allocation.
+
+| Scope | Owner/record | Coverage |
+|---|---|---|
+| Source admission and production | M-S / L-S | Source-side reliance on profile, schedule, oracle and assurance inputs; source artifacts; known source production before sealing |
+| Transfer | M-T / J-T | Ten planned transfers, intermediates, receipt correspondence and failures |
+| Receiver admission/production | M-R / J-R | Receiver reliance on inputs, copies, X-L, and other assigned outputs |
+| Validation/reconciliation | J-R and R-I/R-C | Scope reconciliation, known/uncertain objects, reservations, final-stage establishment |
+| Evaluation/closure | C, informed by R-I/R-C | Fixed final-object charges and known evidence states |
+| Terminal/failure | Owning record first; bounded X-L/T0/T1 where assigned | Original failure/late-return/finalization observations without multiplying reports |
+
+Source-side relied-upon material is admitted and charged **before source reliance**, not retrospectively when the receiver starts.
+
+If source and receiver rely on one artifact, counting it once requires a valid sameness/continuity proof. A separately created copy receives a distinct charge within the global eight-input allowance. There are not eight input slots per domain.
+
+L-S never accounts causally for production after its seal. Later source-related observations use their declared transfer/receiver/terminal route or remain unavailable.
+
+Any platform/framework output has a predeclared producer, destination, accounting owner, bounds, and retention treatment. No later classification cures unauthorized production under retained N4.
+
+## 11. Finite finalization
+
+Before the pre-evaluation frontier closes, E, C, T0, and T1 must be established as fixed **8,192-byte** objects with original creation/extent evidence and their full incurred charges.
+
+R-I/R-C are likewise established and charged before sealing. Known objects, uncertain creations, and unused reservations remain distinct.
+
+The finite sequence is:
+
+1. Freeze all seven subject-slot dispositions and seal source evidence, or report the handoff unavailable.
+2. Complete the bounded original-return capture window; seal X-L with its observation or unavailable status.
+3. Reconcile all pre-evaluation production and establish final-object charges.
+4. Close the creation frontier. No new governed artifact may appear afterward.
+5. Produce E and applicable T0 once.
+6. Produce C once, recording facts known at that point, including unresolved operations and residual capabilities.
+7. Acquire C’s original finalization result and record it once in T1.
+8. End after the T1 attempt or its unavailability.
+
+C does not claim that its own future write or T1 succeeded. T1 does not certify its own write, synchronization, or delivery history. Its admissibility rests on the established provenance/binding/retention method.
+
+There is no T2. Missing T1 means incomplete/unproven closure, not reconstruction by later review.
+
+Final writes do not change the established fixed-object charges. Failure of E/T0/C does not authorize reproducing that artifact in a later record as a substitute success.
+
+A reporting deadline or creation frontier does not terminate an in-flight operation. C must preserve that distinction. Any original return after the capture window remains outside this experiment’s acquisition claim and cannot reopen finalization.
+
+If the backend cannot maintain this frontier without undeclared platform or framework output, conformance fails.
+
+## 12. Object inventory and conditional capacity
+
+### 12.1 Subject and contextual objects
+
+| Object | H5 classification | Bound, operations, and treatment |
+|---|---|---|
+| Disposable parent | Contextual object | One admitted parent; exact destination and relevant namespace/metadata bounds fixed before use. E1–E7 use only declared relationships. No directory creation or cleanup is implied |
+| Primary E3 leaf | Test subject | At most one E3-origin object under bounded creation semantics; requested payload zero. Relevant actual state is observed through the fixed profile. No deletion, truncation, replacement, or cleanup |
+| Potential E5-produced object | **Test subject, by origin as the product of E5** | At most one additional object under the declared operation bound; requested payload zero. Relationship to the E3 object is **same / distinct / unresolved** as evidenced. Conservative worst-case distinct treatment does not assert proven distinctness |
+| Reference/return compartments | Contextual control state | Fixed event-origin bindings, including late/uncertain returns. No callable interface for confined capabilities. Separately materialized evidence is charged in support inventory |
+| Other relevant runtime/namespace context | Contextual object or support as justified | Exact finite backend list required; no blanket exemption for ancestors, helpers, metadata, or runtime objects |
+
+The E5 object’s **classification is not pending**. Its identity relationship may be unresolved.
+
+Its predefined test-subject role does not consume a support slot. Observation records about it remain support. Any later use as a support store would require a different declared design and accounting; it is not authorized here.
+
+Zero requested payload does not prove actual zero size or bound malformed behavior. Unknown production/size bounds block qualification.
+
+### 12.2 Governed support
+
+| Class | Maximum objects | Maximum bytes |
+|---|---:|---:|
+| Admitted inputs, including assurance and required history | 8 | 524,288 |
+| Seven source event records | 7 | 28,672 |
+| Acquisition journal and L-S | 2 | 16,384 |
+| Source manifest | 1 | 8,192 |
+| Transport intermediates: at most two distinct per transfer | 20 | 1,310,720 |
+| Ten byte-exact receiver copies | 10 | 53,248 |
+| J-T and J-R | 2 | 16,384 |
+| Platform/framework outputs | 4 | 262,144 |
+| Attempt-level exception records, including X-L | 4 | 262,144 |
+| R-I/R-C | 2 | 16,384 |
+| E/C | 2 | 16,384 |
+| T0/T1 | 2 | 16,384 |
+| **Total** | **64** | **2,531,328** |
+
+The H10 ceiling remains 128 objects, 65,536 bytes per object, and 4,194,304 aggregate bytes, subject to smaller authorization limits.
+
+This profile has **no object-count headroom**: all 64 candidate slots are assigned. Aggregate byte headroom is **1,662,976 bytes**. Another required object triggers architectural revision, not silent use of H10’s larger object ceiling.
+
+The receiver-copy total assumes the copied bytes fit their assigned objects exactly. Additional framing, metadata objects, serialization artifacts, or copies must fit existing assigned routes; they cannot be attached free of charge.
+
+X-L replaces no event record and adds no slot. Any buffering or communication needed for its direct observation route must also fit the existing inventory. Otherwise the profile is not sufficient.
+
+Distinct intermediates remain separately charged. No deletion, reuse, shrinking, packaging, or phase transition refunds charges.
+
+Per-event/per-transfer failures use their original bounded records where authorized and still writable. The four exception slots are attempt-level roles, not a per-event allowance. Failed evidence writes are not retried to report their own failure.
+
+### 12.3 Verdict
+
+**CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT**
+
+The arithmetic is unchanged and internally consistent. Actual sufficiency still requires full input fit, encoded-size proof, route expansion, platform-output coverage/exclusion, late-return-route fit, and finalization-frontier conformance.
+
+No compression, truncation, splitting, omitted adverse history, or uncharged temporary artifact may close a gap.
+
+## 13. Evidence representation, transfer, and acceptance
+
+Each original observation binds attempt, authority, profile revision, event, producer/configuration, subject/reference, interval, exact request/result, partial effects, dispatch/execution uncertainty, premises, and artifact provenance.
+
+Event records retain the 4,096-byte envelope:
+
+| Group | Bytes |
+|---|---:|
+| Header/version/status | 64 |
+| Attempt/authority/case/event correlation | 192 |
+| Bounded request | 512 |
+| Original result/error | 512 |
+| Subject/reference state | 768 |
+| Ordering/acquisition provenance | 512 |
+| Premise/coverage references | 1,024 |
+| Integrity/length/framing | 512 |
+| **Total** | **4,096** |
+
+These are fit constraints, not truncation permission. Exact codec and digest remain bounded implementation choices.
+
+Every designated source artifact has at most one forward transfer. Declaration, start, emission, receipt, validation, acceptance for a stated use, and retention remain separate.
+
+Partial transfers are permitted as failure states. Physical atomic transfer is not universally required. Failure grants no retransmission, fallback store, replacement representation, or recapture.
+
+Evaluation separately reports:
+
+- Physical/structural validity.
+- Acquisition and transfer provenance.
+- Completeness and continuity.
+- Claim outcome.
+- Accounting and closure.
+- Unresolved execution and residual capability state.
+
+Missing, partial, truncated, stale, replayed, regenerated, wrong-attempt, reordered, conflicting, or ambiguous evidence remains visible. No favorable-candidate or first-valid selection rule applies.
+
+Matching digests support byte correspondence; they do not prove acquisition truth, completeness, currentness, authority, or same-object identity.
+
+## 14. Retention, interruption, and anti-selection
+
+The retention interval covers acquisition/admission, transfer, closure, required independent review, and applicable later proposition-level evaluation until separate release authority permits otherwise. Exact duration and preservation conditions must be fixed before execution.
+
+The profile contains no recovery path:
+
+- Producer or observer loss stops dependent dispatch.
+- Loss of G/accounting evidence leaves the relevant history uncertain.
+- Transfer/receiver loss grants no retransmission.
+- Binding loss grants no unverified reopening.
+- Host loss establishes no crash-survival result.
+- Later evidence loss blocks unsupported reliance.
+
+A closed report may contain an unresolved operation and confined residual capability. It must not claim physical quiescence, complete capability closure, or cleanup.
+
+The seven-slot denominator remains fixed. A missing observation is not proof of non-dispatch or non-creation. Original adverse outcomes and later authorized return observations remain linked without rewriting earlier dispositions.
+
+Applicable adverse lineage remains available. Predetermined replication remains finite and outcome-independent; no first-success stopping or failure-conditioned new attempt is authorized.
+
+Concurrency remains **C — genuine ambiguity**. Nothing here authorizes materially overlapping concurrent non-replication attempts.
+
+## 15. Corrected BP1–BP3 and dependency audit
+
+### BP1 — Mediation, serial execution, and truthful dispatch evidence
+
+**Architecture:** All relevant effects are mediated or prevented by evidenced controls; E1–E7 are serial; unresolved execution blocks subsequent subject operations; late returns cannot create new targets; non-dispatch requires positive interval-wide evidence.
+
+**Backend/evidence obligation:** Demonstrate the exact G implementation/configuration, permitted call surface, raw-capability confinement, absence of bypass, execution-completion semantics, deadline handling, and original observation routes.
+
+### BP2 — Complete production accounting and finite closure
+
+**Architecture:** Admission and production have scope-specific owners; source sealing follows frozen E1–E7 dispositions; X-L covers only the bounded original-return route; final objects are established and charged before the finite E/C/T0/T1 sequence.
+
+**Backend/evidence obligation:** Expand every route into the inventory, establish original creation/extent evidence, and demonstrate that source and finalization cutoffs prevent undeclared production.
+
+### BP3 — Proven bindings, effective enforcement, and bounded retention
+
+**Architecture:** Subject predicates and Routes A/B govern reliance; the enforcement standard distinguishes designated enforcers from other components; shared-domain unions cannot create fictitious separation; confinement and loss remain explicit.
+
+**Backend/evidence obligation:** Supply concrete adopted continuity methods, protected-anchor mechanisms, deployment/capability evidence, retention conditions, and limitations.
+
+| Item | Disposition |
+|---|---|
+| In-flight semantics, no-overlap, late-return handling, source sealing order | **ARCHITECTURALLY RESOLVED** |
+| Enforcement standard, enforcing set, co-location, evaluated producers | **ARCHITECTURALLY RESOLVED** |
+| E5-origin H5 classification | **ARCHITECTURALLY RESOLVED** |
+| BP1–BP3 architectural obligations | **ARCHITECTURALLY RESOLVED** |
+| Exact backend and codec mapping | **LEGITIMATE EXTERNAL DEPENDENCY** |
+| Platform premises and system-agent exclusions | **LEGITIMATE EXTERNAL DEPENDENCY** requiring specific observation authority |
+| Concrete continuity methods | **LEGITIMATE EXTERNAL DEPENDENCY** requiring applicable review/adoption |
+| Oracle content and native mapping | **LEGITIMATE EXTERNAL DEPENDENCY**; binding time is fixed before first effect |
+| Route expansion, assurance-input fit, late-return-route fit, actual capacity | **LEGITIMATE EXTERNAL DEPENDENCY** |
+| Exact bounded windows and retention interval | **LEGITIMATE EXTERNAL DEPENDENCY**; no indefinite extension permitted |
+| P0, Approval B, full V2-2B tailoring | **LEGITIMATE EXTERNAL DEPENDENCY**; no exception created |
+
+These are author assessments. A backend needing changed semantics or another object returns for architectural revision.
+
+## 16. Revalidation of B1–B6
+
+| Prior finding | Draft 4 preservation check |
+|---|---|
+| **B1** | E5 still terminates ordinary dispatch independently of outcome. In-flight guards prevent E6/E7 overlap. Late targets are confined. No eighth event |
+| **B2** | Complete mediation and positive non-dispatch proof remain; proof now covers the interval from first reachability |
+| **B3** | Source/transfer/receiver accounting remains partitioned. Source sealing now follows all slot dispositions. E/C/T0/T1 remains finite |
+| **B4** | Prohibited common modification rights remain prohibited. The enforcement standard and capability-union rule make the requirement assessable |
+| **B5** | Abstract same-object predicates and Routes A/B remain. E2→E3 continuity and Route B anchor protection are explicit |
+| **B6** | Non-support inventory remains explicit; the E5 product has a predefined test-subject classification. Support arithmetic remains **64 / 2,531,328** |
+
+These are correction checks by the author, not qualifying independent acceptance.
+
+## 17. Contribution lineage, review roles, and authority
+
+Under amended Decision 0010, eligibility concerns the current revision, changes under review, review purpose, and required independence—not permanent family exclusion.
+
+- **Principal Draft 4 author:** Astra / OpenAI family.
+- **Substantive current correction input:** Opus 5.5 / Anthropic O1–O3 findings and incorporated clarifications.
+- **Prior H18 architecture and correction input:** Google/Gemini B1–B6 findings incorporated through Draft 3. The supplied Opus review reports Gemini correction-verification activity.
+- **Upstream contributions:** earlier OpenAI/Anthropic specification and policy work, Moonshot concurrency material, and other recorded governing-source contributions.
+- **Prior review activity without established current authorship:** retain its attributed provenance; do not infer eligibility or ineligibility from a family label alone.
+
+Opus may verify whether O1–O3 were addressed. Because its findings materially shape this repair, that correction-verification alone is not the final independent adoption gate.
+
+The current OpenAI/Anthropic author–correction cycle requires a genuinely independent formal challenge under amended Decision 0010. Historical contribution elsewhere does not automatically exclude a reviewer; material current authorship or co-authorship does. No reviewer or next family is selected here.
+
+B5 G1 remains HOLD. P0 candidates remain NOT QUALIFIED. Approval B and V2-2B implementation/execution remain unauthorized.
+
+No repository file was created or modified. No reviewer was dispatched, backend selected, experiment executed, platform observed, operational candidate inspected, cleanup performed, or custody transitioned.
+
+## Correction Ledger
+
+### Blocking findings
+
+| Finding | Assessment and repair | Remedy not adopted or qualified | Remaining dependency |
+|---|---|---|---|
+| **O1 — In-flight operations and late returns** | **Accepted.** §§3–6 separate execution from reporting state, prohibit all later subject operations while effects may continue, freeze all seven dispositions before L-S sealing, generalize confinement, and assign bounded post-seal acquisition to existing X-L | Component loss is not automatically completion: delegated effects may remain. No indefinite waiting, cancellation, recovery, or unlimited late-reporting route is introduced. Returns outside the fixed window remain unavailable to this experiment, with residual state preserved | Completion semantics, bounded stop/capture enforcement, confinement, and X-L route fit |
+| **O2 — Enforcement standard** | **Accepted.** §8 defines effective capability, a closed enforcing set, exact assurance obligations, external restrictions for other components, capability unions, and evaluated producer roles | The enforcing set is not limited mechanically to G/store mechanisms: accounting mediators may enforce their declared gates through assured code, but their ledgers do not thereby become independent completeness proof. No documentation-only isolation is accepted | Exact reviewed implementations/configurations, deployment correspondence, escape analysis, and independent assurance |
+| **O3 — E5 object classification** | **Accepted.** §12 classifies it before execution as **test subject by E5 origin**, separately records same/distinct/unresolved identity, and retains conservative worst-case treatment | No provisional support classification is used for this predefined subject branch; no proven distinctness is inferred from conservative counting | Actual production/size bounds and identity evidence. No support-slot or arithmetic change |
+
+### Non-blocking notes
+
+| Note | Disposition |
+|---|---|
+| **NB1** | Incorporated: pre-dispatch eligibility is separate from interval predicates evaluated afterward |
+| **NB2** | Incorporated: withholding proof begins at first reachability/eligibility |
+| **NB3** | Incorporated: explicit E2→E3 absence continuity |
+| **NB4** | Incorporated: independent system agents require mediation or evidenced prevention; no observation or B5 progression |
+| **NB5** | Incorporated: E6/E7 must not use or invalidate confined capabilities |
+| **NB6** | Incorporated: oracle bound before the first governed effect |
+| **NB7** | Incorporated: Route B anchor protection excludes modification by validated parties and their shared domains |
+| **NB8** | Incorporated: M-S owns source admission at reliance time; cross-domain sameness/copy accounting is explicit |
+| **NB9** | Incorporated: exact-copy bounds, no object headroom, and revision requirement for another object |
+| **NB10** | Incorporated: narrow profile does not settle full Approval B/interface-tailored V2-2B scope |
+| **NB11** | Incorporated: amended revision-scoped Decision 0010 replaces permanent-family exclusion |
+
+## Adoption Readiness
+
+**READY FOR RENEWED FORMAL INDEPENDENT REVIEW**
+
+**Exact candidate:** “V2-2B Concrete H18 Evidence Acquisition, Transfer, and Provenance Architecture — Draft 4,” November 7, 2026, comprising §§1–17, the Correction Ledger, and this Adoption Readiness section.
+
+This is author-assessed readiness for review, not adoption, H18 satisfaction, backend feasibility, actual capacity sufficiency, or execution authority.
+
+OpenAI is the principal author. Anthropic’s O1–O3 findings materially inform the current corrections. Their author/correction-verification work cannot substitute for the genuinely independent formal gate required by amended Decision 0010.
+
+Renewed review must assess the exact candidate through a reviewer outside the current author–correction cycle, with supported identity, explicit current-revision contribution analysis, and the independence level required by the Human Chair. Earlier upstream contribution alone is not permanent disqualification. No reviewer is selected or dispatched.
+
+Highest-risk questions:
+
+1. Does every possibly continuing operation block E6/E7 and other later subject slots?
+2. Can late returns escape confinement, become new terminal targets, or generate unaccounted post-seal evidence?
+3. Do the bounded capture window and incomplete-closure rules preserve H3 without concealing unavailable adverse evidence?
+4. Can the named enforcing components’ callable surfaces and protection-domain unions be demonstrated without treating policy promises as isolation?
+5. Is independent completeness evidence sufficient when G/accountants also produce the records being assessed?
+6. Can X-L and all assurance, transport, platform, and terminal effects fit the unchanged 64-slot inventory?
+7. Do source sealing and E/C/T0/T1 still terminate without self-authentication, overlap, or later repair?
+8. Are the revised continuity, classification, and review-lineage rules faithful to the controlling sources?
+
+**Draft 4 returned to the Human Chair. Stop.**
