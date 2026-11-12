@@ -1,0 +1,178 @@
+## A. Reviewer eligibility
+
+I am the OpenAI/Codex reviewer serving the requested Astra review role. I reviewed **the complete Revision 4**, including its scope, dependency analysis, classification rule, recommendation, provenance statements, and authority exclusions.
+
+My earlier findings do not themselves make me a co-author. The current wording assessment is addressed in §I below.
+
+**Reviewed attachment SHA-256:**
+
+`fbd2790d9e58dad673ca996487ba63413233c82c7c07d0f80533a32062096c4c`
+
+This is an architectural-merits assessment. Formal qualifying status remains unresolved pending the identity and tier requirements in §N. I have not inferred an intervening Revision 3 review from the handoff’s account.
+
+## B. Overall disposition
+
+**ACCEPT WITH NON-BLOCKING NOTES**
+
+Revision 4 is architecturally coherent and may proceed to Human Chair consideration. All previously identified architectural findings and the five completion points are closed. **No further author revision is substantively required by this review.**
+
+This disposition does not establish qualifying cross-family acceptance under Decision 0010 while its identity and tier prerequisites remain unresolved.
+
+## C. Prior-finding closure table
+
+| Finding | Status | Determination |
+|---|---|---|
+| **B1** | **CLOSED** | Categories 1–3 preserve the distinction between existing narrow-profile work, broader candidates, and revisions to adopted semantics. |
+| **B2** | **CLOSED** | CP consequences and authority states are explicit; no governance instrument is selected prematurely. |
+| **N1** | **CLOSED** | Corrected capacity classifications remain intact. |
+| **N2** | **CLOSED** | Early access is treated as a provenance and evidentiary risk, not inevitable loss of demonstrable neutrality. |
+| **N3** | **CLOSED** | Materiality and intended reliance control evidence relevance; B5 remains one of several constraints. |
+| **R2-B1** | **CLOSED** | Backend population no longer determines CP2 applicability. Adoption’s substantive effect controls. |
+| **R2-N1** | **CLOSED** | Candidate-design analysis before selection is distinguished from selection and adoption; later detailed design is explicitly a preference. |
+| **R2-N2** | **CLOSED** | Architectural adoption, bounded assignment, and a future standing rule are assessed separately. |
+| **R2-N3** | **CLOSED** | Comparison, findings, recommendations, consequential dispositions, and selection are distinguished. |
+
+No Revision 4 regression requires reopening an earlier closure.
+
+## D. Revision-4 completion-point closure table
+
+| Completion point | Status | Determination |
+|---|---|---|
+| **1. Category 2 interim closure requirements** | **CLOSED** | Generally applicable Evidence Contract requirements and categorical sequencing remain controlling while broader closure arrangements are unresolved. |
+| **2. No label-based CP2 exemption** | **CLOSED** | Classification examines substantive commitments and downstream reliance, including mixed artifacts and uncertainty. |
+| **3. Feasibility integrity / no safety dilution** | **CLOSED** | Infeasibility must be reported truthfully; valid requirements cannot be weakened to preserve candidate count. |
+| **4. Approval B envelope non-authority** | **CLOSED** | The proposed work defines a future observation contract and expressly excludes observation, implementation, and execution. |
+| **5. Clause-2 rewrite/provenance treatment** | **CLOSED** | The supplied §F is a substantive author reformulation, independently assessed here. No additional wording repair is identified. Identity qualification remains separate. |
+
+## E. New blocking findings
+
+**NONE**
+
+## F. New non-blocking notes
+
+### R4-N1 — Preserve the distinction between architectural constraints and a settled realization when applying §F
+
+**Disposition: retained application caution; no author revision required.**
+
+Terms such as “arrangement,” “representation,” and “capacity distribution” must be read in §F’s full context and under its explicit Register-precedence rule.
+
+A requirement concerning logical roles, necessary evidence fields, or universal capacity limits does not automatically settle a concrete realization. Conversely, calling a selected realization a “requirement” does not exempt it from CP2.
+
+For a mixed artifact, an abstract provision can proceed separately only insofar as its adoption does not also settle—or depend on treating as settled—the deferred concrete answer. These are application cautions consistent with Revision 4’s own effect-and-reliance test.
+
+## G. Category-2 / Evidence Contract verdict
+
+**The interim treatment is sufficient for bounded candidate development.**
+
+Revision 4 neither silently extends the narrow-H18 ladder nor treats the absence of a broader ladder as permission to bypass existing obligations. Its “every generally applicable” requirement preserves the Evidence Contract beyond the illustrative list in §D.
+
+That includes applicable acquisition, continuity, provenance, inventory, accounting, adverse-lineage, stopping, and reporting requirements. Their relevance must be evaluated for the work actually proposed; listing them does not authorize acquiring the evidence they require.
+
+A broader candidate cannot establish a new closure ladder merely by proposing one. Any later governing adoption must identify its closure arrangements while preserving the existing categorical gates. [Evidence Contract §12](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md:352)
+
+I found no remaining Category 2 exception that permits avoiding an otherwise applicable evidence or sequencing requirement.
+
+## H. CP1 / CP2 verdict
+
+**The rewritten rule resolves R2-B1 and faithfully interprets CP2 when read under the Register.**
+
+It now correctly distinguishes:
+
+- Establishing obligations from settling a particular realization.
+- Candidate analysis from adoption.
+- Naming alternatives from committing to one.
+- Abstract provisions from concrete provisions within a mixed artifact.
+- Unresolved classification from permission to proceed.
+
+The listed considerations map to the Register’s concrete methods, routes, allocations, dependencies, and design-level conformance arguments. References to actual enforcing components and representations concern how those obligations are realized; they do not create additional checkpoints.
+
+The rule’s explicit precedence clause prevents its paraphrase from replacing the controlling standard. CP2 also retains the Register’s allowance to **resolve or expressly disposition** applicable matters without waiving prerequisites. It does not require prematurely obtaining evidence whose legitimate closure point is later. [Register §4](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/provenance/h18-draft4-2026-11/Pasted%20text%2820261108-190715%29.txt:53)
+
+Treating an unresolved classification conservatively blocks premature concrete adoption; it does not prohibit bounded candidate analysis or manufacture CP2 closure.
+
+## I. Clause-2 provenance verdict
+
+**No remaining clause-2 rewrite or additional independent check is identified for the supplied revision.**
+
+On the available revision record, §F is a substantive reformulation: it develops an effect-based classification procedure, a downstream-reliance check, mixed-artifact treatment, and an uncertainty rule. It is not merely my earlier wording with cosmetic edits.
+
+The retained category names, state names, and disposition labels are organizational or established terminology. Shared terminology and incorporation of reviewer findings do not, by themselves, establish substantive reviewer authorship.
+
+Accordingly, I can independently assess this author revision without treating historical reviewer influence as permanent disqualification. This conclusion concerns the supplied text and declared authorship; it does not certify unavailable generation history.
+
+No third family is required by this wording issue. The separate identity and tier prerequisites still apply. [Decision 0010, clauses 1–2](/Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md:21)
+
+## J. Backend-selection verdict
+
+**The distinctions and integrity rules are sound.**
+
+An analysis may find a candidate infeasible, or conclude that only one or no candidate remains feasible, without selecting a backend. It must not misstate feasibility to preserve nominal choice or dilute valid requirements to retain candidates.
+
+Removing a candidate from the authorized process, committing downstream work to one candidate, and selecting a backend remain consequential decisions requiring the appropriate authority. Recommendations remain advice unless their authorized governance role gives them a different effect.
+
+The selection-in-effect safeguard preserves this distinction even where a report avoids selection terminology. Human Chair authority and the required CP1 showing remain intact.
+
+## K. Approval-B envelope verdict
+
+**The envelope is a coherent Category 2 candidate that may be developed before P0 under a bounded assignment.**
+
+It can specify outputs, observation classes, evidence fields, limits, stops, and unresolved prerequisites without obtaining protected facts. Its stated exclusions preserve the difference between designing an observation contract and performing the observation.
+
+Plan §J remains intact: Approval B follows P0 and the other applicable predecessors. No protected read, platform-premise acquisition, B5 observation, or B5 host-observation-envelope design follows from this architecture. [Plan §J](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-RETENTION-V2-M0-IMPLEMENTATION-PLAN.md:428)
+
+No inherent need for P0 results in the bounded read itself was identified. That remains a dependency assessment, not qualification of a specific inspection method. Early-read provenance and contamination concerns are appropriately classified, and Option 1 does not move the read earlier.
+
+## L. 64-object-envelope verdict
+
+**Prior N1 remains closed.**
+
+Fresh arithmetic confirms **64 objects / 2,531,328 bytes**, with **1,662,976 bytes** below the aggregate H10 ceiling.
+
+Revision 4 preserves:
+
+- No additional slots or role-transfer capacity.
+- No presumed backend fit.
+- Charged framing and metadata.
+- Unresolved platform-output sufficiency.
+- Confinement of these quantities to the existing narrow profile.
+
+Category 2 inherits none of this envelope’s acceptance or quantities. **CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT** remains the governing capacity disposition.
+
+## M. Governance verdict
+
+**Option 1 is architecturally safe as a sequence of separately authorized documentary work followed by unchanged gates.**
+
+A single bounded Category 2 assignment can be authorized without changing CP1, CP2, Plan §J, or creating standing Category 2 authority. Candidate preparation remains distinct from governing adoption.
+
+Adopting this architectural distinction does **not inherently require an additional special governance instrument beyond normal, explicit Human Chair architectural adoption following qualifying review**. The adoption must identify the exact revision and its limited effect. It does not itself authorize the first work assignment, repository recording, or operational activity.
+
+A future standing rule would require separate consideration of its actual effects. Revision 4 correctly declines to decide that instrument’s classification in advance.
+
+No weakening was found in no retry, no redispatch, no overlap, permanent `U(k) = false`, frozen-slot semantics, post-loss controls, late-return confinement, accounting, provenance, reporting/execution separation, or the adopted non-dispatch-resolution limits. Existing backend-qualification and protected-information boundaries remain intact.
+
+## N. Identity / tier / qualification verdict
+
+**Architectural merit can receive the disposition in §B while formal qualifying acceptance remains PENDING / NOT QUALIFIED.** The distinction must remain explicit; provisional Routine review cannot be represented as satisfying a formal adoption gate.
+
+Before qualifying acceptance:
+
+1. **Author identity:** supply non-model-generated session or provider evidence tied to the authoring session that supports the actual model identity and underlying family. Another model-authored assertion or the string `claude-fable-5-2` alone does not independently resolve the current limitation.
+2. **Reviewer record:** record the observed OpenAI/Codex identity and available runtime evidence accurately; do not infer an exact model identity from the “Astra” role label.
+3. **Tier:** Amy assigns the tier. Because this artifact is intended for architectural adoption, **Formal Adoption/Qualification** is the appropriate tier to consider. High-Risk classification and any extra review remain Chair determinations.
+4. **Disposition record:** retain the exact artifact hash, authorship, review scope, eligibility rationale, closure tables, clause-2 determination, and final qualification status.
+
+No third family is automatically required. [Decision 0010, clauses 7–11](/Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md:32)
+
+Fresh repository checks confirmed the stated branch, HEAD and cached tracking ref at `34924aa5e2de73250f9e88008f52cbc361066e4b`, `f212dd1` ancestry, matching pinned hashes and byte counts, and the same 24 working-tree entries with nothing staged.
+
+The two sequencing documents remain untracked preserved sources. Their status does not revoke adoption; material reliance should preserve exact versions and adoption provenance. The second-hand sequencing exception is not relied upon. No live remote verification occurred.
+
+## O. Recommended next Human Chair action
+
+**Amy should consider resolving the author-identity evidence and assigning the review tier for this exact pinned Revision 4, then completing the formal qualification record before architectural adoption.**
+
+No further architectural correction is requested. After qualification and adoption, Amy may separately consider one precisely bounded Category 2 candidate-development assignment. No standing rule is needed to begin that bounded work.
+
+This review grants no P0 qualification, Approval B or envelope execution, protected read, CP1/CP2 closure, new closure-ladder authority, backend selection or elimination, concrete-design adoption, implementation, execution, F/Q/O authority, B5 progression, protected or platform observation, cleanup, standing Category 2 authority, or repository mutation.
+
+No files were changed, protected artifacts inspected, subagents used, or tests or experiments run.

@@ -1,0 +1,303 @@
+# Decision 0009 — Sequencing architecture report: P0 → Approval B → V2-2B (Revision 4)
+
+**For:** Amy, Human Chair · **Date:** November 12, 2026 · **Status:** non-adopted candidate, chat-only, architecture-only, for whole-revision independent review
+
+## A. Baseline and provenance limits
+
+**Baseline (local and cached only).** I re-ran the read-only checks for this revision and found no divergence.
+
+- Local branch is `m1-live-adapter-dev`; local HEAD and the cached tracking ref are both `34924aa5e2de73250f9e88008f52cbc361066e4b`.
+- `f212dd1` is an ancestor of HEAD.
+- The four pinned artifacts match their recorded digests and byte counts.
+- The working tree still has 24 entries, none staged.
+- I did not fetch, so the live remote is not verified.
+
+**Provenance limits.**
+
+- **Untracked sequencing sources.** The Retention V2/M0 adoption record and the Implementation Plan are untracked working-tree files. Checkout of `34924aa` does not supply them. That status does not revoke your decisions, and committing them would not prove adoption. Any governance action relying on their exact wording should identify and preserve the exact versions and the adoption basis.
+- **Sequencing exception.** The V2-0 to V2-2A exception appears in the inspected record only as a secondary account. This report does not rely on it; the adopted H18 and Register material carries the argument.
+
+## B. Model identity and authorship
+
+- **Identity:** my runtime identifies me as Fable 5.2, model ID `claude-fable-5-2`, provider Anthropic. This is self-reported by the session. Independent lineage evidence is external to this report.
+- **Authorship:** Fable authored the original report and Revisions 2, 3 and 4. Astra/OpenAI supplied review findings only.
+- **Tier:** the Decision 0010 tier remains unassigned, so formal qualifying status is unresolved. These are prerequisites for later qualifying adoption; this report cannot repair them.
+- **Reviewer and handoff wording (Decision 0010 clause 2):** I wrote the classification rule in §F in my own terms for this revision. That rewrite is intended to resolve the wording-provenance concern for that passage, subject to Astra's independent determination. I do not certify clause-2 compliance. Category names, the state names in §G and fixed disposition labels are still reproduced as labels.
+
+## C. Executive disposition
+
+**CURRENT SEQUENCE PARTLY TECHNICAL / PARTLY GOVERNANCE**
+
+- **P0 → Approval B** is the adopted ordering, set directly by Plan §J. I identified no inherent technical requirement for P0 results in the bounded read itself.
+- **Approval B → tailored V2-2B** is a real protected-information dependency for claims about actual probe interfaces and for selecting material cases.
+- **Existing pre-gate permission is narrow.** Register §5 covers generic narrow-H18 work only. Broader V2-2B architecture is technically possible without gated facts, but has no standing authority.
+- **Execution has several independent blockers.** B5 is one, shared with P0.
+
+## D. Authority/scope map
+
+| # | Scope | Current authority |
+|---|---|---|
+| 1 | **Category 1 — adopted narrow-H18 work:** backend-neutral criteria, proof-obligation analysis, documentary comparison, generic continuity-method architecture, generic route and capacity reasoning, all inside the two-case profile | Contemplated by Register §5 where separately authorized and free of protected facts. The Register itself confers no authority. |
+| 2 | **Category 2 — broader pre-gate candidate architecture:** anything outside the narrow profile, including the Approval B inspection-envelope architecture | No standing authority. Developed only under a bounded assignment; governs only after applicable review and your adoption. |
+| 3 | **Tailored work** | After Approval B only. |
+| 4 | **Concrete design** | Adoption only after applicable CP2 closure. |
+| 5 | **Implementation** | Behind the categorical sequence, CP2 and a separate authorization. |
+| 6 | **Execution** | Behind CP3, its own authority and all premises. |
+
+**Category 3** is any change to adopted narrow-profile semantics or limits: the seven-event schedule, the 64-object envelope, conformance acceptance, adopted constants. It requires architectural revision and inherits no prior acceptance. Option 1 contains none.
+
+**Test for "generic".** I define it by reliance and effects, not by label. A pre-gate candidate must not:
+
+- use protected-interface facts or predict actual probe behavior;
+- assume actual transport, encoding, filesystem, cleanup, platform-output or capacity facts;
+- acquire empirical premises;
+- qualify or select a backend;
+- carry narrow-profile acceptance outside that scope.
+
+**Rules that govern Category 2 before it has its own ladder.** The narrow-H18 closure ladder does not extend to broader scope by implication. That leaves no gap in governance or evidence. Until you adopt a closure ladder for broader scope, Category 2 work stays under every generally applicable Evidence Contract requirement and under the categorical V2-2B sequence. In particular, the missing ladder gives no route around:
+
+- the Contract's requirements on how evidence is acquired, transferred and relied on;
+- materiality judged proposition by proposition;
+- the gates on protected information;
+- the categorical V2-2B order;
+- the separate decisions that authorize implementation and execution.
+
+## E. Dependency map
+
+| Edge | Finding | Class |
+|---|---|---|
+| P0 → Approval B | Adopted ordering under Plan §J. No inherent dependency identified for the read itself. The record does not state the reason for the order. This does not show any particular inspection envelope is safe before it is designed. | Governance |
+| Approval B → tailored V2-2B | Needed for claims about actual interfaces and for choosing which cases are material. Approval B does not resolve backend feasibility, continuity, capacity or platform premises. | Protected information; evidence relevance |
+| P0 → broader candidate architecture | No inherent dependency for abstract work with no P0-gated reliance. Absence of dependency is not authority. | None technical |
+| P0 → V2-2B evidence relevance | Whether the disposable root must resemble the eventual Q parent depends on the reliance intended for each proposition. | Evidence, proposition-specific |
+| B5 → evidence and execution | Activity relying on B5-governed characterization or exclusion of autonomous agents stays blocked by G1 HOLD. Reordering architecture work does not discharge it. | Technical and evidence |
+| CP1 → backend selection | Credible feasibility for every applicable obligation comes first. | Adopted closure requirement |
+| CP2 → concrete-design adoption, implementation authorization | The Register's CP2 matters must be resolved first; PO-22 requires each gated dependency to close through its own process. | Adopted closure requirement |
+
+Whether a different mechanism makes a different proposition is decided by materiality under Evidence Contract §2, case by case.
+
+## F. CP1 / CP2 analysis
+
+CP1 and CP2 are requirements, not permissions. Absence of protected-fact reliance satisfies neither and authorizes nothing. Both are defined in the Register for the narrow profile; §D states what governs broader scope in the meantime.
+
+**Classification rule: abstract adoption or concrete-design adoption.** The rule looks at what adopting a provision would do, never at what the provision is called.
+
+- **Abstract adoption** settles *what* must be true. It establishes obligations, properties, limits, evidence requirements, or design questions deliberately left open.
+- **Concrete-design adoption** settles *how* an obligation will be met, or lets later work treat a particular answer to "how" as settled.
+
+Apply it provision by provision:
+
+1. **Read for effect.** Set the provision's label aside. Calling something a requirement, an alternative, a symbolic binding, an abstract interface or an outcome constraint describes it; the label exempts nothing.
+2. **Ask what adoption would settle.** The provision is concrete design if adopting it would do any of these:
+   - choose the particular procedure or component by which something is done or enforced;
+   - fix the path that evidence or capabilities travel, or the arrangement of the parts that handle them;
+   - fix the representation in which results or evidence are expressed or stored;
+   - identify which actual components carry the enforcing responsibilities;
+   - distribute capacity among the parts of a particular design, as distinct from stating a limit every design must respect;
+   - make the project depend on a particular external component, version or behavior;
+   - accept a particular argument that a given design conforms.
+3. **Ask what later work could build on.** The provision is also concrete design if, once adopted, later work could properly treat any answer of the kind in step 2 as decided and proceed on it.
+4. **Result.** If step 2 or step 3 applies, applicable CP2 closure is required before adoption. If neither applies, the provision is abstract and may be adopted as architecture without closing CP2.
+5. **Mixed artifacts.** Classify each provision separately. Abstract provisions may proceed; concrete ones wait for CP2.
+6. **Doubt.** Treat an unresolved classification as concrete design until you resolve it.
+
+The rule is meant to capture the substance of the Register's CP2 text, which names concrete methods, routes, capacity allocations, dependencies and design-level conformance arguments. Where my wording and the Register differ, the Register controls.
+
+Two factors inform the rule without deciding it:
+
+- **Open alternatives.** Keeping materially different compliant realizations open supports an abstract classification. It is not required, and listing alternatives does not rescue a provision that settles on one.
+- **Backend population.** The number of known compatible backends does not decide classification. A realization that many backends share is still a realization. An obligation that one known candidate satisfies, or none, is still abstract. A small population is a prompt to check the provision under §G.
+
+**Earliest position of each kind of work.**
+
+| Work | Earliest position |
+|---|---|
+| Narrow-H18 criteria and obligation analysis | Before CP1 closure |
+| Narrow-H18 documentary backend comparison | Before CP1 closure; it produces the CP1 showing |
+| Broader candidate requirements architecture | Before CP1 closure; upstream of any ladder for that scope |
+| Approval B inspection-envelope architecture | Before CP1 closure; no backend content |
+| Bounded candidate-design analysis | Not categorically barred before selection by the Register; closes nothing |
+| Backend selection | Only after CP1 closure and your decision |
+| Concrete-design adoption | Only after applicable CP2 closure |
+| Tailored V2-2B | Only after Approval B |
+| Harness code | Only after implementation authorization |
+| Execution | Only after implementation authorization, CP3 and its own authority |
+
+**Candidate design before selection.** The Register requires CP1 before selection and CP2 before concrete-design adoption or implementation authorization. I found no categorical Register rule that bars bounded candidate-design analysis before selection, and CP1's five-part standard itself calls for a named candidate mechanism per obligation. As a work-order preference, not a Register rule, I recommend leaving detailed design until after selection. Candidate preparation does not close CP2 or authorize implementation.
+
+**Three states stay distinct.**
+
+- **Candidate development:** bounded assignment, labeled non-adopted, no governing force.
+- **Architectural adoption:** your act after qualifying review; it makes abstract provisions governing and grants no authority.
+- **Implementation authorization:** requires CP2, the categorical sequence and a separate decision.
+
+**Adopting backend-neutral architecture before CP2** is possible. The November 7 and 8 adoptions of H18 Draft 4 and the Register did this, with backend conformance recorded as not established. The boundary is the classification rule above.
+
+**Option 1 requires no modification to CP1 or CP2.** It contains no backend selection and no concrete-design adoption. If broader architecture is later adopted, that adoption must state which closure ladder governs it.
+
+## G. Backend comparison / recommendation / selection boundary
+
+| State | What it is | Authority |
+|---|---|---|
+| **Documentary comparison** | Candidates compared against obligations | Needs a specific assignment; carries no selection authority |
+| **Feasibility finding** | A determination that a candidate does or does not satisfy an obligation | A finding; not selection |
+| **Recommendation or ranking** | Advice to you, where the assignment asks for it | Not selection unless governance says otherwise |
+| **Consequential disposition** | Removing a candidate from the authorized process, or making later work depend on one candidate | Requires appropriate authority; analysis alone cannot do it |
+| **Backend selection** | Your decision after the required CP1 showing | Human Chair only |
+
+**Selection in effect.** A report can select without using the word. It does so if it commits downstream work to one candidate, stops analysis of the others on its own initiative, or sets a requirement shaped to fit one candidate. Under Option 1, any report that would have that effect must stop and return the question to you.
+
+**Truthful feasibility.** Where the evidence shows a candidate cannot meet an applicable obligation, the analysis says so. A candidate is not reported as feasible in order to keep more than one name on the list. The finding is still a finding; removing the candidate from the process and choosing among the rest remain your acts.
+
+**Requirements come before candidate count.** A sound safety, evidence, continuity, capacity or governance requirement is not relaxed so that more backends pass. The number of surviving candidates yields to the adopted requirements. A report may accurately conclude that one candidate, or none, is feasible at present, and that conclusion is not a backend selection.
+
+## H. V2-2B decomposition
+
+| Category | Possible now | Current authority | Further requirement | Protected facts | CP consequence |
+|---|---|---|---|---|---|
+| Narrow-H18 analysis (Cat. 1) | Yes | Contemplated, not authorized | Specific assignment | None allowed | Feeds CP0/CP1; closes nothing |
+| Narrow-H18 backend comparison (Cat. 1) | Yes | Contemplated, not authorized | Specific assignment | None allowed | Produces CP1 showings; no selection |
+| Broader requirements architecture (Cat. 2) | Yes | None | Bounded assignment, review, adoption | None allowed | None; §D interim rules apply |
+| Approval B envelope architecture (Cat. 2) | Yes | None | Bounded assignment, review, adoption | None allowed | None |
+| Changes to adopted profile (Cat. 3) | Yes | None | Architectural revision with full review | None allowed | Reopens affected obligations |
+| Candidate-design analysis | Yes, in bounded form | None | Bounded assignment; §G limits | None allowed before Approval B | Closes nothing |
+| Backend selection | No | None | CP1 closure, your decision | Per candidate | Requires CP1 |
+| Tailored V2-2B | No | None | Approval B first | Required | Supplies Approval-B-dependent CP2 inputs |
+| Concrete-design adoption | No | None | Applicable CP2 closure, review, your adoption | As applicable | Requires CP2 |
+| Implementation | No | None | Full sequence, authorization | As applicable | After CP2 |
+| Execution | No | None | CP3, own authority, premises | As applicable | CP3 to CP6 |
+
+Still excluded outright: designing the B5 host-observation envelope and acquiring platform premises.
+
+**Approval B inspection-envelope architecture.** This work writes the contract for a future observation and observes nothing. Under a bounded assignment it may define:
+
+- the outputs the inspection must produce;
+- the kinds of observation that would be allowed;
+- the fields its evidence record must contain;
+- its limits in scope, size and duration;
+- the conditions under which the inspection must stop;
+- prerequisites still open;
+- what must stay unknown until the gate opens.
+
+It does not authorize:
+
+- carrying out Approval B;
+- reading any protected file;
+- obtaining actual protected-interface facts by any means;
+- obtaining platform premises;
+- B5 host observation, or design of the B5 host-observation envelope that the G1 HOLD prohibits;
+- implementation or execution.
+
+## I. Safety analysis
+
+**Option 1.** I found no weakening.
+
+| Properties | Effect |
+|---|---|
+| No retry, no redispatch, no overlap, permanent `U(k) = false`, frozen slots, post-loss controls, late-return confinement | Unchanged. They constrain any resulting architecture; the adopted §3.2 / PO-03 clarification stays fully effective. |
+| Capacity accounting | Unchanged; narrow-profile quantities are not carried into Category 2. |
+| Backend neutrality; backend qualification boundaries | Preserved by the reliance test, the §F rule and the §G rules. |
+| Reporting/execution separation; evidence provenance | Unchanged; the Evidence Contract applies to Category 2 under §D. |
+| Human Chair authority; cross-family review | Each Category 2 candidate needs its own review and your adoption. |
+| Protected-information boundary | Unchanged; Option 1 does not move Approval B, and envelope architecture performs no read. |
+
+**Early Approval B** is not part of Option 1 and remains unauthorized.
+
+- It would increase provenance risk, contamination risk and the evidentiary burden of showing neutrality.
+- It would not make neutrality logically unverifiable: pinned prior architecture, explicit source and dependency records, and independent review can still support a bounded neutrality claim.
+- It has no technical dependency on P0.
+- A read cannot be undone, so the prudential case for keeping the order stands.
+
+## J. 64-object-envelope analysis
+
+**CANDIDATE ENVELOPE NOT YET PROVEN SUFFICIENT** is preserved. The arithmetic is unchanged: 64 objects, 2,531,328 bytes, 1,662,976 bytes below the aggregate H10 ceiling, with no slot headroom and no transfer between roles.
+
+| Item | Classification |
+|---|---|
+| Seven event records; ten transfers | Structural to the current narrow profile; not V2-2B constants |
+| 4,096-byte event records; fixed 8,192-byte objects | Adopted fit constraints; the open question is whether a backend fits them |
+| At most two intermediates per transfer | Explicit admission and conformance bound; says nothing about transports in general |
+| Byte-exact receiver copies | No zero-overhead assumption; framing and metadata must fit an assigned route or object and be charged |
+| Four platform/framework outputs | Binding allowance; sufficiency or exclusion basis unproven |
+| Eight admitted inputs | Global allowance; assurance must cover every enforcing component, with no one-artifact-per-component rule |
+| Four exception records, including X-L; 65,536-byte maxima | Binding allowances; sufficiency unproven |
+
+Backend variation inside these constraints needs no revision. A required excess, a new role or changed semantics does. None of these quantities extends to Category 2 architecture.
+
+## K. Architecture options
+
+| | Option 0 — Existing sequence | Option 1 — Bounded scope split |
+|---|---|---|
+| Sequence | P0 → Approval B → tailored V2-2B → later decisions | Category 1 work and bounded Category 2 candidates → Approval B envelope architecture → P0 → Approval B → tailored V2-2B → implementation decision → execution decision |
+| Newly possible | Nothing | Category 2 candidate development, one bounded assignment at a time |
+| Still prohibited | Everything gated | Selection without CP1; concrete-design adoption without CP2; all operational gates |
+| CP1/CP2 | Unchanged | Unchanged |
+| Risk | Scope ambiguity persists | Review workload; scope creep past the reliance test |
+| Reversible | n/a | Yes |
+
+## L. Recommended sequence
+
+Option 1, in this order:
+
+1. Category 1 work under specific assignments.
+2. A single bounded Category 2 candidate-development assignment, if you choose to authorize one.
+3. Approval B inspection-envelope architecture as a further bounded candidate.
+4. P0, then Approval B, then tailored V2-2B, then the implementation and execution decisions, all as currently adopted.
+
+## M. Governance consequence
+
+I do not assign a single label in advance. The effect of the actual operative text controls, and I have drafted none.
+
+- **Architectural adoption.** After qualifying review you may eventually adopt the distinction itself: the three categories, the reliance test, the interim rules in §D, the §F rule and the §G rules. Whether that supplements or amends existing governance depends on its wording. The §F rule interprets CP2, so its adopted form should be checked against the Register for substantive effect.
+- **Bounded work assignment.** One precisely bounded Category 2 candidate-development assignment is the least expansive first authorization. It can be made by a separate decision without changing any existing gate.
+- **Possible future standing rule.** No standing Category 2 authority is presently required. If one is proposed later, it needs its own analysis. A standing rule that broadens existing permission, removes repeated authorization or modifies a prerequisite could function as an amendment even if recorded as a new decision.
+
+Unchanged throughout: CP1 before backend selection; CP2 before concrete-design adoption or implementation authorization; Approval B after P0; B5 G1 HOLD; no backend qualification; no operational authority.
+
+## N. Reviewer-finding closure table
+
+Astra is the authority on reviewer closure. Entries marked "author position" are mine only.
+
+| Finding | Status | Reason |
+|---|---|---|
+| B1, B2, N1, N2, N3 | **CLOSED** (by reviewer) | Preserved; these edits introduce nothing that affects them. |
+| R2-B1 | **CLOSED** (author position) | Two-backend test withdrawn; effect-based rule in §F. |
+| R2-N1 | **CLOSED** (author position) | Candidate-design analysis, selection and concrete-design adoption separated (§F, §H). |
+| R2-N2 | **CLOSED** (author position) | No instrument label fixed in advance (§M). |
+| R2-N3 | **CLOSED** (author position) | Five states separated; selection in effect addressed (§G). |
+
+**Revision 4 completion table.**
+
+| # | Point | Author position | Where |
+|---|---|---|---|
+| 1 | Broader Category 2 closure requirements | **CLOSED** | §D interim rules; §F; §I |
+| 2 | No label-based CP2 exemption | **CLOSED** | §F steps 1 and 4 |
+| 3 | Feasibility integrity; no safety dilution | **CLOSED** | §G |
+| 4 | Approval B envelope non-authority | **CLOSED** | §H |
+| 5 | Clause-2 rewrite of the CP2 commitment rule | **CLOSED** | §F, rewritten in my own terms; clause-2 compliance is Astra's determination |
+
+## O. Explicit non-authority statement
+
+Revision 4 grants no:
+
+- P0 qualification;
+- Approval B;
+- Approval B envelope execution;
+- protected read;
+- CP1 closure;
+- CP2 closure;
+- new closure-ladder authority;
+- backend selection;
+- backend elimination authority;
+- concrete-design adoption;
+- implementation authority;
+- execution authority;
+- F/Q/O authority;
+- B5 progression;
+- protected observation;
+- platform observation;
+- cleanup authority;
+- standing Category 2 authority;
+- repository mutation authority.
+
+I ran read-only Git and file inspection only and inspected no protected artifact. This architecture remains a non-adopted candidate until qualifying independent review of the exact text you pin and your own action. It is not self-certified.
