@@ -1,0 +1,700 @@
+I'll read the full challenger attachment, re-verify the checkpoint read-only, and read the complete SUCC provisions before writing Revision 2.
+
+Checkpoint re-verified with no divergence; the complete Revision 2 replacement candidate follows. It is chat-only, I created no files, read nothing under `P/`, and invoked no reviewer.
+
+# Decision 0009 — Candidate Concrete Approval B Envelope Closure Architecture — Revision 2
+
+**For:** Amy, Human Chair · **Date:** November 14, 2026
+**Author:** Fable 5.2 (`claude-fable-5-2`, Anthropic/Claude family; self-reported by the session)
+**Status:** non-adopted Category 2 candidate · abstract · non-operational · chat-only · for later independent review
+**Supersedes, as a candidate only:** Revision 1, 39,003 bytes, SHA-256 `6240fdae…023d` (identity as you recorded it; I did not hash it). Challenger result: BLOCKING CHALLENGE(S) FOUND.
+**Not self-qualified. Not self-adopted.**
+
+---
+
+## 1. Status and authority boundary
+
+- **CR-01 [X].** Neither this candidate nor its adoption grants operational, protected-read, acquisition, implementation or execution permission.
+- **CR-02 [X].** This candidate closes, nominates, classifies, selects and commits nothing.
+- **CR-03 [N · abstract].** A provision here that conflicts with adopted architecture is void and becomes unresolved. It is not reinterpreted to avoid the conflict.
+- **CR-04 [N · abstract].** Silence grants nothing. A status not affirmatively established is not established.
+- **CR-05 [X]. What this arrangement is.** It does create scoped closure thresholds: a recorded closure determination for each item or set, an evaluation of each proposed authorization package, and loss of closed status on reopening. Those thresholds exist only for concrete Approval B envelope elements. It is not a staged ladder of universal points, and it does not extend Register CP0–CP6, give K0–K11/PF governing force, or supply any standard for broader V2-2B.
+
+**Labels.** Source labels: **[S]** restates adopted or retained text; **[G]** generalizes an adopted source; **[N]** new proposed architecture; **[D:t]** deferred to point *t*; **[U]** unresolved; **[X]** authority boundary. Effect classes follow Sequencing Rev 4 §F. Provision numbers are new in this revision (prefix CR). Revision 1 numbers (prefix CL) appear only in §3.
+
+---
+
+## 2. Source posture
+
+**Checkpoint.** Branch `m1-live-adapter-dev`; local HEAD, cached tracking ref and live remote (anonymous `git ls-remote`, no fetch) all `1da4bdf23cab5f4311fe0137b93f4f47fdedd8c8`; ahead/behind 0/0; staging empty; 6 modified and 19 untracked files.
+
+**Access.** Read-only, non-protected records under `docs/`. Nothing under `P/`, no P0 candidate, no B5 surface, no host or runtime state.
+
+| Abbrev. | Source | SHA-256 | Sections read by me |
+|---|---|---|---|
+| ABE | Approval B Inspection-Envelope Architecture Rev 4 | `aaa66352…d5f0` | Whole |
+| ABE-A | Its adoption record, with NB-1 to NB-4 | — | Whole |
+| SEQ | Sequencing Architecture Rev 4 | `fbd2790d…6c4c` | Whole |
+| SEQ-A | Its adoption record | — | Whole |
+| SUCC | Opus Pre-Gate V2-2B Requirements and Closure Architecture | `ca4cbf8a…43a2` | §§F, J, N.4–N.5, Q in full. **In full for this revision:** R-23, R-24, R-25, R-30, R-31, R-32, R-38, R-39, R-40, R-42, R-43. Opening text only: R-06, R-26, R-27, R-33, R-35, R-36 |
+| SUCC-A | Its adoption record | — | Through the non-authority section |
+| REG | Proof-Obligation Register Draft 4 | `16c224d9…96ab` | §§1–5 (including the CP2 row), PO-21, PO-22, PO-23, PO-24, §12, all in full |
+| CON | Level-2 Evidence Contract | `ddc72233c6016627…` | Adopted text §§1–12. Only some §3 table rows were truncated in my read; §3 is not relied on here |
+| HP | H1–H20 identity policy | `93a6df2354f303fc…` | H1, H8–H13, H15–H20 in full; note N5 |
+| H18 | H18 Architecture Draft 4 | `528ac921…4629` | §§1, 2, 10, 12, 14, part of 15 |
+| PO3 | H18 §3.2 / PO-03 clarification | `77177132f0cf643f…` | Whole operative text |
+| PLAN | Implementation Plan (**untracked**) | `f7bf6d73…b657` | §§I, J, N, O |
+| ADOPT | Retention V2/M0 adoption record (**untracked**) | `4395b60e…8f35` | §§9, 10 |
+| D10 | Decision 0010 (tracked file) | `3b1d7be5…ba93` | Whole |
+| HIST | Nov 3 progress handoff | — | §§2–7 (attributed status) |
+| CH | Kimi challenger report on Revision 1 | — | Whole; used as problems and constraints only |
+
+**Limitations.**
+
+- **Opening-text sources.** No operative provision relies materially on R-06, R-26, R-27, R-33, R-35 or R-36. Where one is named, it is as an index entry in §9, and the complete source controls.
+- **Reach of SUCC.** SUCC's requirements were adopted for broader pre-gate V2-2B architecture. Where I apply R-25, R-30, R-38 or R-39 to envelope elements, the label is [G], not [S].
+- **Reviewer wording.** I intentionally retained no substantive Kimi or Astra wording. Finding identifiers are used for attribution only.
+- **Attributed statuses.** B5 G1 HOLD, P0 candidates NOT QUALIFIED, Approval B UNAUTHORIZED and V2-2B implementation/execution UNAUTHORIZED are attributed.
+
+---
+
+## 3. Correction summary
+
+| Finding | Revision 1 provisions | Revision 2 correction | Where |
+|---|---|---|---|
+| **CH-B01** circular sets | CL-13, CL-30, GC-5, GC-7 | Set membership satisfies nothing by itself. Every conclusion must be grounded through a claim-level reliance structure with no self-supporting loop. Each asserted base is tested for dependence back on the set | §11; GC-5, GC-7 |
+| **CH-B02** invalid closures | CL-65 to CL-69 | Two grounds for losing closed status: supervening invalidation and original defect. Original defect operates on discovery, without any later change. Propagation, record preservation and no retroactive rewriting stated | §20 |
+| **CH-B03** sequence | CL-14, CL-18(a), CL-33 | Package evaluation takes closed items, not committed ones. Incorporation may be the first commitment. No separate pre-incorporation commitment is required. The evaluation is not a Chair act | §§17, 18 |
+| **CH-B04** record content | CL-63, CL-64, CL-54, CL-38, CL-70 | Record provisions restated as information that must be ascertainable. No schema, field set, structure, encoding or storage is fixed. Any representation is concrete and not proposed | §19; §22 |
+| **CH-N01** characterization | CL-05 | The arrangement is described by what it does: scoped thresholds, not a universal ladder | CR-05 |
+| **CH-N02** P0 status versus evidence | CL-29, CL-41, CL-44 | Disposition, evidentiary outputs and dependent propositions separated. Status proves no underlying fact. No automatic import of P0 evidence | §13 |
+| **CH-N03** nomination | CL-35 to CL-37 | Nomination, assignments, concentration, abandonment and criteria development are each tested by effect | §12 |
+| **CH-N04** taxonomy | GC-8 | SUCC R-39's five tags preserved whole, with separate attributes that never replace them | GC-8; CR-45 |
+| **CH-N05** materiality | CL-65(3), (7) | Reopening turns on materiality to a proposition the closure relies on. Editorial changes are noted, not reopened. Doubt is material | CR-90 to CR-92 |
+| **CH-N06** premise timing | CL-28 | **Option B chosen** and labeled as a new policy choice. Option A is stated as the alternative you may substitute | §10 |
+
+**Preserved in substance:** narrow scope; non-exclusive closure; proposition-specific P0 and B5 dependencies; no universal chain; mandatory-output non-pruning; D10 as review procedure, never as closure evidence.
+
+---
+
+## 4. Purpose and scope
+
+- **CR-06 [S · abstract].** ABE AB-81 bars adopting, fixing, incorporating or relying on a concrete envelope item until its applicable closure is identified and satisfied. AB-83 finds that no adopted arrangement supplies it.
+- **CR-07 [N · abstract].** This candidate proposes that applicable closure arrangement, for concrete Approval B envelope elements only.
+- **CR-08 [X].** Outside scope: the narrow two-case profile, broader V2-2B, P0 criteria and candidates, B5, determination C, the mandatory output set, tailoring, backend selection, implementation and execution.
+- **CR-09 [S · abstract].** Abstract provisions need no closure (SEQ §F step 4; ABE AB-83). This arrangement applies to provisions that classify as concrete, or in doubt, under SEQ §F.
+
+---
+
+## 5. Definitions
+
+All **[N · abstract]** unless marked.
+
+| Term | Meaning |
+|---|---|
+| **Element** | One concrete answer to one "how" question within a class in §6 |
+| **Closure item** | An element at an exact content identity for which closure is sought |
+| **Claim** | One conclusion a showing asserts: that an item meets one criterion, or that one premise holds |
+| **Reliance structure** | For a set of claims, which claims and bases each claim rests on |
+| **Grounding base** | A support that does not derive its validity from any claim in the item or set being closed (§11) |
+| **Closure set** | Items determined together because their claims rely on one another |
+| **Closure showing / verification / determination** | The author's demonstration; an independent reviewer's finding on it; your recorded determination |
+| **Commitment** | Any act ABE AB-82 lists **[S]**: adoption; fixing as governing design; incorporation into an authorization; letting later work treat a concrete answer as settled |
+| **First commitment** | The earliest such act for an item |
+| **Closed and uncommitted** | Determined closed, with no commitment yet made |
+| **Proposed package** | The exact set of items a contemplated Approval B authorization would fix |
+| **Package evaluation** | The demonstration in §17 about one proposed package |
+| **Design-validity premise** | A premise without which the item cannot be judged lawful, credible or sufficient |
+| **Scheduled premise** | A pre-effect premise left for lawful establishment before its first dependent effect (§10) |
+| **Carried premise** | A premise obtainable only through the authorized event (§10) |
+| **Supervening invalidation** | Closure was valid when made; a later event defeats future reliance |
+| **Original defect** | A closure criterion was not in fact satisfied when the determination was made |
+
+---
+
+## 6. Element classes
+
+**CR-10 [S/G · abstract].** The classes restate ABE AB-83 and §24. Naming a class selects nothing in it.
+
+1. PB designs, per needed relationship.
+2. IM acts and their classifications.
+3. Empirical-applicability routes.
+4. Acquisition method.
+5. Acquisition component.
+6. Plaintext-recipient roles.
+7. EVS per actor.
+8. Screening arrangements.
+9. Routes and governed-instance populations.
+10. Custody arrangements, including design-internal verifier roles (UQ-9) and the M-A/M-B choice (UQ-4).
+11. Destinations.
+12. Provider treatment.
+13. Retention arrangements.
+14. Content-sensitivity envelope.
+15. Bounds.
+16. Accounting classification and allocation (UQ-12).
+17. Representations and related commitments, including terminal actions and optional IQL items.
+
+- **CR-11 [G · abstract].** Whether a provision is an element is decided by effect under SEQ §F steps 1–3. Doubt is treated as concrete (step 6).
+- **CR-12 [N · abstract].** A concrete element of a kind not listed has no applicable closure under this candidate. ABE AB-81 continues to bar its commitment.
+
+---
+
+## 7. Closure units
+
+- **CR-13 [N · abstract]. Item: unit of showing.** Each item answers one question and states what its commitment would settle.
+- **CR-14 [N · abstract]. Set: unit of determination for mutually reliant items.** Items whose claims rely on one another are determined together. Being in one set is a grouping, not a justification (§11).
+- **CR-15 [N · abstract]. Proposed package: unit of package evaluation.** Item and set closures do not by themselves make any item eligible for incorporation.
+- **CR-16 [N · abstract].** Classes are not units. Closing one element closes nothing else in its class.
+- **CR-17 [N · abstract].** Closure is non-exclusive. Alternative items answering the same question may each be closed. Closure neither selects nor eliminates.
+- **CR-18 [G · abstract].** Choosing among closed alternatives, or setting one aside, is a consequential disposition and is yours (SEQ §G).
+
+---
+
+## 8. General closure criteria
+
+**CR-19 [N · abstract].** A closure showing establishes each criterion below for the exact item. These state what must be shown. They are not parts of a document.
+
+| # | Criterion | Generalized from |
+|---|---|---|
+| **GC-1 Identity** | The exact item, the question it answers, its class, and the commitment scope sought | D10 clause 4; ABE AB-82 |
+| **GC-2 Requirement map** | Every adopted provision reaching the item is identified. An omitted applicable requirement defeats closure | New; motivated by SEQ §D interim rules |
+| **GC-3 Conformance** | For each mapped requirement, an argument that the item, carried out as designed, satisfies it | ABE AB-28R4(2)(a) |
+| **GC-4 Reliance** | Every premise is identified, classified S, E or X, and assigned a premise kind under §10 | ABE AB-88, AB-28R4(2)(b); REG §3 |
+| **GC-5 Dependencies** | Every other element relied on is identified by exact identity. Each is closed outside the set, or is in the set **and** the set satisfies §11 | ABE AB-90 |
+| **GC-6 Failure modes** | Each failure mode, how it is detected or reported, and the adopted stop or failure consequence it meets. Failure creates no authority | ABE AB-28R4(2)(d), AB-71 |
+| **GC-7 Grounding** | Every claim is grounded under §11. This covers the whole reliance structure, including producer accounts and self-supplied prerequisites | ABE AB-26(3), AB-90; SUCC R-25, R-30 |
+| **GC-8 Gate tags** | Each premise and dependency carries one SUCC R-39 tag, plus the attributes in CR-45 | SUCC R-39; REG PO-22 |
+| **GC-9 Mandatory outputs** | Which mandatory outputs and relationships the item serves, and that it prunes, narrows or substitutes none | ABE AB-84 to AB-86 |
+| **GC-10 Clean inputs** | The showing uses no protected content and no unauthorized observation. P0 material is used only as §13 allows | SUCC R-32; ABE AB-18R4 |
+| **GC-11 Conflicts** | No unresolved source conflict affects the item | ABE AB-02; CON §8 |
+| **GC-12 Residue** | What stays deferred after commitment and where it is fixed. This is disclosure only and defers nothing that must be resolved at closure | ABE §24; SUCC R-42 |
+
+**CR-20 [G · abstract].** An express disposition may resolve a criterion only where it waives no applicable prerequisite. I take this limit from the substance SEQ §F describes. REG CP2 is not applied to this scope.
+
+---
+
+## 9. Class-specific requirements
+
+**CR-21 [S/G · abstract].** Each class must also show the adopted requirements indexed below. The table is an index, not a complete restatement. The complete adopted text controls, and GC-2 requires it to be mapped.
+
+| Class | Must be shown | Adopted source |
+|---|---|---|
+| PB designs | The relationship proved; each credibility element; sufficiency apart from authority | ABE AB-26, AB-28R4(2), AB-73R4, AB-90 |
+| IM acts and classifications | The effect test; exactly one class; class 1 only on exact source-based analysis | ABE AB-29R4, AB-80R4, AB-88, AB-89 |
+| Empirical-applicability routes | Specific prior authority naming scope; every applicable predecessor gate; respect for the unopened host-observation envelope | REG §3; SUCC R-32; CON §4; HP N5 |
+| Acquisition method and AC | One acquisition, no retry, no writable descriptors; suitability for full content | PLAN §J; ABE AB-13R, AB-42R, AB-76R4 |
+| PR roles, EVS, screening | Per-actor visibility; screening as governed transformation | ABE AB-13R, AB-14R, AB-31, AB-76R4 |
+| Routes and populations | The eight route-design items; Class A or reconciled Class B; no Class C | ABE AB-75, AB-38R, AB-78; CON §5; HP H8, H9 |
+| Custody | A demonstrated chain not resting on the artifact's own claims; an anchor not modifiable by any party whose account it validates, judged after capability-union analysis; a producer's account never the sole basis | SUCC R-30, R-24, R-25; ABE AB-41 |
+| Destinations | Declared, bounded, and not a P0 candidate or other excluded object | ABE AB-18R4, AB-37aR |
+| Provider treatment | Route-specific properties established | ABE AB-77 |
+| Retention | Interval, conditions, adverse-evidence availability; no implied release | ABE AB-39R, AB-40, AB-79; SUCC R-31 |
+| Sensitivity envelope | Bounded by authorized object and content scope | ABE AB-76R4, AB-15R |
+| Bounds | No truncation; one event; one session | ABE AB-42R, AB-43R4 |
+| Accounting | No exemption or inferred allocation; receiving-domain rules intact | ABE AB-68 to AB-70; CON §10; HP H10–H12 |
+| Representations | Declared transformations; no paraphrase; sealing as governed act | ABE AB-22R4, AB-25R, AB-31 to AB-34 |
+
+---
+
+## 10. Evidence and assurance treatment
+
+- **CR-22 [S · abstract].** The classes are REG §3's: **S** static assurance, **E** empirical premise evidence, **X** execution evidence.
+- **CR-23 [G · abstract].** S may support design-level conformance, semantics, classification and route reasoning. It never establishes a deployment or execution fact (ABE AB-88).
+- **CR-24 [G · abstract].** E may support closure only where acquired under specific prior authority with every applicable predecessor gate, with traceable provenance (REG §3; SUCC R-32; CON §4). Availability of authority is not evidence (ABE-A NB-3).
+- **CR-25 [N · abstract].** X from the Approval B event cannot support closure before that event. Closure is design-level and asserts no execution-level reconciliation.
+- **CR-26 [G · abstract].** E or X from another governed attempt is usable only as lawfully admitted historical evidence. It keeps its original limits and proves no current behavior alone (HP H17; CON §11).
+- **CR-27 [N · abstract].** That such evidence is representative of the present subject is itself a premise. It must be established under these rules. Stating it does not establish it (SUCC R-40 requires it to be stated).
+
+**Premise timing: a policy choice exposed for you (CH-N06).**
+
+- **CR-28 [N · abstract · Human-Chair-adoptable policy choice]. Option B is proposed.** Adopted sources set the minimum at the first dependent effect (SUCC R-38; ABE-A NB-3; ABE P-1R4). They do not require every empirical premise to be established before design closure. Option B follows that minimum, with three premise kinds:
+
+| Kind | Test | Treatment at closure |
+|---|---|---|
+| **Design-validity** | The item cannot be judged lawful, credible or sufficient without it. This includes any premise that adopted text makes part of that judgment, and any fact needed to classify an IM act | **Established before closure.** Not schedulable |
+| **Pre-effect** | Establishable without the governed operation; needed before some dependent effect; not needed to judge the design | **May be scheduled** under CR-29 |
+| **Execution-observable** | Obtainable only through the authorized event | **May be carried** under CR-30 |
+
+- **CR-29 [N · abstract]. Scheduling conditions.** A pre-effect premise may be scheduled only if the showing:
+  1. classifies it and gives its complete acquisition design;
+  2. names the specific authority and predecessor gates its acquisition needs, none of which is on hold or otherwise unavailable;
+  3. names its first dependent effect and a discharge point strictly before that effect;
+  4. shows that no dependent effect can occur while it is undischarged;
+  5. states that if it proves false the item loses closed status.
+- **CR-30 [G · abstract]. Carrying conditions.** An execution-observable premise may be carried only if the showing reserves its observation route, defines the admissible observation and its failure or uncertainty classification, shows behavior stays safe and bounded if it is false, and names the stop. No operation may require the fact it is meant to produce (SUCC R-38).
+- **CR-31 [G · abstract].** Naming a stop does not turn a pre-effect premise into an execution-observable one. A premise needed before a lawful or safe first effect is never deferred into the governed operation (SUCC R-38; REG PO-21 as pattern).
+- **CR-32 [N · abstract].** Scheduling is not authority and acquires nothing. A closed item with undischarged premises is closed subject to them, and its provenance says so.
+- **CR-33 [N · alternative, not proposed]. Option A.** You may instead adopt the stricter rule that no pre-effect E premise may be scheduled. Its rationale is simplicity and a stronger fail-closed posture. Its cost is that empirical acquisition must precede design closure, possibly for designs never used. If you choose it, CR-29 is removed and pre-effect premises are treated as design-validity premises. Neither option is source-required.
+- **CR-34 [N · abstract]. Never closure evidence:** protected content; unauthorized observation; reviewer acceptance; your adoption; a producer's unsupported account, including a Chair-supplied value; a label, name, status or digest standing alone.
+
+---
+
+## 11. Dependency and non-circularity rules
+
+- **CR-35 [N · abstract]. Order follows reliance.** No item closes before the items its claims rely on, unless they are determined together as a set.
+- **CR-36 [N · abstract]. Grouping justifies nothing.** Placing every member of a dependency cycle in one set does not satisfy GC-5 or GC-7.
+- **CR-37 [N · abstract]. Grounding rule.** A claim is grounded only if it has at least one complete line of support in which:
+  1. every end point is a grounding base; and
+  2. no claim supports itself, directly or through other claims.
+
+  Every claim of every item in a set must be grounded.
+- **CR-38 [N · abstract]. Grounding bases.** Only these qualify:
+  - adopted governing text;
+  - an authoritative static source;
+  - lawfully acquired and admitted empirical evidence;
+  - a scheduled or carried premise meeting §10, in which case the conclusion stays conditional on it;
+  - a claim of an item closed outside the set, whose own support does not pass through the set;
+  - what the item itself specifies as its design, as distinct from any assertion that the design conforms.
+- **CR-39 [N · abstract]. Item cycles versus claim cycles.** Items may rely on each other, provided the claims can be ordered so that each rests only on grounding bases and on claims earlier in that order. Where two or more claims have no support except one another, none of them is grounded and the set does not close.
+- **CR-40 [N · abstract]. Independence of a base.** Each asserted base is traced. If its own validity depends on a claim in the set, it is not a base for that set.
+- **CR-41 [N · abstract]. How cycles are tested.**
+  - The showing makes the reliance structure of the set ascertainable at the level of claims.
+  - It identifies every group of items that rely on one another and gives, for each claim in the group, a line of support meeting CR-37.
+  - The verifier independently looks for any claim all of whose support returns to itself, and traces each asserted base under CR-40.
+  - A showing that understates reliance is defective (§20).
+- **CR-42 [G · abstract].** No completeness, provenance, transfer or accounting conclusion rests solely on the account of the producer under assessment (SUCC R-25). No acquisition establishes its own prerequisite (ABE AB-90).
+- **CR-43 [S/G · abstract].** These reliance relations hold by adopted text:
+
+| Relation | Source |
+|---|---|
+| The verifier-independence arrangement is resolved before a PB or custody design relying on it | ABE §24 UQ-9 |
+| The M-A/M-B choice is resolved before a route is committed | ABE §24 UQ-4 |
+| An IM act is classified, with authority available, before a PB depending on it is credible | ABE AB-90 |
+| Static semantics come before the classification that interprets them | ABE AB-29R4, AB-88 |
+| The sensitivity envelope is defined before suitability is shown against it | ABE AB-76R4 |
+| Accounting classification is resolved before authorization | ABE §24 UQ-12 |
+
+- **CR-44 [N · abstract].** This candidate names no anchor, method or base for any element.
+- **CR-45 [G · abstract]. Dependency tags.** Each premise and dependency carries exactly one SUCC R-39 tag: generic or pre-gate; P0-dependent; B5-dependent; Approval-B-dependent; later operational. Separately, and never in place of the tag, the showing states the evidence class, the premise kind, and the governed event or authority that supplies it. A premise obtainable only through the Approval B event is tagged Approval-B-dependent. An item resting on a later-operational fact cannot close.
+
+---
+
+## 12. Exploratory analysis and nomination
+
+- **CR-46 [S · abstract].** Exploratory analysis is non-governing, closes nothing and needs a specific assignment (ABE AB-51R4 act 6(a); SEQ §F).
+- **CR-47 [N · abstract]. Entry.** An exploratory product becomes a closure item only when you nominate its exact identity.
+- **CR-48 [G · abstract]. Effect controls.** Whether any of the following is selection in effect is judged by what it does downstream, under SEQ §F step 3 and §G:
+  - a nomination;
+  - a later assignment;
+  - concentrating work on one candidate;
+  - ceasing work on alternatives;
+  - developing a requirement after exposure to one candidate.
+- **CR-49 [N · abstract].** A nomination that leaves alternatives open, and on which no later work depends, is not selection. A nomination or assignment after which alternatives are in practice removed, or later work depends on the nominee, is a consequential disposition. It is then yours to make knowingly, and it is not made by a model's report or by inaction.
+- **CR-50 [N · abstract].** Not being nominated eliminates nothing. An alternative leaves the process only by your express disposition.
+- **CR-51 [G · abstract].** A document that would commit later work to one candidate, stop work on others on its own initiative, or shape a requirement to fit a candidate stops and returns the question to you (SEQ §G).
+- **CR-52 [N · abstract]. Criteria lineage.** Closure criteria derive from governing sources, not from a candidate. A proposed change to them made after exposure to an exploratory candidate discloses that exposure and shows a source basis independent of the candidate. Criteria are not changed during an item's closure; changing them is architectural revision with its own review.
+- **CR-53 [N · abstract]. Lineage of showings.** Earlier failed showings and adverse findings on the same question remain available and are disclosed with a later showing. Revising a showing is documentary work and does not touch the no-retry rules for governed operations.
+- **CR-54 [N · abstract].** A product known to rest on protected content or unauthorized observation cannot be nominated, and the fact is reported to you. This creates no duty or authority to investigate how a product was made.
+
+For the record: I examined no exploratory design for any element in writing these criteria.
+
+---
+
+## 13. P0 treatment
+
+- **CR-55 [S · abstract].** Successful P0 qualification is required before Approval B authorization (PLAN §J; REG §5; ABE AB-55).
+- **CR-56 [G · abstract].** Adoption of this candidate may precede P0. It relies on no P0-gated, protected or empirical fact (SEQ §§E, F).
+- **CR-57 [S/N · abstract].** No rule I found gates closure work, or commitment other than incorporation, on P0 universally (ABE AB-51R4 act 6). Any P0 dependency is specific to a proposition.
+- **CR-58 [N · abstract]. Three things kept apart.**
+
+| Thing | What it can do here |
+|---|---|
+| **P0 qualification disposition** | Satisfies the gate where a gate asks for it. It is a status and proves no underlying fact |
+| **P0 evidentiary outputs** | Not closure evidence merely because P0 produced them. They are not imported automatically |
+| **A proposition depending on an actual Q-parent fact** | Needs both successful qualification through P0's own process and the specific fact lawfully established for this use |
+
+- **CR-59 [G · abstract].** Reliance on an actual Q-parent fact stays blocked until that qualification succeeds (REG §5; SUCC R-40).
+- **CR-60 [N · abstract].** Where a premise's only support is P0 work, the showing identifies the lawful route by which the specific evidence would be admitted for this specific proposition, with its provenance, currentness and limits. That admission needs your separate authority. The status label is never the support. See U-6.
+- **CR-61 [G · abstract].** An item designating a P0 candidate as subject or destination cannot close (ABE AB-18R4 item 8). Whether P0 is a predecessor gate for a particular empirical acquisition is decided for that proposition when authority is sought.
+- **CR-62 [S · abstract].** ABE AB-56R is unchanged: no P0 output enters the Approval B envelope, and no Approval B output feeds back into P0.
+
+---
+
+## 14. B5 treatment
+
+- **CR-63 [S · abstract].** B5 G1 remains HOLD. Nothing here performs, absorbs or routes around B5 (ABE AB-64).
+- **CR-64 [X].** HOLD does not bar abstract closure architecture, static analysis, or closure of an item whose showing needs no B5-governed proposition.
+- **CR-65 [G · abstract].** An item carries a B5 dependency where its showing relies on characterizing or excluding indexing, backup, synchronization, autonomous cleanup or comparable agents (REG §5). Examples on the adopted text:
+  - an IM act classified class 3 (ABE AB-29R4);
+  - a PB whose argument characterizes or excludes agents acting on the source (ABE AB-30R4);
+  - a route, custody or retention showing whose population or noninterference argument depends on excluding such agents (SUCC R-23, R-31);
+  - an E premise about agent population (REG §3).
+- **CR-66 [N · abstract].** The tag follows the proposition actually relied on, not the words used, in both directions. A premise is not B5 merely because an agent could in theory be involved, and it does not escape B5 by avoiding the word.
+- **CR-67 [N · abstract].** Each showing states, premise by premise, whether it characterizes or excludes such agents. A B5-tagged item cannot close while G1 is HOLD. Doubt takes the restrictive tag (ABE AB-29R4). The verifier checks for silent reliance.
+- **CR-68 [X].** No universal B5 → P0 → Approval B chain is stated or implied.
+
+---
+
+## 15. Mandatory-output interaction
+
+- **CR-69 [S · abstract].** The mandatory output set is exactly ABE AB-84. Only a separate governance decision changes it (AB-86(7)).
+- **CR-70 [N · abstract].** Closure is never a filter. Inability to close an item a mandatory output needs is no ground to drop, narrow or replace that output. The consequence is ABE AB-86(4).
+- **CR-71 [N · abstract].** Item and set closures confer no authorizability. A package is eligible for incorporation only if its evaluation shows the complete mandatory set supported (§17).
+- **CR-72 [N · abstract].** The closure provenance for an item makes ascertainable the support status of the whole mandatory set as then known, not only the item's part.
+- **CR-73 [G · abstract].** Closure of an optional item counts nothing toward mandatory support and cannot displace it (ABE AB-85).
+- **CR-74 [G · abstract].** A closed item supports only the relationship and output it was shown for (ABE AB-60, by analogy of principle).
+- **CR-75 [N · abstract].** If closure work indicates no credible design can exist for a mandatory relationship, that is reported to you as a finding. The closure process proposes no change to the mandatory set.
+
+---
+
+## 16. Closure determination
+
+- **CR-76 [N · abstract]. Three parts, none sufficient alone:**
+  1. a complete closure showing by the item's author;
+  2. a closure verification by an eligible independent reviewer of the whole showing, with an explicit finding and no unresolved blocking finding;
+  3. your recorded closure determination for the exact item or set.
+- **CR-77 [G · abstract].** Reviewer eligibility, findings, rounds, adopted-wording handling and fail-closed status follow D10 as it stands. D10 supplies review procedure. It supplies no substantive closure criterion, and a reviewer's acceptance is never closure evidence (CR-34).
+- **CR-78 [D: your tier assignment].** The tier for closure verification is yours to assign. Provisional Routine status cannot support it (D10 clause 7).
+- **CR-79 [N · abstract].** The closure verifier is a review role, distinct from any verifier inside a design (UQ-9).
+- **CR-80 [N · abstract]. Effect of a determination.** It makes the item eligible for a commitment. It settles nothing for later work, adopts nothing, and selects nothing. If the text of a determination lets later work proceed on the item as settled, that text is a commitment under ABE AB-82 and is treated as one.
+- **CR-81 [N · abstract]. Closure is distinct from:**
+
+| Act | Distinction |
+|---|---|
+| Architectural qualification | Tests abstract text; closure tests one concrete item against adopted criteria |
+| Human Chair adoption | Makes text govern; closure only makes commitment possible |
+| Commitment | Settles a concrete answer; closure does not |
+| Approval B authorization | Permits the governed event; needs P0, predecessors and your separate act |
+| Evidence admission | A receiving domain's act; closure admits nothing |
+| Implementation authorization | Behind the categorical sequence (SUCC R-39) |
+| Execution authority | A separate decision, never implied |
+
+---
+
+## 17. Coherence / package evaluation
+
+- **CR-82 [N · abstract]. Object.** One exact proposed package: the items a contemplated authorization would fix, with its mandatory and optional lists.
+- **CR-83 [N/G · abstract]. What it establishes.**
+  1. Every item in the package is closed and has not lost closed status. **Commitment is not required.**
+  2. The items are mutually consistent: each reliance between them points to the same exact identities.
+  3. The grounding rule of §11 holds across the package as a whole.
+  4. Every needed relationship of every mandatory output is supported (ABE AB-86), and each included optional item meets ABE AB-85.
+  5. Nothing the authorization would fix is missing from the package (ABE AB-81).
+  6. Every scheduled and carried premise is listed with its discharge point and whether it is discharged.
+- **CR-84 [N · abstract]. Who and how.** It is a showing with independent verification on the same terms as CR-76(1)–(2). **It is not a Human Chair act and needs no separate determination.** Its result is one input to the prerequisite check that ABE P-1R4 already places before authorization.
+- **CR-85 [N · abstract]. No commitment.** Evaluating a package commits nothing and selects nothing. A package may be evaluated and never authorized. Alternative packages may each be evaluated.
+- **CR-86 [N · abstract].** An evaluation speaks only to the exact package. A material change to the package or to any item in it requires re-evaluation of what is affected.
+- **CR-87 [X].** A favorable evaluation is not Approval B, does not qualify P0, and satisfies no other prerequisite.
+- **CR-88 [N · abstract].** Only items a package actually includes are evaluated. Optional items outside it are untouched.
+
+---
+
+## 18. Commitment and incorporation paths
+
+- **CR-89 [S · abstract].** The commitment forms are those of ABE AB-82. Each requires prior applicable closure (AB-81).
+- **CR-90A [N · abstract]. Path 1.** Closure, then your separate concrete-design adoption or fixing of the item, then later incorporation. Package evaluation is needed before the incorporation, not before the adoption.
+- **CR-90B [S/N · abstract]. Path 2.** Closure, then package evaluation, then incorporation into the Approval B authorization as the item's first commitment. Incorporation is one of AB-82's forms, so no earlier commitment is needed.
+- **CR-90C [N · abstract].** Neither path is preferred. A package may mix items committed under Path 1 with items first committed by incorporation. This candidate creates no pre-incorporation commitment requirement.
+- **CR-90D [N · abstract].** An item is committed only together with, or after, every item its claims rely on. One act committing them all satisfies this.
+- **CR-90E [N · abstract]. Closed and uncommitted.** The state begins at the determination and lasts until a commitment or loss of closed status. It may last indefinitely. It has no governing effect on later work.
+- **CR-90F [N · abstract].** You may record a closure determination and a commitment on one occasion. They remain two acts, each stated.
+- **CR-90G [X].** Incorporation remains subject to every ABE prerequisite for authorization. Nothing here adds a Human Chair act between closure and incorporation.
+
+---
+
+## 19. Abstract record-content obligations
+
+- **CR-91 [N · abstract]. Information, not representation.** The provenance of a closure determination or package evaluation must make the matters in CR-92 ascertainable. They may be spread across any number of records, satisfied by reference to existing records, and expressed in any form.
+- **CR-92 [N/G · abstract]. What must be ascertainable.**
+  - which exact item, set or package was decided, and against which governing sources;
+  - what question each item answers and what commitment scope was sought;
+  - how each criterion was met, including the reliance structure and its grounding bases;
+  - each premise's class, kind, dependency tag, supplying event or authority, and whether it is discharged;
+  - which mandatory outputs are served and the state of the whole set;
+  - who authored and who verified, on what identity and eligibility basis, at what tier, with what findings (D10 clause 9 [S]);
+  - earlier showings and adverse findings on the same question;
+  - what remains unresolved, and what the act does not grant.
+- **CR-93 [X · concrete, excluded].** This candidate fixes no schema, field set, field grouping, record structure, ordering, encoding, file format, serialization, layout or storage organization. CR-92 is not a list of fields. Any such choice is concrete. It is not proposed here and is not settled by adopting this candidate.
+- **CR-94 [U].** A fixed representation for closure records would be a concrete choice about the closure process, not an envelope element. This candidate supplies no closure for it. See U-7.
+- **CR-95 [N · abstract].** Status words in §21 are descriptive vocabulary. No record is required to carry them in any particular form.
+
+---
+
+## 20. Reopening and original-defect rules
+
+- **CR-96 [N · abstract]. Two grounds.** An item ceases to be usable as closed for future reliance on either ground:
+
+| Ground | When it operates | Examples |
+|---|---|---|
+| **Supervening invalidation** | A later event defeats a relied-on proposition | Material change to the item; change or loss of status of an item relied on; a superseded or contradicted source; new lawful evidence against a premise; a scheduled or carried premise failing or its route becoming unavailable; a governance change to a mapped mandatory output |
+| **Original defect** | On discovery that a criterion was not satisfied when the determination was made. **No later change is needed** | An unidentified dependency; understated reliance; a false or unsupported premise; evidence that never bore on the present subject as asserted; a hidden loop in the reliance structure; an unmapped applicable requirement; use of protected content or unauthorized observation; a verification lacking eligibility, identity basis or scope |
+
+- **CR-97 [N · abstract].** The examples are not exhaustive. Any material failure of any criterion in §§8–11, as of the determination, is an original defect.
+- **CR-98 [N · abstract]. Materiality.** A matter is material if it could change whether a criterion is satisfied for a proposition the closure relies on. A change or error that cannot do so does not reopen the item. It is noted in the provenance, with the reason it is immaterial.
+- **CR-99 [G · abstract].** Doubt about materiality is treated as material (HP H13, generalized). While the doubt stands, future reliance is suspended.
+- **CR-100 [N · abstract]. Prospective effect.** From recognition of either ground:
+  - no new commitment, incorporation or dependent closure may rest on the item;
+  - a commitment already made on it supports no new reliance;
+  - late discovery is no reason to continue relying on it.
+- **CR-101 [N · abstract]. Propagation.** Every item with a claim resting on an affected claim is suspended. Suspension lifts only when the relied-on item is closed again and independent verification confirms the relied-on claims are materially unchanged. Otherwise the dependent needs its own renewed closure. Package evaluations including an affected item lapse to the extent affected.
+- **CR-102 [N · abstract]. History.** Records of the original showing, verification and determination are preserved unaltered, with the later ground recorded beside them. Which ground applied is itself recorded. Events that lawfully occurred under the authority then understood are not recharacterized by this arrangement.
+- **CR-103 [G · abstract].** After an authorized event, later reliance on its outputs follows the receiving domain's rules (ABE AB-86(6) in principle).
+- **CR-104 [X].** This candidate does not decide whether an authorization issued on a defective closure was valid. That question is yours.
+- **CR-105 [N · abstract]. Renewed closure.** It needs a showing revised to the extent affected, verification of the whole revised showing (D10 clause 4), and a fresh determination.
+- **CR-106 [N · abstract].** Loss of closed status is a status consequence. It authorizes no inspection, acquisition, cleanup or other act.
+
+---
+
+## 21. Status and failure treatment
+
+**CR-107 [N · abstract].** An item is closed only on an affirmative determination. Every other state is not closed. Descriptive vocabulary:
+
+| Status | Meaning |
+|---|---|
+| `EXPLORATORY` | Not nominated |
+| `NOMINATED` | Showing not complete |
+| `BLOCKED-DEPENDENCY` | A relied-on item is not closed, or the set is not grounded |
+| `BLOCKED-GATED` | A premise needs a gate not satisfied; the gate is named |
+| `BLOCKED-AUTHORITY` | A premise needs evidence whose acquisition authority is ungranted or unavailable |
+| `BLOCKED-CONFLICT` | An unresolved source conflict affects it |
+| `NOT-CLOSABLE` | Shown incompatible with an adopted requirement. A finding only; it eliminates nothing |
+| `CLOSED` | Determined closed; any undischarged premises are identified |
+| `SUSPENDED` | Future reliance paused under CR-99 or CR-101 |
+| `REOPENED` | Lost closed status by supervening invalidation |
+| `DEFECTIVE` | Lost closed status by original defect |
+
+- **CR-108 [S · abstract].** An item that is not closed cannot be adopted, fixed, incorporated or relied on (ABE AB-81, F-15).
+- **CR-109 [N · abstract].** Inability to close yields a status and a report only. It creates no fallback, substitute element, relaxed criterion or authority.
+
+---
+
+## 22. Abstract-versus-concrete classification
+
+Tested provision by provision under SEQ §F steps 1–3.
+
+| Provisions | Class | Basis |
+|---|---|---|
+| CR-01, 02, 05, 08, 64, 68, 87, 90G, 104 | Authority boundary | State limits |
+| CR-03, 04, 06, 07, 09 to 12 | Abstract | Purpose, scope and classes; nothing chosen within a class |
+| CR-13 to CR-18 | Abstract | What must hold before commitment; no design arrangement fixed |
+| CR-19 to CR-21 | Abstract | What a showing must establish; no particular argument accepted |
+| CR-22 to CR-32, 34 | Abstract | Limits on evidence and premise timing; nothing acquired |
+| CR-33 | Not proposed | Stated alternative only |
+| CR-35 to CR-45 | Abstract | Properties any reliance structure must have; no anchor or method named |
+| CR-46 to CR-54 | Abstract | Effect tests and lineage duties |
+| CR-55 to CR-63, 65 to 67 | Abstract | Proposition-specific dependency statements |
+| CR-69 to CR-75 | Abstract | Preserve the mandatory set |
+| CR-76, 77, 79 to 81 | Abstract | Roles by kind, not named actors |
+| CR-78 | Deferred | Your tier assignment |
+| CR-82 to CR-86, 88 | Abstract | Properties a package must be shown to have |
+| CR-89 to CR-90F | Abstract | Which acts may be first commitment; no new act created |
+| CR-91, 92, 95 | Abstract | Information that must be ascertainable in some form |
+| CR-93 | Concrete, excluded | Any representation |
+| CR-94 | Unresolved | U-7 |
+| CR-96 to CR-103, 105 to 109 | Abstract | Status consequences |
+
+**Record-related re-audit (CH-B04).**
+
+| Provision | Risk examined | Result |
+|---|---|---|
+| CR-19 criteria table | Could be read as mandatory document sections | Stated as matters to be shown, not parts of a document |
+| CR-41 reliance structure | Could fix a graph or table format | Requires only that reliance be ascertainable; no form |
+| CR-45 tags | Could fix an encoding | SUCC R-39's adopted categories; attributes stated as information; no encoding |
+| CR-72 whole-set status | Could fix a record field | Information obligation only |
+| CR-92 | Closest to a field list | Declared not a field list; may be spread across records or met by reference (CR-91, CR-93) |
+| CR-107 statuses | Could fix stored values | Descriptive vocabulary only (CR-95) |
+
+I compared CR-92 with two adopted reference points. SUCC §J treats fixed field groups for evidence records as concrete. SUCC R-42 and REG PO-24 state, as abstract requirements, what an authorization package must identify. CR-92 is written on the R-42 side of that line: it says what must be identifiable and fixes no grouping or structure. Whether it stays on that side is for the independent reviewer.
+
+**Other doubt cases.** Naming a specific reviewer or model is concrete and excluded. Mandatory fixed groupings of elements are excluded; sets arise from reliance only.
+
+---
+
+## 23. Source and dependency crosswalk
+
+| Provisions | Label | Governing basis | Read |
+|---|---|---|---|
+| CR-01 to CR-05 | X/N | ABE AB-01 to AB-04, AB-83; SEQ §M | Full |
+| CR-06, 09, 89, 108 | S | ABE AB-81 to AB-83, F-15; SEQ §F step 4 | Full |
+| CR-10 to CR-12 | S/G/N | ABE AB-83, §24; SEQ §F steps 1–3, 6 | Full |
+| CR-13 to CR-18 | N/G | Motivated by ABE AB-82, AB-86; SEQ §G | Full |
+| CR-19, 20 | N/G | ABE AB-26, AB-28R4, AB-71, AB-88, AB-90; SUCC R-25, R-30, R-39, R-42; D10 clause 4; CON §8 | Full |
+| CR-21 | S/G | Sources in the table; SUCC R-24, R-25, R-30 | Full, except opening-text sources named in §2 |
+| CR-22 to CR-27 | S/G/N | REG §3; ABE AB-88; ABE-A NB-3; SUCC R-32, R-40; HP H17; CON §§4, 11 | Full |
+| CR-28 to CR-33 | N/G | SUCC R-38; REG PO-21 as pattern; ABE AB-90, P-1R4; ABE-A NB-3 | Full |
+| CR-35 to CR-44 | N/G | ABE AB-26(2)–(3), AB-28R4(2), AB-90, §24; SUCC R-25, R-30 | Full |
+| CR-45 | G | SUCC R-39; REG PO-22 | Full |
+| CR-46 to CR-54 | S/G/N | ABE AB-51R4; SEQ §F step 3, §G | Full |
+| CR-55 to CR-62 | S/G/N | PLAN §§I, J; REG §5; ABE AB-18R4, AB-51R4, AB-55, AB-56R; SUCC R-40 | Full |
+| CR-63 to CR-68 | S/G/N | REG §§3, 5; ABE AB-29R4, AB-30R4, AB-64 to AB-66; SUCC R-23, R-31 | Full |
+| CR-69 to CR-75 | S/G/N | ABE AB-60, AB-84 to AB-86 | Full |
+| CR-76 to CR-81 | N/G | D10 clauses 1–11; ABE AB-28R4(2)(e) | Full |
+| CR-82 to CR-88 | N/G | ABE AB-81, AB-85, AB-86, P-1R4 | Full |
+| CR-90A to CR-90G | S/N | ABE AB-07, AB-81, AB-82 | Full |
+| CR-91 to CR-95 | N/G | D10 clause 9; SUCC §J, R-42; REG PO-24 as pattern | Full |
+| CR-96 to CR-106 | N/G | D10 clause 4; HP H13; ABE AB-86(6); CON §8 | Full |
+| H18, PO3 | — | Not engaged: no slot, dispatch, retry or late-return semantics arise | As listed in §2 |
+
+**Existing machinery.** REG CP0–CP6 and SUCC K0–K11/PF are nowhere applied as authority for this scope. REG CP2, PO-21 and PO-24 appear only as patterns, marked.
+
+---
+
+## 24. Adversarial self-tests
+
+Author documentary checks. **Not qualification.**
+
+**Revision 1 cases, rerun.**
+
+| # | Case | Result | Controlling |
+|---|---|---|---|
+| 1 | Qualification review mistaken for closure | PASS | CR-76, CR-81 |
+| 2 | Chair adoption mistaken for closure | PASS | CR-76, CR-81 |
+| 3 | Concrete PB fixed before closure | PASS | CR-108 |
+| 4 | IM classification fixed before closure | PASS | CR-21, CR-108 |
+| 5 | Route fixed before closure | PASS | CR-43, CR-108 |
+| 6 | Partial closure used to prune the mandatory set | PASS | CR-70 to CR-72 |
+| 7 | One element closes while its dependency is unresolved | PASS | GC-5, CR-35 |
+| 8 | Exploratory result becomes de facto selection | PASS | CR-48 to CR-51 |
+| 9 | B5 dependency generalized | PASS | CR-64, CR-68 |
+| 10 | P0 requirement generalized to abstract work | PASS | CR-56, CR-57 |
+| 11 | Narrow CP rule silently imported | PASS | CR-05, CR-20 |
+| 12 | K-model treated as governing | PASS | CR-05 |
+| 13 | Closure relies on unauthorized empirical evidence | PASS | CR-24, CR-34, CR-96 |
+| 14 | Static semantics treated as deployed fact | PASS | CR-23 |
+| 15 | Closed element changes materially | PASS | CR-96, CR-105 |
+| 16 | Closure evidence later contradicted | PASS | CR-96 |
+| 17 | Element incorporated without closure | PASS | CR-83(1), CR-108 |
+| 18 | One element's closure treated as envelope closure | PASS | CR-15, CR-71 |
+| 19 | Reviewer acceptance treated as operational permission | PASS | CR-01, CR-34 |
+| 20 | Inability to close invents authority | PASS | CR-109 |
+| 21 | Closed, uncommitted item treated as settled | PASS | CR-80, CR-90E |
+| 22 | Optional-item closure presented as mandatory progress | PASS | CR-73 |
+| 23 | Chair-supplied value used as closure evidence | PASS | CR-34 |
+| 24 | Reliance reworded to hide agent exclusion | PASS | CR-66, CR-67 |
+| 25 | Criteria altered mid-closure to fit an item | PASS | CR-52 |
+| 26 | P0 candidate designated as destination | PASS | CR-61 |
+| 27 | Disposable Level-2 evidence offered about the protected environment | PASS | CR-26, CR-27 |
+| 28 | Pre-effect E premise unestablished at closure | PASS WITH NOTE | CR-28, CR-29; outcome depends on your Option A/B choice |
+| 29 | Reviewer supplies wording, then verifies closure | PASS | CR-77; D10 clause 2 |
+| 30 | Earlier failed showing omitted | PASS | CR-53 |
+
+**New cases.**
+
+| # | Case | Result | Controlling |
+|---|---|---|---|
+| 31 | Two items each resting only on the other | PASS | CR-36, CR-37, CR-39: neither claim grounded; set does not close |
+| 32 | Three-item cycle with no outside support | PASS | CR-37, CR-39 |
+| 33 | Mutually reliant set with an independently established outside premise | PASS | CR-38, CR-39: claims can be ordered from the base; set may close |
+| 34 | Asserted outside premise that itself depends on the set | PASS | CR-40: not a base |
+| 35 | Omitted route dependency discovered after closure | PASS | CR-96 original defect; CR-100, CR-101 |
+| 36 | Closure originally invalid; no source later changed | PASS | CR-96: operates on discovery |
+| 37 | Historical evidence later shown never representative | PASS | CR-27, CR-96 original defect |
+| 38 | Verifier eligibility defect discovered later | PASS | CR-96, CR-101 |
+| 39 | Clerical mistake discovered later | PASS | CR-98: noted, not reopened |
+| 40 | Harmless editorial source amendment | PASS | CR-98 |
+| 41 | Incorporation as the first AB-82 commitment | PASS | CR-90B |
+| 42 | Separate design adoption as the first commitment | PASS | CR-90A |
+| 43 | Package evaluation before any commitment | PASS | CR-83(1), CR-85 |
+| 44 | Record obligations met without a fixed schema | PASS | CR-91, CR-92 |
+| 45 | Fixed schema labeled abstract | PASS | CR-93: concrete, excluded |
+| 46 | Successful P0 disposition, no substantive premise evidence | PASS | CR-58, CR-60 |
+| 47 | Raw P0 evidence offered directly to closure | PASS WITH NOTE | CR-58, CR-60; U-6 open |
+| 48 | Nomination that becomes selection in effect | PASS | CR-48, CR-49 |
+| 49 | Approval-B-dependent premise tagged only as execution-time | PASS | CR-45 |
+| 50 | Empirical premise checked at event start, before first dependent effect | PASS WITH NOTE | CR-28, CR-29 under Option B; for PB sufficiency see U-1 |
+| 51 | Empirical premise needed for design legality | PASS | CR-28: established before closure |
+| 52 | Material original verifier defect found after commitment | PASS | CR-96, CR-100, CR-104 |
+| 53 | Closure source changes materially | PASS | CR-96, CR-98 |
+| 54 | Source changes only editorially | PASS | CR-98 |
+| 55 | Determination text lets later work proceed as settled | PASS | CR-80: treated as a commitment |
+| 56 | Stop named to recast a pre-effect premise as execution-observable | PASS | CR-31 |
+
+No case returns FAIL in my assessment.
+
+---
+
+## 25. Unresolved items and deferral points
+
+| Item | Issue | Treatment |
+|---|---|---|
+| **U-1** (narrowed) | ABE AB-90 lists lawful establishment of premises among the matters deciding PB sufficiency. Whether that makes every applicability premise of a PB a design-validity premise is not settled by the text | CR-28 lets AB-90 apply by its own terms. Under the doubt rule such a premise is treated as design-validity until you or the reviewer resolve it |
+| **U-2** (retested) | Whether a closure determination is a commitment under SEQ §F and ABE AB-82 | My effect-based finding: distinct. See §26. Reviewer to verify |
+| **U-3** (retested) | Supplement, amendment or mixed | My finding: supplement, with three provisions flagged. See §26 |
+| **U-4** | Whether any platform-premise acquisition for Approval B purposes is presently grantable, given the unopened host-observation envelope (SUCC R-32; HP N5; HIST §5) | Not resolved. Such a premise is `BLOCKED-AUTHORITY` meanwhile |
+| **U-5** | Whether ABE's authorization-time options (UQ-2, UQ-5, UQ-7) are elements | Left to CR-11 when each is framed |
+| **U-6** | ABE AB-56R bars P0 output from entering the envelope. Whether that also bars a closure showing from relying on separately admitted P0 evidence is not settled | CR-60 requires your separate authority for any such admission. Until resolved, an item needing it does not close |
+| **U-7** | A fixed representation for closure records, if ever wanted, has no closure arrangement | None proposed; none needed for adoption |
+
+**Deferred.** Tier for closure verification [D: your assignment]; which products are nominated [D: nomination]; reliance beyond CR-43 [D: each showing]; everything ABE §24 defers [D: Approval B authorization].
+
+**Source conflicts.** None found that blocks abstract adoption. U-1 and U-6 are tensions exposed, not harmonized.
+
+---
+
+## 26. Supplement / amendment analysis
+
+Fresh determination by effect (SEQ §M), after the CH-B03 correction.
+
+**U-2: closure determination versus commitment.**
+
+| Question | Finding |
+|---|---|
+| Does a determination adopt, fix or incorporate? | No (CR-80) |
+| May later work treat the answer as settled? | No. If a determination's text allows it, that text is a commitment (CR-80) |
+| Does it accept a conformance argument in SEQ §F step 2's sense? | Step 2 asks what adopting a provision would settle, and step 3 asks what later work could build on. A determination adopts no provision and gives later work nothing to build on |
+| Does it have any effect? | Yes, a procedural one: eligibility for commitment |
+
+**Finding:** distinct, on condition that CR-80 is honored in practice. Where it is not, the determination is itself a commitment and needed closure first.
+
+**U-3: supplement, amendment or mixed.**
+
+| Test | Finding |
+|---|---|
+| Changes adopted text or gate order? | No |
+| Bars any ABE AB-82 commitment form? | No. Revision 1 did; CR-90A to CR-90C restore all forms |
+| Adds a Human Chair act between closure and incorporation? | No (CR-84, CR-90G) |
+| Fills a place adopted text reserves? | Yes: ABE AB-81's applicable closure, which AB-83 says could be narrowly scoped |
+| Consistent with SEQ's "applicable CP2 closure" wording? | SEQ §D and the last sentence of §F contemplate other adopted arrangements. ABE reads the phrase as applicable closure |
+| Triggers under SUCC §N.3–N.4? | None. Category 2 adoption under N.5 |
+
+**Finding: SUPPLEMENT.** Three provisions add something beyond bare criteria, and an independent reviewer should test each for amendment effect:
+
+1. **CR-28/CR-29** (premise timing): a policy choice, not a source rule.
+2. **CR-83/CR-84** (package evaluation with independent verification): new content for what ABE P-1R4's closure prerequisite requires.
+3. **CR-100** (no new reliance on a commitment whose closure failed): affects the future use of concrete adoptions made under this arrangement.
+
+For SEQ §F's final sentence: this arrangement governs concrete Approval B envelope elements only. REG CP0–CP6 govern the narrow profile. Nothing governs broader V2-2B.
+
+---
+
+## 27. Adoption versus executability consequences
+
+**If adopted**, this candidate would supply the criteria, grounding rule, determination, package evaluation and reopening rules that ABE AB-81 presupposes, and would give exploratory work a fixed standard.
+
+**Adoption would not** close, nominate or commit anything, qualify P0, alter B5, or make Approval B authorizable.
+
+**Executability blockers remaining** (attributed and from the reviewed record):
+
+1. No P0 candidate is qualified.
+2. No element is closed, and no package has been evaluated.
+3. No credible PB design across the mandatory set is established; no IM method is classified.
+4. No plaintext route is qualified.
+5. Approval B is unauthorized.
+
+**Blockers to architectural adoption:** none that I perceive. Your choice between Options A and B should be made knowingly before adoption. The independent reviewer decides the rest.
+
+---
+
+## 28. Exact authority statement
+
+This candidate grants none of the following:
+
+- Approval B, or any protected read or access under `P/`;
+- P0 qualification or B5 progression;
+- PB, IM or empirical acquisition;
+- any concrete PB, IM, route, custody, provider or allocation commitment;
+- any closure determination, nomination, package evaluation or Human Chair commitment;
+- admission of any P0 evidence;
+- host, platform or runtime observation;
+- hosted protected processing;
+- any change to the mandatory output set, CP0–CP6 or the gate order;
+- governing force for K0–K11/PF, or any broader V2-2B closure system;
+- backend selection, implementation, execution or F/Q/O authority;
+- cleanup, release or disposal;
+- repository, file or Git mutation;
+- external-model review;
+- standing Category 2 authority.
+
+B5 G1 stays on **HOLD**. P0 candidates stay **NOT QUALIFIED**. Approval B stays **UNAUTHORIZED**. V2-2B implementation and execution stay **UNAUTHORIZED**. These statuses are attributed. My authorship is self-reported. I claim no reviewer's future eligibility, and I do not qualify or adopt this candidate.
+
+**STOP FOR HUMAN CHAIR REVIEW.**

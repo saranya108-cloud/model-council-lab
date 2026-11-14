@@ -1,0 +1,376 @@
+**ACCEPT WITH NON-BLOCKING NOTES.** The exact frozen Revision 2 is formally qualified as abstract, non-operational architecture. No blocking defect was found. Human Chair adoption remains a separate decision.
+
+## A. Reviewer eligibility
+
+**ELIGIBLE** under the tracked operative Decision 0010, at **FORMAL ADOPTION / QUALIFICATION** tier.
+
+I am the OpenAI/Codex GPT-family reviewer serving the Astra role. The Human Chair identifies the author as **Fable 5.2, Anthropic/Claude family**, consistent with the artifact’s session identity statement.
+
+For this exact revision:
+
+1. I did not author it.
+2. I did not materially co-author it.
+3. I supplied no substantive operative wording incorporated into it.
+4. Kimi’s challenger participation does not disqualify me.
+5. I identified no incorporated Kimi wording creating a clause-2 self-certification issue for this reviewer.
+
+This determination uses the supplied author/session provenance and current reviewer identity; it does not claim an independent provider runtime audit. The complete earlier Revision 1 challenger report was unavailable for exhaustive wording comparison. That limitation does not make this reviewer the author of any identified passage.
+
+Kimi’s findings remain challenger evidence, not qualification.
+
+## B. Exact Revision 2 identity
+
+**EXACT MATCH**, independently verified against the complete new attachment.
+
+| Check | Result |
+|---|---|
+| Bytes | **58,816** |
+| SHA-256 | `3c753b42cc00a7e141909673b94f21ce1a430d1396e3471b052d9b64232a5bd8` |
+| Terminal LF | **Absent** |
+| Final text | `**STOP FOR HUMAN CHAIR REVIEW.**` |
+| Review coverage | Complete artifact, including opening commentary and all 28 sections |
+
+My earlier comparison used a body-only extraction. The frozen identity includes the **330-byte author preface**; the candidate body is unchanged. The earlier stop supplies no substantive review disposition.
+
+Repository checkpoint verified:
+
+- Branch: `m1-live-adapter-dev`
+- Local HEAD, cached tracking ref and live GitHub branch: `1da4bdf23cab5f4311fe0137b93f4f47fdedd8c8`
+- Ahead/behind: **0/0**
+- Staging: **empty**
+
+The shell’s live-remote lookup failed on name resolution; the read-only GitHub connector subsequently verified the branch’s commit. No fetch occurred.
+
+## C. Sources inspected
+
+The governing artifact hashes were independently checked and match the stated identities. Hashes below are abbreviated for readability.
+
+| Source | Identity and inspected scope |
+|---|---|
+| **ABE — Approval B Inspection-Envelope Architecture Rev 4** | `aaa66352…d5f0`; operative §§3–20 and §24, including AB-81–90 and P-1R4 |
+| **ABE qualification and adoption** | Complete Astra qualification, `1de68fb5…aea4`, and complete adoption record, including retained NB-1–NB-4 |
+| **SEQ — Sequencing Architecture Rev 4** | `fbd2790d…6c4c`; complete artifact and adoption record |
+| **SUCC — adopted Opus successor** | `ca4cbf8a…43a2`; R-06, R-23–R-43, §§F, J, N and Q; complete adoption record |
+| **REG — Proof-Obligation Register Draft 4** | `16c224d9…96ab`; §§1–5, PO-21–PO-24 and §12 |
+| **CON — Level-2 Evidence Contract** | `ddc72233…04d0`; adoption records and adopted §§1–12 |
+| **HP — H1–H20 identity policy** | `93a6df23…93ce`; policy, adoption context and retained notes |
+| **H18 Architecture Draft 4** | `528ac921…4629`; §§1–3, 8, 9.3, 10 and 12–14 |
+| **H18 §3.2 / PO-03 clarification** | `77177132…5a19`; complete record and operative overlay |
+| **PLAN — Implementation Plan working copy** | `f7bf6d73…b657`; acceptance/precedence, evidence-level separation, sequencing, §§I–J and N–O |
+| **ADOPT — Retention V2/M0 adoption working copy** | `4395b60e…8f35`; §§8–10 |
+| **Decision 0010, tracked operative file** | `3b1d7be5…ba93`; complete text |
+| **Current review inputs** | Formal authorization, complete frozen Revision 2, supplied challenger assignment and Kimi Revision 2 report |
+
+PLAN and ADOPT remain **untracked working-copy sources**; HEAD alone does not supply them. The similarly named untracked Decision 0010 file was not substituted for the tracked operative decision.
+
+**Source completeness:** sufficient for this qualification. I checked the material requirements directly, including complete SUCC provisions that Fable reported reading only in part. The candidate’s requirement indexes do not replace those requirements. I found no operative new rule materially dependent on a misstated or insufficient source basis.
+
+This establishes the sufficiency of the inspected sources, not an audit of Fable’s historical reading activity.
+
+## D. Prior challenger findings status
+
+Kimi, as originating challenger, reports these findings closed. My independent assessment finds no reason to reopen them.
+
+| Finding | Status | Independent basis |
+|---|---|---|
+| CH-B01 — circular set closure | **CLOSED** | GC-5/GC-7 and CR-35–45 require claim-level grounding; grouping supplies no proof. |
+| CH-B02 — originally invalid closures | **CLOSED** | CR-96–106 expressly cover original defects without requiring later change. |
+| CH-B03 — extra commitment layer | **CLOSED** | CR-83 and CR-90B permit evaluation before commitment and incorporation as first commitment. |
+| CH-B04 — concrete record representation | **CLOSED** | CR-91–95 require ascertainable information without prescribing its representation. |
+| CH-N01 — scope characterization | **CLOSED** | CR-05 accurately identifies scoped thresholds. |
+| CH-N02 — P0 status versus evidence | **CLOSED** | CR-58–62 separate disposition, evidence and downstream propositions. |
+| CH-N03 — nomination effects | **CLOSED** | CR-48–51 test assignments, concentration and abandonment by downstream effect. |
+| CH-N04 — dependency taxonomy | **CLOSED** | CR-45 preserves all five tags, including Approval-B-dependent. |
+| CH-N05 — materiality | **CLOSED** | CR-98–99 require proposition-specific assessment and conservative treatment of doubt. |
+| CH-N06 — premise-timing choice | **CLOSED** | Option B is expressly proposed as new policy; Option A remains an alternative. |
+
+The stale CH-N05 locator in §3 is addressed in §V below; it does not undo the operative correction.
+
+## E. Core closure-arrangement assessment
+
+**SUPPLEMENT.**
+
+Revision 2 supplies the narrow applicable closure arrangement contemplated by ABE AB-81–83:
+
+- exact item/set criteria;
+- independent verification and Human Chair determination;
+- package-wide consistency and completeness evaluation;
+- continuing-validity and reopening rules.
+
+It neither extends CP0–CP6 nor gives K0–K11/PF governing force. It supplies no broader V2-2B feasibility or selection standard.
+
+The three potentially consequential additions remain supplemental:
+
+| Provision | Assessment |
+|---|---|
+| CR-28/29 — premise timing | Defines closure-stage treatment while retaining earlier source-required establishment and first-dependent-effect boundaries. |
+| CR-83/84 — package evaluation | Supplies the showing needed for existing authorization prerequisites; creates no separate Human Chair authorization gate. |
+| CR-100 — failed closure and future reliance | Governs continued use of closures under this arrangement; does not retroactively adjudicate authorizations or alter operational gates. |
+
+No concrete PB, IM method, route, provider, custody arrangement or allocation is selected.
+
+## F. Circularity / grounding assessment
+
+**Sound.**
+
+CR-37 requires a complete, non-self-supporting justification for every claim. CR-40 tests whether an apparent base depends back on the set.
+
+| Structure | Outcome |
+|---|---|
+| A → B → A, with no independent support | Cannot close |
+| A → B → C → A, with no independent support | Cannot close |
+| Mutual item relationships with independently grounded claims | May close |
+| “External” anchor whose validity depends on the set | Rejected as a grounding base |
+| One circular line and one complete sound line | Sound line may establish the claim; circular line contributes nothing |
+
+CR-38 permits the item’s description to establish **what design is proposed**, not that the design conforms. Scheduled/carried premises support only expressly conditional conclusions.
+
+## G. Original-defect / reopening assessment
+
+**Sound.**
+
+CR-96 distinguishes:
+
+- a valid closure subsequently defeated; and
+- a closure whose criteria were never satisfied.
+
+The original-defect category covers omitted dependencies, understated reliance, unsupported premises, hidden circularity, omitted requirements, verifier defects and prohibited inputs.
+
+CR-98–99 correctly separate demonstrably harmless editorial changes from material changes and unresolved doubt. CR-100 stops prospective reliance even through an existing commitment. CR-101 propagates the consequence through affected claims and packages.
+
+CR-102 preserves historical records. CR-104 reserves the validity of an authorization issued on defective closure to the Human Chair. A dependent item with its **own** original defect cannot use CR-101’s suspension-lifting provision to avoid CR-105 renewed closure.
+
+## H. Closure-determination versus commitment verdict
+
+**SUPPORTED WITH QUALIFICATION.**
+
+Closure may establish procedural eligibility for a later commitment without adopting or fixing the concrete answer.
+
+The qualification is substantive: later review may use the existence, scope and current validity of closure status. It may not thereby treat the underlying concrete answer as governing design.
+
+SEQ §F and AB-82 continue to apply by effect. If a determination allows later work to proceed on a concrete answer as settled, CR-80 correctly classifies that effect as commitment. The determination’s label cannot exempt it.
+
+## I. Commitment-path assessment
+
+**Both paths are preserved.**
+
+1. Closure → separate concrete adoption/fixation → package evaluation → later incorporation.
+2. Closure → package evaluation → incorporation as first commitment.
+
+CR-90C allows mixed packages. CR-90D preserves dependency ordering, including joint commitment of dependent items. CR-90F permits closure and commitment on one occasion while retaining their distinct acts and prerequisites.
+
+No mandatory intervening commitment or additional Human Chair act is inserted.
+
+## J. Package-evaluation assessment
+
+**Legitimate prerequisite showing, not an unauthorized new gate.**
+
+CR-82–88 require:
+
+- current closure for every included item;
+- consistent exact identities;
+- grounding across the whole package;
+- complete mandatory-output support;
+- compliant included optional items;
+- disclosure of undischarged premises;
+- coverage of everything the authorization would fix.
+
+Evaluation commits and selects nothing. It may precede all commitments or never be used. Material changes require affected re-evaluation.
+
+A favorable evaluation neither qualifies P0 nor supplies accounting resolution, predecessor dispositions or Approval B authority.
+
+## K. Record-content abstraction assessment
+
+**ABSTRACT.**
+
+CR-91/92 require facts to be ascertainable, while allowing distributed records, references and different forms of expression. They prescribe no field grouping, serialization, storage layout or schema.
+
+That is consistent with **SUCC R-42 and REG PO-24**, unlike the fixed field groups identified as concrete in **SUCC §J**.
+
+CR-93 excludes a fixed representation from this proposal. CR-95 prevents descriptive status terms from becoming mandatory encoded values. Ordinary documentation can therefore exist without adopting a governing record representation.
+
+## L. Option B verdict
+
+**OPTION B SOUND.**
+
+The three classes serve distinct purposes:
+
+| Class | Required treatment |
+|---|---|
+| Design-validity | Established before closure whenever needed to judge legality, credibility, sufficiency or IM classification |
+| Pre-effect | Schedulable only under CR-29, with discharge strictly before dependent effects |
+| Execution-observable | Carried only with the reserved observation route, admissible result definition, bounded failure behavior and applicable stop |
+
+CR-24, CR-29–32 and the governing acquisition rules prevent authority availability from being treated as evidence.
+
+**PB sufficiency is not schedulable merely by calling its premise “pre-effect.”** A premise needed to establish credibility or sufficiency under AB-90 remains design-validity.
+
+## M. U-1 disposition
+
+**VALID DEFERRAL.**
+
+The general architecture need not settle every future PB premise’s classification. It must prevent unresolved classification from enabling closure.
+
+Revision 2 does so: doubtful PB-sufficiency premises are treated as design-validity until resolved. U-1 therefore leaves particular items blocked where necessary without blocking adoption of the abstract arrangement.
+
+## N. P0 / U-6 disposition
+
+**U-6 — VALID DEFERRAL.**
+
+The three-way distinction is correct:
+
+1. P0 disposition satisfies the qualification gate.
+2. P0 evidence may support only the propositions its admissible contents establish.
+3. A downstream actual Q-parent-dependent proposition needs successful qualification and lawfully established support for that use.
+
+Pre-authorization closure work and the Approval B inspection envelope are distinguishable. Nevertheless, AB-56R’s P0-output restriction cannot be bypassed by calling an import “closure evidence.”
+
+CR-60 and U-6 correctly leave affected items unclosed until the interpretation and lawful admission route are resolved. This review authorizes no P0 evidence acquisition or admission.
+
+## O. B5 assessment
+
+**Supported.**
+
+CR-65–67 follow actual proposition reliance. They catch silent assumptions excluding indexing, backup, synchronization or cleanup agents.
+
+Conversely, the mere technical possibility of agent involvement does not automatically create a B5 dependency. Static semantics remain distinct from actual host observation.
+
+No universal **B5 → P0 → Approval B** dependency is created.
+
+## P. Nomination / selection-effect assessment
+
+**Supported.**
+
+Nomination does not inherently select. Its downstream consequences, later assignments, concentration of work and disappearance of alternatives remain subject to SEQ §F/§G.
+
+CR-49–51 prevent model action or inaction from making an unacknowledged consequential disposition. CR-52 prevents criteria from being reshaped during closure to accommodate an exposed candidate.
+
+## Q. Mandatory-output assessment
+
+**Preserved.**
+
+CR-69–75 and CR-83 retain the complete ABE mandatory-output set. Unclosable mandatory support blocks Approval B; it does not justify pruning or substitution.
+
+Optional-item closure cannot replace mandatory support. Partial item/set closure establishes no authorization readiness. Mandatory-output support before authorization remains distinct from actual production of the staged outputs, including later M-7 tailoring.
+
+## R. U-7 disposition
+
+**UNNECESSARY.**
+
+A fixed closure-record representation is unnecessary for abstract adoption or for recording the required information.
+
+If one is later desired, its concrete status and applicable treatment must be addressed separately. This arrangement does not quietly supply closure for that separate choice.
+
+## S. Abstract-versus-concrete audit
+
+My classification is by effect, rather than acceptance of §22’s labels.
+
+| Significant group | Classification | Assessment |
+|---|---|---|
+| CR-13–18: items, sets, packages, alternatives | **ABSTRACT** | Defines scope and relationships, not particular envelope realizations |
+| CR-19–27: criteria and evidence separation | **ABSTRACT** | Establishes proof obligations and reliance limits |
+| CR-28/29: Option B and scheduling | **ABSTRACT** | New premise-timing policy; no premise, route or acquisition selected |
+| CR-33: Option A | **ABSTRACT — alternative only** | Not the proposed operative choice |
+| CR-35–45: grounding and dependencies | **ABSTRACT** | Defines justification properties; fixes no anchor or method |
+| CR-46–54, especially nomination | **ABSTRACT** | Defines entry, lineage and selection-effect rules; nominates nothing |
+| CR-55–75: P0, B5 and mandatory outputs | **ABSTRACT / AUTHORITY BOUNDARY** | Preserves source requirements and proposition-specific restrictions |
+| CR-76–81: closure procedure | **ABSTRACT** | Defines procedural roles and effects, not actual reviewers or design answers |
+| CR-78: verification tier | **DEFERRED** | Must be assigned consistently with D10’s applicable minimum requirements |
+| CR-82–88: package evaluation | **ABSTRACT** | Defines package-wide showing and verification |
+| CR-89–90F: commitment paths | **ABSTRACT** | Preserves permitted commitment forms and dependency ordering |
+| CR-91/92/95: record information | **ABSTRACT** | Semantic obligations without prescribed representation |
+| CR-93 | **AUTHORITY BOUNDARY** | Excludes representation choices; the choices it excludes would be **CONCRETE** |
+| CR-94 / U-7 | **UNRESOLVED, conditional future matter** | No fixed representation is presently needed |
+| CR-96–103, 105–109: continuing validity | **ABSTRACT** | Defines materiality, status consequences and renewed review |
+| CR-104 and express non-authority clauses | **AUTHORITY BOUNDARY** | Reserve consequential decisions and operational authority |
+
+I found no concrete realization offered for adoption as abstract.
+
+D10 is used for eligibility, procedure, findings and provenance. Acceptance is not substantive closure evidence. Deferred tier assignment is acceptable because it supplies no present closure and cannot waive the tier required by the actual review purpose.
+
+## T. Adversarial test results
+
+These are **independent documentary architecture tests**, not executed operational tests.
+
+| # | Case | Result and controlling reason |
+|---:|---|---|
+| 1 | Two-item circular set | **PASS** — CR-36–40 reject unsupported circular claims. |
+| 2 | Three-item circular set | **PASS** — grouping does not establish grounding. |
+| 3 | Externally grounded mutual set | **PASS** — claim-level support may be ordered from independent bases. |
+| 4 | False external anchor | **PASS** — CR-40 traces dependence back into the set. |
+| 5 | Omitted dependency discovered after closure | **PASS** — original defect; future reliance and affected dependents stop. |
+| 6 | Original defect without later change | **PASS** — discovery itself activates CR-96. |
+| 7 | Harmless editorial source change | **PASS** — recorded immateriality avoids reopening; doubt remains restrictive. |
+| 8 | Incorporation as first commitment | **PASS** — expressly permitted by CR-90B. |
+| 9 | Prior design adoption as first commitment | **PASS** — CR-90A preserves it. |
+| 10 | Package evaluation before commitment | **PASS** — closure required, prior commitment unnecessary. |
+| 11 | Package evaluation never used | **PASS** — creates no selection or authorization. |
+| 12 | Semantic record obligations without schema | **PASS** — CR-91 permits distributed/reference-based records. |
+| 13 | Fixed representation accidentally imposed | **PASS** — concrete effect falls outside CR-91–95’s abstract permission. |
+| 14 | Successful P0 status without substantive evidence | **PASS** — status cannot prove the downstream fact. |
+| 15 | Separately admitted P0 evidence | **PASS WITH NON-BLOCKING NOTE** — U-6 remains unresolved; affected closure stays blocked. |
+| 16 | Nomination causes selection-in-effect | **PASS** — CR-48–51 require appropriate Human Chair disposition. |
+| 17 | Approval-B-dependent premise | **PASS** — correct tag required; carrying cannot manufacture a prerequisite. |
+| 18 | Lawful pre-effect scheduling | **PASS WITH NON-BLOCKING NOTE** — permitted only outside design-validity; doubtful PB premises cannot be scheduled. |
+| 19 | PB premise needed for sufficiency | **PASS** — established before closure under CR-28/U-1. |
+| 20 | Scheduled premise fails | **PASS** — item loses closed status; dependent effect is barred. |
+| 21 | Carried premise fails | **PASS** — prescribed stop/classification applies; no retry or substitute authority. |
+| 22 | Source changes materially | **PASS** — future reliance is suspended/reopened as applicable. |
+| 23 | Verifier later found ineligible | **PASS** — original defect requiring renewed qualification and determination. |
+| 24 | Package changes after evaluation | **PASS** — affected re-evaluation and any necessary item reopening. |
+| 25 | Favorable package while P0 unqualified | **PASS** — P0 and authorization remain blocked. |
+| 26 | Favorable package while accounting unresolved | **PASS** — no authorization readiness; missing concrete accounting coverage also defeats package completeness where required. |
+| 27 | Architecture adopted but no items exist | **PASS** — adoption closes or commits no item. |
+| 28 | New concrete element class appears | **PASS** — CR-12 supplies no closure; AB-81 continues to bar commitment. |
+| 29 | Fixed representation desired later | **PASS** — requires separate concrete treatment. |
+| 30 | Determination lets later work treat answer as settled | **PASS WITH NON-BLOCKING NOTE** — commitment by effect; procedural labeling cannot evade prior closure or the Chair’s commitment act. |
+
+**Results: 27 PASS; 3 PASS WITH NON-BLOCKING NOTE; 0 FAIL.**
+
+Additional regression checks found no permitted route for protected-input laundering, reviewer self-certification, mandatory-output pruning, operational resumption, capacity inheritance or historical evidence being promoted into current deployment proof.
+
+## U. New blocking findings
+
+**NONE.**
+
+## V. Non-blocking notes
+
+**R2-N1 — Stale correction-table reference.**  
+Section 3’s CH-N05 row points to CR-90–92. The operative materiality provisions are **CR-98–99**. The row’s description and §20 establish the intended rule, so this is a navigation defect, not an unresolved substantive correction.
+
+**R2-N2 — Deferral summary must preserve earlier deadlines.**  
+Section 25’s catch-all reference to ABE §24 matters being deferred to Approval B authorization is overbroad as a summary. **CR-43 and ABE §24 retain earlier boundaries**, particularly UQ-4 before route commitment and UQ-9 before adoption of a dependent PB/custody design. The summary cannot postpone those explicit requirements.
+
+**R2-N3 — Closure status versus settled design.**  
+Section 26’s statement that a determination gives later work “nothing to build on” must be understood consistently with CR-80 and CR-83: procedural closure status can inform subsequent evaluation; the concrete answer cannot thereby become governing design. Actual downstream effect remains controlling.
+
+These notes require no replacement operative wording and do not require rewriting the frozen artifact for architectural adoption.
+
+## W. Whole-revision disposition
+
+**ACCEPT WITH NON-BLOCKING NOTES**
+
+The complete exact Revision 2 identified in §B is **formally qualified as abstract, non-operational architecture** at **FORMAL ADOPTION / QUALIFICATION** tier.
+
+## X. Human Chair adoption eligibility
+
+**YES.**
+
+The Human Chair may adopt this exact frozen revision as the **narrow Concrete Approval B Envelope Closure Architecture**, with **Option B as proposed** and the non-blocking notes retained.
+
+This qualifies the abstract arrangement only. It closes, nominates, selects or commits no concrete item and establishes no package’s readiness for Approval B.
+
+## Y. Exact authority statement
+
+This review grants no adoption, closure determination, nomination, commitment, Approval B, protected read, P0 qualification, B5 progression, PB/IM or empirical acquisition, P0 evidence admission, host/platform/runtime observation, concrete route/custody/provider/accounting choice, broader closure arrangement, backend selection, implementation, execution, F/Q/O authority, cleanup, release, disposal or successor authority.
+
+The attributed statuses remain:
+
+- **B5 G1 — HOLD**
+- **P0 candidates — NOT QUALIFIED**
+- **Approval B — UNAUTHORIZED**
+- **V2-2B implementation/execution — UNAUTHORIZED**
+
+No protected content was inspected. No tests, probes, builds or acquisitions were run. No subagent was used. No files or Git state were changed.
+
+**STOP FOR HUMAN CHAIR REVIEW.**
