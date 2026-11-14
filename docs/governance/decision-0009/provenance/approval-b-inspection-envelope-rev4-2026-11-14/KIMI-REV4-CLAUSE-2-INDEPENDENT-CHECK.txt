@@ -1,0 +1,156 @@
+. Reviewer eligibility
+ELIGIBLE
+- Observed identity: Kimi K3.1 Pro, model ID moonshotai/kimi-k3.1-pro, supplied through OpenRouter; underlying Moonshot AI Kimi family.
+- I did not author Revision 4, which identifies Claude Opus 5.5 as its author.
+- I did not author Astra’s Revision 3 review language.
+- I did not materially co-author the incorporated identity-metadata proposition.
+- Moonshot AI Kimi is independent of both Anthropic/Claude and OpenAI/GPT.
+- Historical Kimi reviews recorded elsewhere in the governance lineage do not constitute authorship of this artifact or the identified wording. Decision 0010 clause 7 expressly provides that historical contribution elsewhere is not, by itself, disqualifying.
+B. Exact Revision 4 identity
+The artifact reviewed is the complete supplied text titled:
+Decision 0009 — Candidate Approval B Inspection-Envelope Architecture — Revision 4
+Identifying particulars:
+- For: Amy, Human Chair
+- Date: November 14, 2026
+- Author: Claude Opus 5.5, Anthropic/Claude family
+- Status: non-adopted Category 2 candidate; architecture-only; non-operational; chat-only
+- Superseded candidate: Revision 3, 72,399 bytes, SHA-256 f35c61a63fb1b8ab31881735bff6c9cfdbf6c6756b373f33283d4aff3dd7236d
+- Reviewed span: the titled artifact through its final “STOP FOR HUMAN CHAIR REVIEW.”
+- Relevant correction set: AB-18R4, AB-29R4, AB-80R4, AB-88, AB-89, AB-90, and their directly dependent matrix and failure language.
+No Revision 4 byte count or content hash was supplied, and no repository copy of this candidate was located in the authorized records. I therefore assert no invented digest. The subsequent formal record should pin the exact supplied Revision 4 bytes by content hash.
+The artifact remains frozen and unmodified.
+C. Sources inspected
+1. Decision 0010
+- docs/decisions/0010-mandatory-cross-family-review.md
+- Status; Binding Decision, especially clauses 1–2, 4–5, 7–11.
+- The similarly named 0010-mandatory-cross-family-review-1.md was inspected only to distinguish its historical pending-adoption text. It was not used as the controlling version.
+2. Accepted Implementation Plan
+- docs/governance/decision-0009/DECISION-0009-RETENTION-V2-M0-IMPLEMENTATION-PLAN.md
+- §§B, E, F, I, J, N, O, Q–R.
+- Principally relied on: §J’s bounded read-only inspection and outputs; §N’s Approval B scope; §R’s express absence of protected-read authority.
+3. Sequencing Architecture Revision 4
+- docs/governance/decision-0009/provenance/sequencing-rev4-2026-11-12/FABLE-SEQUENCING-ARCHITECTURE-REV4.txt
+- §§D–H.
+- Independently verified: 23,741 bytes, SHA-256 fbd2790d9e58dad673ca996487ba63413233c82c7c07d0f80533a32062096c4c, matching its adoption record.
+4. Sequencing Architecture Revision 4 adoption
+- docs/governance/decision-0009/DECISION-0009-SEQUENCING-ARCHITECTURE-REV4-ADOPTION.md
+- Adopted architectural effects 1–6, retained §F caution, and explicit non-authority.
+5. Adopted Opus Pre-Gate V2-2B Requirements and Closure Architecture
+- docs/governance/decision-0009/provenance/opus-successor-2026-11-12/OPUS-SUCCESSOR-ARCHITECTURE.md
+- §§E.0, F.1–F.3, G, K, L, N; R-23, R-26–R-28, R-32, R-38–R-39.
+- Independently verified: 119,622 bytes, SHA-256 ca4cbf8ade46a01b04fded4d4f89fce28b3101799e159b630c8a1a33bf1e43a2, matching its adoption record.
+6. Opus successor adoption
+- docs/governance/decision-0009/DECISION-0009-PRE-GATE-V2-2B-OPUS-SUCCESSOR-ADOPTION.md
+- Adopted architectural scope and continuing precedence; retained cautions; explicit non-authority.
+7. Proof-Obligation Register
+- docs/governance/decision-0009/provenance/h18-draft4-2026-11/Pasted text(20261108-190715).txt
+- §§1–5; PO-01, PO-02, PO-06, PO-21–PO-24; §§7–8.
+- Adoption confirmed through the Level-2 Evidence Contract record’s November 8 adoption entry.
+8. Level-2 Evidence Contract
+- docs/governance/decision-0009/DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md
+- Adoption records and adopted Draft 2 §§1–7 and 10–12, particularly §§2, 4, 5 and 12.
+Astra’s Revision 3 review was not supplied with this assignment and was not found among the authorized Decision 0009 records searched. No finding below uses Astra’s earlier statement as evidence.
+No protected P/ content, P0 candidate, B5 surface, host/platform/runtime state, or actual F/Q/O object was inspected. No tests, probes, builds, experiments, acquisitions, or mutations were performed.
+D. Decision 0010 clause-2 determination
+Decision 0010 clause 2(c)(ii) permits material reviewer-authored language to receive an additional independent check by an eligible reviewer who is neither:
+- the writer of that language; nor
+- the artifact’s author.
+I satisfy both requirements and am from a third underlying model family. The Human Chair expressly directed this additional-check route under clause 11.
+This review also complies with clause 4’s narrowed-review requirement:
+- Material scope: the identity-metadata correction and static-versus-empirical distinction.
+- Contributor scope: Opus as artifact author; Astra as prior reviewer and source of the identified wording; Kimi solely as additional independent checker.
+- No coverage claim: this is not whole-revision qualification, consensus, adoption, or approval of unreviewed provisions.
+This satisfies the additional-independent-check component of clause 2(c)(ii). It does not, by itself, establish every other formal-review, findings-record, consensus, or adoption requirement.
+E. P1–P5 findings
+P1 — No blanket rule placing every identity-metadata observation inside Approval B
+SUPPORTED
+PLAN §J authorizes consideration of only a future single bounded read-only inspection of three enumerated objects, with no writable descriptors. It does not say that every observation characterized as identity metadata falls within that inspection.
+More importantly, SUCC R-32 requires specific prior authority for each empirical or execution observation and states that acquiring platform premises is host observation subject to the unopened host-observation envelope. SUCC §L separately places actual runtime behavior, process state, deployed configuration, installed versions, and actual runtime mismatch outside the document read.
+Therefore, the “identity metadata” label cannot override those method- and proposition-specific limits.
+P2 — No blanket rule placing every identity-metadata observation outside Approval B
+SUPPORTED
+PLAN §§J and N do not expressly exclude every metadata operation associated with identifying or reading an authorized object. Sequencing Revision 4 §H expressly permits a future inspection-envelope architecture to define the kinds of observation that would be allowed.
+SUCC §L does not create the asserted categorical exclusion: it expressly describes itself as a requirements dependency map, not an inspection envelope or the PLAN §J output list. Omission of a metadata method from that map therefore cannot establish a blanket prohibition.
+This is only a no-blanket-exclusion finding. It does not affirmatively place any concrete method inside Approval B.
+P3 — Method-specific and effect-based classification is required
+SUPPORTED
+Evidence Contract §2 requires each claim to identify its operation or mechanism, material premises, intended reliance, observations, dependencies, and limits. Material mechanism or premise changes are evaluated separately.
+Sequencing Revision 4 §§D–F likewise requires classification by substantive reliance and effect rather than terminology. SUCC R-38 requires every material premise to be classified, while R-32 separately governs acquisition authority.
+Consequently, the exact fact acquired, method, semantics, empirical premises, objects touched, agent reliance, substantive effect, and governing text must be assessed claim by claim.
+P4 — “Not B5” does not imply “authorized by Approval B”
+SUPPORTED
+B5 governs particular agent-characterization and exclusion propositions; Register §5 and SUCC R-23 do not make it the only applicable authority boundary.
+A method that requires no B5-governed fact must still satisfy, as applicable:
+- PLAN §§J and N’s object and inspection limits;
+- SUCC R-32’s specific acquisition-authority requirement;
+- platform/host-observation restrictions;
+- proposition-specific evidence and predecessor requirements.
+Absence of a B5 dependency therefore supplies no affirmative Approval B authority.
+P5 — Calling something “metadata” establishes neither permission nor prohibition
+SUPPORTED
+SUCC §K invariant 6 states that ambient platform metadata is neither presumed governed nor presumed exempt and requires a justified boundary determination. Although that invariant concerns accounting rather than Approval B permission, it directly confirms that the label “metadata” does not settle classification.
+SUCC R-27 separately provides that names, paths, inodes, digests, and similar identifiers do not independently establish governed identity. R-32 governs acquisition authority independently of the identifier’s label. SUCC §L also distinguishes declared information from actual deployed or runtime facts.
+Permission and prohibition therefore follow from the actual operation and governing authority, not the word “metadata.”
+F. S1–S5 findings
+S1 — Static semantic assurance can be performed without itself constituting host/platform observation
+SUPPORTED WITH QUALIFICATION
+Register §3 classifies design and feasibility analysis from authoritative semantics, exact implementation/configuration, capability and route analysis as S, distinct from E evidence about actual deployment and platform properties. Sequencing Revision 4 §H permits documentary envelope architecture under a bounded assignment without acquiring platform premises.
+The qualification is essential:
+- the analysis must remain genuinely documentary or semantic;
+- it requires the applicable specific assignment;
+- it must use no protected facts or unauthorized empirical acquisition;
+- documentation asserting actual deployed state is not converted into static semantics merely by being read.
+SUCC R-32 continues to govern any acquisition of actual platform premises.
+S2 — Actual applicability is a separate empirical proposition
+SUPPORTED
+Register §3 distinguishes S from actual deployment, configuration, platform, runtime, and protection-boundary evidence. PO-01 expressly assigns S to native semantics and E to deployment-dependent applicability. PO-21 similarly distinguishes premise-inventory and acquisition-feasibility analysis from actual-state observations.
+SUCC §L reinforces the distinction: declared configuration is not evidence of what is installed, loaded, or executing.
+S3 — Required empirical applicability evidence must be obtained under its governing authority
+SUPPORTED
+Register §3 states that E-class acquisition requires specific authority and all applicable predecessor gates. SUCC R-32 repeats that requirement and adds the host-observation restriction for platform premises. Evidence Contract §4 likewise requires specific observation authority for platform-premise acquisition.
+The applicable authority remains proposition-specific; this finding does not select Approval B, B5, or another route for any concrete method.
+S4 — Static semantics alone do not establish actual applicability
+SUPPORTED
+Register §3 expressly states that static assurance alone is insufficient for actual deployment or execution claims. PO-21 rejects the substitution of generic documentation for deployed correspondence. SUCC §L states that a document read establishes declarations, not deployed or executing reality.
+S5 — Missing empirical applicability evidence limits reliance without invalidating static analysis
+SUPPORTED
+Register §3 preserves S as valid evidence for design and feasibility while denying its sufficiency for actual deployment or execution claims. PO-21 rejects documentation as a substitute for deployed correspondence; it does not reject the underlying semantic analysis.
+Register CP1 and §8 require static questions answerable at the current stage to be resolved while recording remaining gated dependencies. Thus missing E evidence blocks the conclusions that need applicability. If that missing evidence prevents a credible feasibility showing or is itself a present-stage prerequisite, the affected showing remains unresolved or gated—but the narrower static analysis is not thereby rendered invalid.
+G. Additional wording-provenance scan
+Identified primary overlap
+AB-80R4’s no-blanket-inclusion/no-blanket-exclusion proposition, together with its restatement in AB-18R4 and AB-29R4, is the identified material Astra-derived substantive wording. It is independently supported through P1–P5 above.
+Additional expressly attributed guidance
+AB-89 expressly identifies its unpopulated guidance as Astra’s. I conservatively treated the following as additional material reviewer-derived propositions and independently checked them:
+AB-89 proposition
+Object type: no blanket determination
+Link status unresolved in the abstract; resolving other objects, parents, or namespace state may cross the boundary
+Same-handle change indicator requires analysis of the observation, semantics, and applicability premises
+Other metadata: no default either way
+Agent characterization: class 3 where that reliance is present
+Authority versus sufficiency
+AB-90’s distinction between lawful authority and PB sufficiency, including “no acquisition may establish its own prerequisite,” has uncertain exact wording provenance because Astra’s Revision 3 text was unavailable. I conservatively treated it as potentially reviewer-derived and independently checked it:
+- SUCC R-26–R-28 separate acquisition provenance and identity sufficiency from authority.
+- R-32 independently governs acquisition permission.
+- R-38 and PO-21 expressly reject an operation requiring the fact it is meant to produce.
+- Evidence Contract §§4 and 7 require independent provenance and transfer bases.
+The proposition is independently supported.
+Remaining assigned language
+AB-88’s S/E terminology is governing-source/shared terminology drawn directly from Register §3. Its substantive application is independently supported through S1–S5.
+The remaining AB-18R4/AB-29R4 mechanics and directly dependent authority-matrix, P-1R4, F-16R4, and F-6R4 language restate the propositions checked above or present Opus’s proposed candidate structure. No further material Astra-derived substantive proposition is apparent from the supplied record.
+Because Astra’s exact Revision 3 review was unavailable, this scan cannot independently certify the absence of further verbal overlap. That is an attribution-record limitation, not an unresolved source-support defect: all expressly attributed and conservatively identified potentially reviewer-derived propositions in the assigned scope have received independent substantive checks.
+H. Final clause-2 disposition
+CLAUSE-2 INDEPENDENT CHECK — PASS WITH NON-BLOCKING NOTES
+Non-blocking record notes:
+1. The formal review record should add the exact frozen Revision 4 content hash and byte count.
+2. The record should preserve AB-89’s express Astra attribution and map any additionally identified exact adopted wording to the independent checks in §G.
+3. No concrete IM method, PB, source-identification operation, or empirical-applicability route is classified, qualified, or authorized by this check.
+No materially unsupported proposition or unresolved source-support defect remains within the assigned narrow scope.
+I. Consequence for Astra eligibility
+The identified Decision 0010 clause-2 wording-provenance issue has received the additional eligible independent check required for OpenAI/Astra to resume whole-revision qualification of the exact frozen Revision 4.
+This does not claim that Revision 4 itself has been qualified.
+J. Authority statement
+This narrow review grants no architectural adoption, operational authority, successor authority, or repository authority. It grants no Approval B, protected read, PB or IM acquisition, P0 qualification, B5 progression, host/platform/runtime observation, concrete closure, backend selection, implementation, execution, F/Q/O authority, cleanup, or repository/file/Git mutation.
+STOP FOR HUMAN CHAIR REVIEW.
+Build · Kimi K3.1 Pro · 3m 52s · 93.8 tok/s
+Build·Kimi K3.1 ProOpenRouter
+~/aclab/model-council-lab:m1-live-adapter-dev

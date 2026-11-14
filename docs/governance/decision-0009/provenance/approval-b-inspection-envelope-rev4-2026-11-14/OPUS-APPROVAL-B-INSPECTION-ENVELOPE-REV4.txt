@@ -1,0 +1,1061 @@
+Before writing Revision 4 I'll check two sources: Register §3 (static versus empirical evidence classes) and the exact PLAN §J text.
+
+Both sources are confirmed, and I touched nothing under `P/`. The exact PLAN §J list includes "tailored V2-2B tests" and "no source or package acceptance". PLAN §F labels `P/probe.c` the "Protected runtime implementation", which settles how to read "plist/runtime mismatch". Register §3 confirms the distinction between static assurance (S) and empirical premise evidence (E). Revision 4 follows.
+
+---
+
+# Decision 0009 — Candidate Approval B Inspection-Envelope Architecture — Revision 4
+
+**For:** Amy, Human Chair · **Date:** November 14, 2026
+**Author:** Claude Opus 5.5 (`claude-opus-5-5`, Anthropic/Claude family; self-reported by the session)
+**Status:** non-adopted Category 2 candidate · architecture-only · non-operational · chat-only · for renewed Decision 0010 qualification of the whole revision
+**Supersedes, as a candidate only:** Revision 3, 72,399 bytes, SHA-256 `f35c61a63fb1b8ab31881735bff6c9cfdbf6c6756b373f33283d4aff3dd7236d`. Astra: **REVISE**, **NOT QUALIFIED**, adoption eligibility **NO**. Blocking findings: R3-B1 and R3-B2.
+**Authorities:** AUTH-1 to AUTH-4, the Human Chair authorizations of November 14, 2026; AUTH-4 is this correction.
+**Not self-qualified. Not self-adopted.**
+
+---
+
+## 0. Corrections
+
+### 0.1 Blocking findings
+
+| Finding | Revision 3 provisions | Revision 4 correction | Where |
+|---|---|---|---|
+| **R3-B1** Unsupported mandatory outputs could be dropped without blocking Approval B | AB-28R(3), F-6R, P-1R; their interaction with AB-05, IC-0, AB-73 | **Mandatory output set** (MOS), taken verbatim from PLAN §J (AB-84). It is kept separate from **optional envelope items** (AB-85). Before authorization, every MOS output needs a credible, lawful, independently reviewable PB design for each acquisition relationship it requires. **If any MOS output lacks one, Approval B under the retained plan is not authorizable.** No protected acquisition occurs and no partial package is substituted (AB-86). Optional items without a PB may be omitted. A credible design that fails during execution yields a failed or incomplete read record. That failure does not retroactively invalidate the authorization. The PLAN item "tailored V2-2B tests" is reconciled with SUCC's separation of read and tailoring (AB-87) | §9.2, §9.2a; AB-05R4, AB-11R4, AB-28R4, AB-84 to AB-87; F-6R4; P-1R4; §22; §24 |
+| **R3-B2** AB-80 turned unresolved IM scope into a categorical exclusion and treated static semantics as host acquisition | AB-80(a)–(c), AB-18R(6), §21 IM row, §24 blocker 3 | No blanket inclusion or exclusion of identity metadata (AB-80R4). Classification is made method by method and claim by claim, and all four classes remain available. Class 1 requires an exact, source-based determination. **Static semantic assurance (Register §3 class S) is kept separate from empirical applicability evidence (class E)** (AB-88). Authority classification is kept separate from PB sufficiency (AB-90). A classification template is added (AB-89). The finding that *no IM method is presently classified or qualified in the reviewed record* is kept, as a statement about the record and not about the category | §9.3; AB-18R4, AB-29R4, AB-80R4, AB-88 to AB-90; §21; F-16R4; P-1R4; §24 |
+
+### 0.2 Non-blocking notes (Astra Revision 3 review §K)
+
+| Note | Change |
+|---|---|
+| NB-1 Placement of C-0 | Renamed **AR-3, acquisition coherence**. It now sits in Tier B (original-acquisition provenance). Tier C now holds only the later-interval claims C-1 and C-2. No whole-file output depends on later immutability |
+| NB-2 Scope of AB-27R | AB-27R4 applies only to **needed** relationships. A relationship that is not needed gets status `NOT-REQUIRED` and is not attempted |
+| NB-3 S-14 | S-14 is now a whole-event **T1** stop. There is no item-level variant and no third tier |
+| NB-4 Sensitivity envelope | AB-76R4: suitability is judged against the **content-sensitivity envelope** the authorization defines for what the authorized objects may lawfully contain. A recipient of screened content needs to be suitable for its screened EVS. The screening component must be suitable for the full source content |
+| NB-5 Status wording | Blockers are worded as findings about the reviewed record, for example "no design is established in the reviewed record" (§24) |
+
+### 0.3 Retained in substance (AUTH-4 §2, §5, §6)
+
+- No universal B5 → P0 → Approval B dependency.
+- P0 → Approval B order.
+- B5 dependencies only where a specific proposition or criterion needs them.
+- Narrow CP machinery stays in narrow scope.
+- K0–K11/PF stay non-governing.
+- No broader closure ladder.
+- AB-81/82: the first concrete commitment is blocked until its closure is identified and satisfied.
+- **AB-83:** no adopted arrangement presently supplies complete closure for concrete Approval B envelope elements. Astra confirmed this (Revision 3 review §F).
+- AC versus PR, per-actor EVS, GPM Classes A/B/C, Class C ineligible, route suitability before first exposure, route-specific hosted treatment.
+- Tier A wording; no planned PB-free Approval B; credible-PB failure produces uncertainty, not retry.
+- Receiving-domain accounting; no Approval B capacity exemption.
+- No implied cleanup, release, disposal or unknown-media inspection.
+- J1 applied obligation by obligation; static declarations never treated as runtime facts.
+
+**Numbering.** Provisions unchanged since Revision 3 keep their numbers, including any earlier R suffix. Provisions changed in this revision carry the suffix **R4**. New provisions are AB-84 to AB-90. C-0 is renamed AR-3.
+
+---
+
+## 1. Source posture
+
+### 1.1 Access
+
+Access was read-only, to non-protected governance records under `docs/`.
+
+- `git rev-parse HEAD` → `e0da4c1b30962933a8b8e2f50219555f42958657` on `m1-live-adapter-dev`.
+- `sed`, `grep` and `wc` on governance files.
+- No fetch, status, staging or file creation.
+- Nothing under `P/`, no P0 candidate, no B5 surface, no F/Q/O object, no host, platform or runtime state.
+
+### 1.2 Sources
+
+| Abbrev. | Source (under `docs/governance/decision-0009/` unless noted) | Read across Revisions 2–4 |
+|---|---|---|
+| SUCC | `provenance/opus-successor-2026-11-12/OPUS-SUCCESSOR-ARCHITECTURE.md` (fresh SHA-256 match `ca4cbf8a…43a2`, Revision 2 session) | §§A, C, **E.0**, E.9, F.1–F.4, G, I, L, M, Q; R-06; R-23; R-26 to R-40 |
+| SUCC-A | `DECISION-0009-PRE-GATE-V2-2B-OPUS-SUCCESSOR-ADOPTION.md` | Whole |
+| REV4 | `provenance/sequencing-rev4-2026-11-12/FABLE-SEQUENCING-ARCHITECTURE-REV4.txt` | §§D, E, F (complete), G, H, K, L, M |
+| REV4-A | `DECISION-0009-SEQUENCING-ARCHITECTURE-REV4-ADOPTION.md` | Effects 1–6; §F caution |
+| CON | `DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md` | §§1, 4, 5, 7, 10, 11 |
+| HP | `DECISION-0009-V2-2B-EXPERIMENT-SCOPED-SUPPORT-OBJECT-IDENTITY-POLICY.md` | H8–H10, H15–H20 |
+| REG | `provenance/h18-draft4-2026-11/Pasted text(20261108-190715).txt` | **§§2, 3**, 4, 5; PO-15; PO-22 |
+| H18 | `provenance/h18-draft4-2026-11/Pasted text(20261107-223309).txt` | §10; §12.2 |
+| PLAN | `DECISION-0009-RETENTION-V2-M0-IMPLEMENTATION-PLAN.md`, **untracked working copy** (Astra hash `f7bf6d73…`) | Provenance; §§E, **F (file-map rows for `P/`)**, I, **J (verbatim, re-read for this revision)**, N, O, Q |
+| ADOPT | `DECISION-0009-RETENTION-FORMAT-V2-AND-M0-ADOPTION.md`, untracked (`4395b60e…`) | §§9–10 |
+| HIST | `docs/reviews/decision-0009-progress-handoff-2026-11-03.md` | §2 (attributed status) |
+| AST-R1 to AST-R3 | Astra's reviews of Revisions 1–3, supplied in chat | Whole. These are review records, not operative text |
+
+**Not read by me:** Decision 0010 (application attributed to AST-R2 §A and AST-R3 §A), the bodies of PO-19 and R-18, the full PO-03 clarification, and r2 / Amendment 1a. Per AST-R2 §C and AST-R3 §C, Astra inspected Decision 0010, PO-19, R-18 and the PO-03 clarification.
+
+### 1.3 Attribution
+
+PLAN and ADOPT are untracked working-copy records. These statuses are attributed, not fresh: B5 G1 **HOLD**; both P0 candidates **NOT QUALIFIED**; V2-0, V2-1, M0-1 and V2-2A **ACCEPTED / COMMITTED / PUSHED**; Approval B **UNAUTHORIZED**. The phrases "no design is established" and "no route has yet been qualified" describe the reviewed record only. Possible external designs or configurations were not inventoried.
+
+---
+
+## 2. Provision labels
+
+| Label | Meaning |
+|---|---|
+| **[S]** | Restates adopted or retained governing text that reaches the subject by its own terms |
+| **[G]** | Generalizes an adopted source |
+| **[N]** | New proposed envelope rule; marked where stricter than adopted text |
+| **[D:t]** | Deferred concrete binding, fixed at deferral point *t* (§24) |
+| **[U]** | Unresolved |
+| **[X]** | Authority boundary |
+
+`AB-nn`, `IC-n`, `M-n`, `AR-n`, `C-n`, `IM`, `OR`, `IQL`, `MOS`, `GPM`, `AC`, `PR`, `S-n`, `P-n`, `F-n`, `T1`/`T2`, and the tier and class letters are candidate reference labels. They are not Register obligations, closure points or K-points, and they confer no authority **[X]**.
+
+---
+
+## 3. Authority boundary
+
+- **AB-01 [X].** Neither this candidate nor its adoption grants operational permission. Adoption would settle abstract requirements for any future envelope and authorization. It would authorize no access, acquisition, copy, transfer, observation, retention, release, disposal or gate movement.
+- **AB-02 [N].** A provision that conflicts with adopted architecture is void and becomes [U]. It is not reinterpreted to avoid the conflict.
+- **AB-03 [N].** Silence grants nothing.
+- **AB-04 [X].** This envelope is not a closure ladder. It supplies no feasibility standard, closure point, selection rule or closure arrangement for any scope, including its own concrete elements (§14.5).
+
+---
+
+## 4. Purpose and decision layers
+
+**AB-05R4 [S].** PLAN §J (untracked): "After P0, V2-0, V2-1, M0-1 and V2-2A, one Approval B should authorize a single bounded read-only inspection of" `P/probe.c`, `P/package.json` and `P/probe.plist`. The inspection "must use no writable descriptors and produce" the outputs set out verbatim in §9.2a as the MOS. PLAN §J closes with: "No protected read is authorized by this plan."
+
+REV4 §H: envelope architecture writes the contract for a future observation and observes nothing. This candidate preserves the PLAN §J list as the MOS. It does not prune it (AB-86).
+
+**AB-06 [N].** A future Approval B, if granted, permits only the governed event its authorization expressly describes (§10), within its envelope and bounds.
+
+**AB-07 [G].** Decision layers, generalized from REV4 §§E, G and H; REV4-A effects 3–5; SUCC §F.1–F.3; SUCC-A; REG §§4–5; PO-22. Each layer needs its own act, and no lower layer implies a higher one.
+
+| Layer | Decided by | Approval B's role |
+|---|---|---|
+| L1 Permission | Future Approval B (Human Chair), after the §14 prerequisites | **The only decision Approval B makes** |
+| L2 Acquisition | The authorized event | ORs at `OBSERVED – NOT ADMITTED` |
+| L3 Admission | Receiving domain's own authority (R-06; CON §§4, 10; H17) | None |
+| L3a Tailoring | Separate candidate work under review and Chair adoption (REV4 §H; SUCC K4T description, non-governing) | Supplies admitted inputs only. M-7 is produced here (AB-87) |
+| L4 Feasibility | Narrow profile: Register CP1, within scope. Broader: separately adopted arrangements only, **none adopted** | None |
+| L5 Consequential disposition / selection / elimination | **Human Chair decision after applicable closure** (REV4 §G) | None |
+| L6 Gate closure | Each gate's own process (REG §5; PO-22; R-39) | None |
+| L7 Concrete-design adoption | Narrow: applicable CP2. Otherwise: the applicable separately adopted arrangement (§14.5). Then Chair adoption | None |
+| L8 Implementation authorization | Separate Chair decision behind R-39 / REG §5 | None |
+| L9 Execution authority | Separate Chair decision; narrow CP3 within its scope | None |
+
+**AB-08 [N].** No read content, success, failure, completeness or adversity moves any layer.
+
+---
+
+## 5. Inspection classes
+
+**AB-09 [S/G].** The classes follow SUCC §L row by row. **The class menu is not an entitlement.** A class enters an envelope only through a MOS output (§9.2a) or an authorized optional IQL item (AB-85).
+
+| Class | Information (SUCC §L) | MOS output it serves | Binds | Optional beyond the MOS? |
+|---|---|---|---|---|
+| **IC-0** Acquired-byte identity | Byte size and digest of each file | **M-1** | R-06, R-26 | — (mandatory) |
+| **IC-1** Operations and mechanisms | Declared and coded operations | **M-2** | R-01, R-03, R-09 | Further items optional |
+| **IC-2** Result and error handling | Coded handling | **M-2** (within interfaces and relevant functions) | R-02, R-34 | Further items optional |
+| **IC-3** Declared capability and resource posture | Descriptor, inheritance and limit code paths | — | R-03, R-23 | **Optional only** |
+| **IC-4** Binding points; declared configuration | Declared configuration | **M-3** | R-26, R-38 | Further items optional |
+| **IC-5** Declared external dependencies | Dependencies as named | — | R-38 | **Optional only** |
+| **IC-6** Documentary inconsistencies | Mismatches between inspected files | **M-4** | Premise classification; case selection | Further items optional |
+| **IC-7** Integration seams; V1 logic | Documentary only | **M-5, M-6** | Later candidate work; tailoring | — |
+
+**IC-0 note [N].** Size is the computed length of the acquired bytes, not a filesystem metadata value. AR-2 may be supported without any separate metadata observation where the acquisition design and original evidence establish completeness (AST-R3 §H). No metadata method is presumed necessary.
+
+- **AB-10 [S].** SUCC §L: actual runtime behavior, platform result modes, process state, deployed configuration, installed versions and actual runtime mismatch all stay outside the read.
+- **AB-11R4 [S/N].** PLAN §J's "tailored V2-2B tests" is a **MOS output produced at L3a**, not by the read itself (AB-87). "No source or package acceptance" is a **mandatory negative constraint** on the package (M-8).
+- **AB-12 [N].** IC-7 records documentary location and description only. It settles no design.
+
+---
+
+## 6. Acquisition, visibility and recording boundary
+
+### 6.1 Actors and scopes
+
+**AB-13R [N].**
+
+1. **Acquisition component (AC).** A bounded component that acquires the complete bytes of each enumerated object once and computes Tier A. Whole-file acquisition is needed for M-1. It does not mean every actor receives plaintext.
+2. **Plaintext recipient (PR).** Any person, model, service, tool or intermediary that receives protected plaintext, whole or partial, where a MOS output or authorized optional item needs one.
+3. **Non-plaintext recipient.** An actor that receives only Tier A values, records without verbatim protected content, or reports.
+
+The four scopes:
+
+- **AAS (authorized acquisition scope):** the complete bytes of the enumerated objects, acquired by the AC. It also covers IM, but only where an IM act is lawfully classified and authorized under §9.3.
+- **EVS (executor visibility scope):** set per actor by the authorization. AC: the whole bytes. Each PR: what its authorized exposure mechanism delivers. Non-plaintext recipients: no plaintext. **No actor has EVS by default.**
+- **RS (recording scope):** content that answers a MOS output or authorized optional item; IC-0; lawful IM; and mandatory process records (per-object scope note, stop records, incident records, completeness notes, manifest).
+- **EIC (excluded and incident content):** content that must not be retained beyond governed instances, transcribed, summarized, characterized or relied on.
+
+**AB-14R [N]. Resolution of UQ-1.**
+
+- Acquisition: whole object, by the AC.
+- Visibility: per actor, never universal.
+- Recording: limited to MOS and authorized items.
+- Reliance: limited to later admission.
+
+Screening is optional. If used, it is a governed actor and must be suitable for the full content (AB-76R4). Its output is a governed transformation (AB-31). [D: Approval B authorization]
+
+### 6.2 Content dispositions
+
+| Content | In AAS | Visible to | Recordable | Handling |
+|---|---|---|---|---|
+| (a) Content answering a MOS output or authorized item | Yes | AC; authorized PRs | Yes | OR (§8) |
+| (b) Ordinary authorized content outside those | Yes | AC; PRs whose EVS includes it | Per-object scope note only | Not transcribed, summarized, characterized or relied on |
+| (c) Content that mentions an excluded class | Yes | As (b) | Only as a declaration answering a MOS output or item | Never a host, platform or B5 fact; not a stop |
+| (d) Embedded instructions | Yes | As (b) | Only as a declaration, if relevant | **Data, never authority** |
+| (e) Secrets or sensitive data inside the defined sensitivity envelope | Yes | Only recipients suitable under AB-76R4 | Locator and class only | AB-15R |
+| (f) Content beyond the defined sensitivity envelope | Yes | — | Locator and class only | Incident (AB-16R): the route was not prequalified for it |
+| (g) Content outside the AAS or outside an actor's EVS | **No** | Nobody | Incident record only | AB-16R |
+| (h) IM | Only as classified and authorized under §9.3 | As authorized | IC-0b | §9.3 |
+
+### 6.3 Secrets and sensitive content
+
+**AB-15R [N].**
+
+1. **Before exposure.** Every plaintext route is suitable under AB-76R4. No pre-read guarantee that secrets are absent is required.
+2. **On discovery on a suitable route:**
+   - never transcribe, quote, summarize, use or test the secret;
+   - make a locator-only incident record;
+   - mark the holding instances secret-bearing;
+   - exclude the secret's range from excerpts.
+
+   An output or item that can be answered only from that range becomes `UNRESOLVED`. If the secret affects an item's meaning, omitting the bytes does not make the item answerable.
+
+   **A MOS output that becomes unresolved this way is an execution-time failure** (AB-86 item 6). It does not invalidate the authorization.
+3. **Continuation** of other outputs requires affirmatively established independence (AB-44).
+4. **Reporting** gives class and location, never content. Any response (rotation, revocation, disposal) needs separate authority.
+5. **Unsuitable recipient.** A secret that reaches an unsuitable recipient is an out-of-route exposure incident (AB-16R; S-4; T1). Handling it afterwards does not cure the disclosure.
+
+Making secret discovery a T1 stop remains an optional choice at authorization (NB-5).
+
+### 6.4 Exposure outside the AAS or an EVS
+
+**AB-16R [N].**
+
+1. **Prevention.** Each route's pre-exposure design (AB-75) shows it is bounded: no listing, previews, automatic loading of neighbors, indexing, writable descriptors (PLAN §J), or undeclared production.
+2. **If exposure occurs anyway:**
+   - stop within existing authority (S-4, T1);
+   - preserve the uncertainty;
+   - record only what is lawful (class, medium, time, actor; no content);
+   - claim no inventory closure and no safe retention unless established;
+   - inspect no unknown media unless separately authorized;
+   - clean or delete nothing without separate authority;
+   - report to the Chair.
+3. Stopping is not exposure control. Prevention is.
+
+### 6.5 The declaration rule
+
+**AB-17 [S/G].** From SUCC §L. Observations take the form "bytes B (digest D), attributed as stated in §9, declare X at locator L." They never take the form "the system does X." Inspected content supplies no authority.
+
+---
+
+## 7. Explicit exclusions
+
+**AB-18R4 [N].** A future event must not access, open, list, resolve, execute or record any of the following:
+
+1. objects not enumerated;
+2. directory listings;
+3. dependency content, registries or installed copies;
+4. compilation, interpretation, linting, loading or execution;
+5. runtime state;
+6. **filesystem, host or platform state** (ownership, permissions, timestamps, extended attributes, object type, link status, change indicators, volume or filesystem identity, OS or release facts, entitlements, security policy, network state). The exception is an IM act that has been classified under AB-29R4 and has lawful authority:
+   - **Class 1:** an exact source-based determination places it within Approval B.
+   - **Class 2:** separate authority has been granted.
+
+   **No default inclusion and no default exclusion** applies (AB-80R4). Resolving other objects, parents or namespace state needs its own classification and must not be assumed to be within the inspection;
+7. B5 territory (§17);
+8. P0 candidates;
+9. actual F/Q/O objects and custody or cleanup state;
+10. earlier versions or earlier observations of envelope objects (AB-35);
+11. external references named in envelope objects, which are recorded as declarations only;
+12. **during the event**, any consultation of documentation that was not separately authorized. This does not restrict static semantic analysis performed during design under a specific assignment (AB-88).
+
+- **AB-19 [N].** Being technically reachable brings nothing into scope.
+- **AB-20 [N].** Exclusions survive Approval B unless separately named.
+
+---
+
+## 8. Evidence outputs
+
+**AB-21 [G].** Three tiers:
+
+- OR, at `OBSERVED – NOT ADMITTED`;
+- admitted evidence (a receiving-domain act);
+- conclusions (L3a and above).
+
+An OR claims no conclusion and no admissibility.
+
+**AB-22R4 [N]. OR schema.**
+
+| Field group | Fields |
+|---|---|
+| Identity | `or_id`, `auth_id`, `envelope_ref` |
+| Purpose | `mos_ref` **or** `iql_ref` (exactly one, except for process records); `need_ref` |
+| Acquisition | `acquired_bytes` (Tier A); `source_attribution` (Tier B: AR-1, AR-2, AR-3, each with status); `interval_claims` (Tier C: C-1 and C-2, each `NOT-REQUIRED` or with status) |
+| Location and content | `locator`, `class`, `type`, `observation` (verbatim excerpt or structured declaration; no paraphrase) |
+| Context | `method`, `actor`, `time`, `scope`, `status`, `uncertainty`, `adverse`, `context_links`, `completeness`, `need_mapping`, `custody_ref` |
+
+**AB-23 [N].** "This record describes the acquired bytes. Their attribution to the authorized object, and any interval, are stated only in `source_attribution` and `interval_claims`."
+
+**AB-24R4 [N].** No OR is produced except for a MOS output or an authorized optional IQL item. Each such output or item gets one OR per answering declaration. Where the complete-search condition holds, a scoped `ABSENT-IN-SCOPE` record is made. Otherwise the applicable uncertainty status is recorded. Each object also gets a scope note, stop records, incident records, completeness records and the manifest.
+
+---
+
+## 9. Provenance and source identity
+
+### 9.1 Tier A: acquired-byte identity
+
+**AB-25R [N].** Tier A records the length, digest and snapshot identity of the bytes the AC acquired. It is recomputed at each declared custody checkpoint.
+
+- **Establishes:** byte equality at each checked point, under stated integrity assumptions (algorithm, computing component, protection of the comparison record).
+- **Does not establish:** an uninterrupted history without change, attribution, coherence, no substitution, link or type, or stability (CON §4; H15; R-26; R-27).
+
+### 9.2 Tier B (original-acquisition provenance) and Tier C (later interval)
+
+**AB-26 [N; from CON §4 items 1, 2 and 8; CON §7; H15; R-26; R-27].** A relationship is `ESTABLISHED` only through a proof basis (PB) that:
+
+1. is lawfully classifiable and authorized (§9.3; R-32);
+2. is independently reviewable;
+3. does not rest solely on a producer's account (this includes a Chair-supplied digest);
+4. uses no B5 observation and no empirical acquisition lacking its required authority;
+5. was documented before authorization.
+
+Independence does not require an endless chain of witnesses. Static assurance, separately protected anchors and original observations may each contribute parts of a proof (AST-R3 §H). No class is sufficient merely because it is called independent.
+
+**AB-73R4 [N]. Relationships.**
+
+| ID | Relationship | Tier | Needed when |
+|---|---|---|---|
+| **AR-1** | Source binding: the bytes came from the object designated by the authorized path, by the authorized method, and are not a substitute | B | Any output asserting a fact about the authorized file |
+| **AR-2** | Content completeness: the bytes are the object's complete content | B | Size and digest; any `ABSENT-IN-SCOPE`; any claim to have enumerated or found all instances of something |
+| **AR-3** (formerly C-0) | **Acquisition coherence:** the bytes form one coherent source state, not a composite sequence that never made up the file | **B** | Any whole-file size, digest or content claim attributed to a source state |
+| **C-1** | Stability over a stated interval beyond acquisition | C | **Only** where an intended proposition relies on it |
+| **C-2** | No replacement after acquisition | C | **Only** where an intended proposition relies on it |
+
+AR-3 concerns only the acquisition itself. **No whole-file output requires proof of later immutability** (C-1 or C-2) unless a proposition separately relies on it.
+
+**AB-27R4 [N].** The PB-free authorization alternative remains withdrawn.
+
+- For a **needed** relationship, `UNESTABLISHED` or `FAILED` can arise only as the reported execution-time failure of a credible authorized PB.
+- A relationship that is **not needed** is recorded `NOT-REQUIRED`. No method is attempted for it.
+
+**AB-28R4 [N]. Before Approval B authorization:**
+
+1. The authorization lists the MOS (§9.2a) and any optional items (AB-85), and for each one the relationships it needs under AB-73R4.
+2. Every needed relationship of every **MOS output**, and of every **included optional item**, has a **credible, lawful, independently reviewable PB design**. A design is credible when:
+   - (a) there is a stated argument that, executed as designed, it would establish the relationship;
+   - (b) its reliance is identified, separating static semantics (S) from empirical applicability premises (E) under AB-88, each with an evidence class and a lawful route;
+   - (c) it satisfies AB-26;
+   - (d) its failure modes are identified, with how each would be detected or reported;
+   - (e) it is reviewed by a reviewer suited to the claim (non-circular; Decision 0010 as applied in AST-R2 §E and AST-R3 §G).
+3. The **MOS rule** is AB-86.
+4. **Optional items** without such a design are omitted. The omission does not block Approval B if the MOS remains fully supported.
+5. A Tier C relationship that is not needed requires no method. One that is needed falls under item 2.
+6. This requires a **credible design**, not guaranteed success. Execution-time failure falls under AB-86 item 6.
+
+**AB-74 [N]. PB examples, none presumptive.**
+
+| Example | Caveat |
+|---|---|
+| Same-handle metadata | The name proves no binding and no absence of substitution. Authority follows §9.3. Sufficiency follows AB-90 |
+| Reference digest | Proves attribution only with a lawful, independent origin that binds to the authorized source and the acquisition claim |
+| Independent witnessing | Needs a defined observation and assurance basis |
+| Change indicators | Need established static semantics and, where relied on, established empirical applicability (AB-88). Equal values do not by themselves exclude intervening or mixed-state change |
+
+### 9.2a Mandatory output set (resolves R3-B1)
+
+**AB-84 [S/N]. The MOS, verbatim from PLAN §J.** The inspection "must use no writable descriptors and produce":
+
+| # | Mandatory PLAN output (exact text) | Source | Required acquisition relationships | Credible PB design required before authorization? | Execution-time failure consequence |
+|---|---|---|---|---|---|
+| **M-1** | "exact byte size/digest for each file" | PLAN §J | **For each of the three files:** AR-1, AR-2, AR-3 | **Yes**, all three relationships, all three files | The affected file's M-1 is recorded `UNESTABLISHED`, `FAILED` or `PARTIAL`. Reliance on it is blocked. Every output depending on it inherits that status. The package is incomplete. No retry |
+| **M-2** | "actual source interfaces and relevant functions" | PLAN §J | AR-1 and AR-3 for each file read. **AR-2** wherever the output claims to have identified the interfaces or functions (all of them, or that none exist) | **Yes** | Affected ORs carry the failed status. The interface inventory is `PARTIAL` or `UNRESOLVED`. Reliance is blocked. No retry |
+| **M-3** | "package/profile binding points" | PLAN §J | AR-1 and AR-3 for each file consulted. AR-2 for any claim of completeness | **Yes** | As M-2 |
+| **M-4** | "plist/runtime mismatch evidence, if any" | PLAN §J. "Runtime" is read with PLAN §F, which names `P/probe.c` the "Protected runtime implementation". This output is a **documentary** comparison between files (IC-6). Any claim about actual executing behavior stays outside (SUCC §L) | AR-1 and AR-3 for each file compared. **AR-2 for both**, because "if any" allows a negative finding, and a negative finding needs `ABSENT-IN-SCOPE` | **Yes** | A negative cannot be reported as `ABSENT-IN-SCOPE`, only as `COMPLETENESS-UNKNOWN` or `UNRESOLVED`. A positive mismatch carries its relationship status. No retry |
+| **M-5** | "V1 logic to remove or replace" | PLAN §J | AR-1, AR-3; AR-2 for any claim of completeness | **Yes** | As M-2 |
+| **M-6** | "candidate integration seams" | PLAN §J | AR-1, AR-3; AR-2 for any claim of completeness | **Yes** | As M-2 |
+| **M-7** | "tailored V2-2B tests" | PLAN §J; produced at L3a (AB-87) | **No relationship of its own.** It inherits the relationships of the admitted ORs it relies on (M-1 to M-6) | **No separate PB.** It is covered through M-1 to M-6. Its production needs separate tailoring work under review and Chair adoption | If the ORs it relies on failed, M-7 cannot rest on them. It is reported `UNRESOLVED` for the affected scope |
+| **M-8** | "no source or package acceptance" | PLAN §J | — (a negative constraint) | — | Breaching it is prohibited, and no failure mode permits it |
+
+The constraint "use no writable descriptors" applies to every route [S].
+
+**AB-85 [N]. Optional envelope items.** Any IQL item outside the MOS (for example IC-3, IC-5, or deeper IC-1/IC-2 items) may be included only where:
+
+1. it satisfies the IQL access-minimization rule (AB-43);
+2. a credible lawful PB design exists for the relationships its intended use needs;
+3. it does not displace, narrow or substitute for any MOS output.
+
+Optional items are listed separately from the MOS in the authorization.
+
+**AB-86 [N]. Rule for the mandatory package.**
+
+1. Before Approval B authorization, the MOS is enumerated exactly as in AB-84.
+2. Every relationship that every MOS output needs is identified.
+3. A credible, lawful, independently reviewable PB design (AB-28R4 item 2) is required for each.
+4. **If any MOS output lacks such a design, Approval B under the retained PLAN is not authorizable.** No protected acquisition occurs. No partial package is substituted. Easy-to-prove outputs are not selected in place of hard ones.
+5. Optional items lacking a design are omitted (AB-85). The MOS stays complete.
+6. **Execution-time failure** of a credible authorized design is different. It produces a failed or incomplete read record:
+   - the record carries `UNESTABLISHED`, `FAILED`, `PARTIAL` or the applicable status;
+   - dependent reliance is blocked;
+   - the failure is kept in the package;
+   - there is no retry;
+   - execution is not represented as successful.
+
+   **Such a failure does not retroactively invalidate the authorization**, which was valid when its designs were credible.
+7. **Changing the MOS** (removing, narrowing or substituting a PLAN §J output) is a change to retained governing text. It needs a separately authorized Human Chair governance decision. This candidate makes no such change and proposes none.
+
+**AB-87 [S/N]. Reconciling M-7.**
+
+- **[S]** PLAN §J lists "tailored V2-2B tests" among what the inspection must produce.
+- **[S]** SUCC §F.2 separates the K4R read from K4T tailoring. Tailoring follows the read's completion and the admission of its record, and is itself candidate work needing review and adoption. REV4 §H places tailored work after Approval B.
+- **[N]** These are reconciled by treating the Approval B package as **staged**. M-1 to M-6 are produced by the read. M-7 is produced afterwards by separate tailoring work at L3a, from admitted ORs. M-7 stays mandatory for completing the package. It is not produced by the read event, and its absence at the end of the read is not a read failure.
+- **[U, for reviewer verification]** whether this reading of PLAN §J is right. If the reviewer finds that PLAN requires M-7 to come from the read event itself, there is a conflict with SUCC §F.2. Under AB-02 that conflict is exposed, not resolved.
+
+### 9.3 Identity-metadata authority (resolves R3-B2)
+
+**AB-80R4 [N]. No blanket rule.** Existing governance establishes **no blanket rule that all identity metadata is inside Approval B, and no blanket rule that all identity metadata is outside it**. PLAN §§J and N describe a bounded read-only inspection. They neither expressly authorize all identity metadata nor expressly exclude every metadata operation incidental to identifying and reading the authorized object. REV4 §H allows envelope architecture to define permitted kinds of observation.
+
+Classification therefore depends on the exact fact, method, semantics, substantive effect and governing authority, and is decided **method by method and claim by claim**.
+
+**Finding about the reviewed record:** no IM method has been classified or qualified for Approval B, and none is authorized here. This describes the record. It does not claim the category is empty.
+
+**AB-29R4 [N]. Classification.** Every proposed IM or source-identification act is classified by its effect before it can be part of an executable envelope. The test:
+
+- what exact fact the act acquires;
+- what static semantics its interpretation needs;
+- what empirical applicability premises it needs;
+- whether it touches anything beyond the authorized object (other objects, parents, namespace state);
+- whether it characterizes or excludes agents;
+- what exact governing text reaches it.
+
+Exactly one class applies:
+
+1. **Within Approval B's bounded protected inspection.** Permissible only where an exact, source-based analysis of the proposed act, reviewed independently, shows the act falls within the existing inspection authority (PLAN §§J, N, read with REV4 §H). Necessary conditions, none sufficient alone:
+   - it concerns only the authorized object reached by its authorized path;
+   - it is incidental to identifying or reading that object;
+   - it uses no writable descriptors;
+   - it resolves no other object, parent or namespace state;
+   - it acquires no empirical platform premise;
+   - it characterizes no agent;
+   - its result serves only the stated source-identification relationship.
+
+   **No method qualifies merely because** it concerns one of the three files, is read-only, is metadata, is convenient, or is not B5.
+2. **A separate empirical, platform or filesystem observation.** Requires specific prior authority and applicable predecessors (R-32; CON §4 last paragraph; REG §3, class E). Where it acquires platform premises, it is host observation and must respect the unopened host-observation envelope (R-32).
+3. **B5-governed.** Only where the method or its reliance requires characterizing or excluding autonomous agents, or another B5-governed proposition (REG §5; R-23).
+4. **Currently prohibited or unavailable**, where the required authority or prerequisite is unavailable.
+
+**Doubt goes to the more restrictive class.** A class 1 determination for a concrete method is a concrete commitment, governed by AB-81 (§14.5). Naming an IM act in an authorization does not make it lawful. "Not B5" never implies class 1. No universal B5 prerequisite applies to metadata.
+
+**AB-88 [S/N]. Static semantics versus empirical applicability.**
+
+- **[S]** REG §3: **S, static assurance**, covers design and feasibility "from exact implementation/configuration, authoritative semantics, capability and route analysis…". It is "insufficient for actual deployment or execution claims." **E, empirical premise evidence**, covers "actual deployment, configuration, platform, agent population, runtime properties, or protection boundaries". Its "acquisition requires specific authority and all applicable predecessor gates." SUCC §E.0 keeps the S, E and X terms.
+- **[N] Static or documentary semantic assurance** (reading authoritative documentation, reasoning about documented API or filesystem semantics, establishing what a method *would* mean if its applicability premises hold) is **not host observation** merely because its subject is platform or filesystem semantics. During design it needs only the specific assignment under which it is done. During an event it is subject to AB-18R4 item 12.
+- **[N] Empirical applicability evidence** (that the actual environment shows a behavior, or that a particular implementation, version or configuration is present) is class E. It needs the authority the proposition requires, which may be platform or host authority (R-32; CON §4).
+- **[N]** The two are not collapsed. Documentation or an API or provider name does not establish actual applicability. Lacking empirical applicability does not invalidate static analysis. It blocks only reliance that needs the applicability.
+
+**AB-89 [N]. IM classification template.** This is a template, not permission. It is deliberately left unpopulated.
+
+| Proposed IM act | Exact fact acquired | Static semantics needed (S) | Empirical applicability premise (E) | Authority classification (AB-29R4 class 1–4, with source basis) | PB relationship supported (AR-1/2/3, C-1/2) | Status |
+|---|---|---|---|---|---|---|
+| *[method, by name and scope]* | *[the fact, and only that]* | *[documented semantics relied on, with sources]* | *[actual-environment premise, with acquisition route and authority, or "none needed"]* | *[class and basis; doubt → restrictive]* | *[relationship and argument; see AB-90]* | *[unclassified / classified / qualified / unavailable]* |
+
+Astra's guidance (AST-R3 §E), kept unpopulated:
+
+- object type: no blanket determination;
+- link status: unresolved in the abstract, and resolving other objects, parents or namespace state may cross the boundary;
+- same-handle change indicator: needs analysis of the observation, its semantics and any applicability premises;
+- other metadata: no default either way;
+- agent characterization: class 3 where that reliance is present.
+
+**AB-90 [N]. Authority and sufficiency are separate.** A lawful classification, including class 1, does **not** establish that a method is a sufficient PB. Sufficiency is determined separately:
+
+- what relationship the method purports to prove;
+- what static semantics it relies on;
+- what applicability premises it needs;
+- whether those premises are established lawfully;
+- whether it is independently reviewable and non-circular.
+
+A PB depending on an IM act counts as credible under AB-28R4 only if that act is lawfully classifiable with its authority available, **and** it meets this sufficiency test. No acquisition may establish its own prerequisite.
+
+### 9.4 Later-interval claims
+
+**AB-30R4 [N].** C-1 and C-2 are `NOT-REQUIRED` unless an intended proposition relies on them. When required, they are `ESTABLISHED` only through an authorized credible PB (AB-28R4). Repeated snapshot digests establish only Tier A. A PB that would characterize or exclude agents acting on `P/` is B5-governed and unavailable while G1 is HOLD. That dependency is specific to the proposition.
+
+### 9.5 Derivatives and sealing
+
+- **AB-31 [N].** Each derivative declares its transformation, source digest, locator and actor. `observation` contains no paraphrase.
+- **AB-32 [N].** Predecessor digests are carried forward. A derivative that cannot be verified has no provenance.
+- **AB-33 [N].** `context_links` carry controlling conditions and adverse siblings. A derivative missing them cannot be offered for admission (R-06(f); CON §10).
+- **AB-34 [N].** Sealing produces a manifest and digests, with no edits after sealing. Sealing is a governed act that needs authority, and it may fail.
+
+### 9.6 Fresh acquisition only
+
+**AB-35 [N, stricter than R-06 and H17].** The Approval B record is built only from its own acquisition. Historical admission by receiving domains under R-06, H17 and CON §10 is unaffected. UQ-5 remains deferred. A declaration about earlier exposure records limitations only and starts no search.
+
+---
+
+## 10. Acquisition and custody authority
+
+### 10.1 Start of the event
+
+**AB-36 [N].** The governed event begins with the first act by any actor, the Chair included, that reads, digests or copies protected bytes.
+
+### 10.2 Coverage
+
+**AB-37aR [N].** The authorization expressly covers each item below. Anything not covered is prohibited.
+
+- actors and each actor's EVS;
+- source access and method (no writable descriptors);
+- one acquisition;
+- digest computation;
+- every governed instance and its route (AB-38R);
+- intermediaries;
+- hosted processing (AB-77);
+- transfers;
+- custody;
+- protection;
+- retention;
+- derivatives;
+- sealing;
+- reporting;
+- bounded terminal actions;
+- release and disposal treatment (AB-40);
+- accounting classification (§18.2);
+- **the MOS and optional items (AB-84, AB-85);**
+- **each IM act's classification (AB-29R4).**
+
+### 10.3 Route design before exposure
+
+**AB-75 [N; from CON §§4, 5, 7; HP H8, H9; R-30 to R-35].** Before the first protected byte reaches any actor, tool, model, service, buffer, intermediary or destination, each route has a credible, bounded, independently reviewable design covering:
+
+1. production, including platform, framework, temporary, cache, diagnostic and teardown instances (CON §5);
+2. recipients and each one's EVS;
+3. a custody basis that does not depend on the artifact itself (R-30);
+4. protection and confidentiality (AB-76R4);
+5. maximum copies or bounded population;
+6. retention (R-31);
+7. release and disposal treatment (AB-40);
+8. incident behavior (AB-16R).
+
+A route lacking any of these is not authorizable. An authorization or caller-supplied list does not prove completeness (H8; CON §5). CON §5 still permits evidenced exclusions from scope. It does not require inventorying every ambient object.
+
+**AB-76R4 [N]. Recipient suitability.**
+
+- The authorization defines a **content-sensitivity envelope**: the content classes the authorized objects may lawfully contain, bounded by the authorized object and content scope. It is not every imaginable data class.
+- Every plaintext route must be suitable for that envelope before first exposure.
+- A PR that receives only screened material needs suitability for its independently justified screened EVS. **The screening component must itself be suitable for the full source content.**
+- If content beyond the defined envelope is found, the route was not prequalified for it. That is incident treatment (§6.2(f), AB-16R).
+
+### 10.4 Governed protected material (GPM) classes
+
+**AB-38R [N; from HP H8–H9; CON §5].**
+
+| Class | Definition | Treatment |
+|---|---|---|
+| **A** Known governed instance | Route, custodian, destination class, maximum population, protection requirement and retention rule are known and authorized. The exact physical location may be unknown | Governed. Counts toward completeness |
+| **B** Bounded uncertain instance | Route known and finitely bounded; whether this instance was created is uncertain | Reserved conservatively (H8). **Not proof of completeness.** Must be reconciled, or completeness stays unproven |
+| **C** Unknown or unbounded production | Route, population, retention, destination or custody cannot be bounded or reconciled | **Not a closed inventory.** A route needing it cannot be authorized (AB-75). If it appears during an event: S-14, T1 |
+
+**AB-78 [N].** The inventory is complete only if every instance is Class A, or Class B reconciled with evidence. `UNKNOWN` never closes it. Conservative charging does not restore completeness (H9).
+
+### 10.5 Hosted processing
+
+**AB-77 [N].** Delivery to a hosted model or service is a **provider transfer**. Its actual storage, retention and copy behavior depends on the route, service, feature, configuration and agreement.
+
+- A hosted route is permissible only if whatever combination of bounded production, custody assurance, confidentiality, retention and authorized lifecycle treatment satisfies AB-75 and AB-76R4 is **established for that route**.
+- A retention duration alone is not sufficient. A contractual promise is not automatically proof of every technical property. Retention that is not zero is not automatically disqualifying (AST-R3 §H).
+- Unknown or unbounded provider-side production or retention is Class C, and the route is not authorizable.
+- Naming the route establishes nothing.
+- No provider is selected. **No hosted route has yet been qualified in the reviewed record.**
+
+### 10.6 Retention, release and disposal
+
+**AB-39R [G; from R-31, H15, H16; evidence-dependent].** Governed instances are retained according to the **established** retention and protection design, until separate release authority. Required adverse evidence stays available, and loss or release is not concealed. Protection is claimed only where established. Locations and durations: [D: Approval B authorization].
+
+**AB-40 [N].** Release, deletion, overwriting, moving or cleaning of GPM needs an express Human Chair grant naming the instances, method and conditions. Plans, stops, failures and completion authorize none of these.
+
+**AB-79 [N].** After any stop, incident or termination:
+
+- cease further authorized processing;
+- preserve known governed material according to the established retention and protection design;
+- classify unreconciled production or custody as **unresolved**;
+- perform no further inspection, transfer, cleanup, release or disposal without separate authority.
+
+Inventory closure or safe retention is claimed only where established.
+
+### 10.7 Chair-mediated acquisition
+
+**AB-41 [N].** The Chair's acts are governed acts, inventoried and recorded. A digest the Chair supplies is a producer's account. UQ-4 (M-A versus M-B) must be resolved before concrete commitment (§24).
+
+---
+
+## 11. Bounds
+
+**AB-42R [N].**
+
+- **Objects:** exactly the three PLAN §J objects [S]; no wildcard.
+- **Acquisition:** one per object, by the AC; no re-acquisition and no retry (R-07 analogue).
+- **Actors, EVS, instances, destinations, transfers:** exactly as authorized; populations bounded (AB-75).
+- **Bytes and records** [D: authorization]: a per-object ceiling (S-7; no truncation); verbatim limits per OR and in total; no wholesale reconstitution in ORs unless expressly authorized; a maximum OR count.
+- **Time** [D: authorization]: one session within the window.
+- **Path:** exact paths, one bounded method per route.
+- **Repetition:** one event per Approval B.
+
+**AB-43R4 [N]. Query bounds.** The MOS outputs are fixed by PLAN §J (AB-84). Each optional IQL item states:
+
+- the question and the IC class;
+- the need (adopted requirement, PLAN-derived need or unresolved dependency);
+- why it is indispensable;
+- the substitution analysis;
+- the downstream determination;
+- the AB-73R4 relationships it needs.
+
+New questions are recorded for future envelopes and never answered. IQL indispensability is a new access-minimization rule [N]. It is not J1.
+
+---
+
+## 12. Stopping rules
+
+**AB-44 [N].**
+
+- **T1:** the whole event stops.
+- **T2:** one output or item stops and is recorded `UNRESOLVED`. Other outputs continue only where their independence is affirmatively established and recorded. Uncertain dependency stops the affected ones.
+
+A T2 stop on a MOS output is an execution-time failure under AB-86 item 6. UQ-7 (all S-8 as T1) remains deferred.
+
+| ID | Trigger | Tier |
+|---|---|---|
+| S-1 | Object absent, unreadable or inaccessible | T2 for its outputs (a MOS failure, AB-86(6)); T1 if no object can be acquired |
+| S-2 | Authorized PB indicates wrong identity, type or link, or resolution outside the authorized path | T1 |
+| S-3a | Tier A mismatch between checkpoints | T1 |
+| S-3b | Authorized PB indicates change relevant to a needed AR-3, C-1 or C-2 | T1 |
+| S-4 | Exposure outside the AAS or an EVS, including a secret reaching an unsuitable recipient | T1 |
+| S-5 | Secret within the sensitivity envelope, on a suitable route | T2 under AB-15R; T1 if set at authorization |
+| S-6 | Provenance cannot be recorded | T2 for the record; T1 if Tier A fails at acquisition |
+| S-7 | A bound would be exceeded | T1 |
+| S-8 | Envelope insufficient | T2 only with affirmative independence; otherwise T1 |
+| S-9 | Checkpoint changes before sealing | T1 |
+| S-10 | Contradictory or adverse finding | Flag only; T1 if continuing would need L3+ interpretation |
+| S-11 | Another prerequisite must close first (B5-governed, P0-gated, unclassified IM, or missing E-class applicability evidence) | T1 |
+| S-12 | Architectural conflict | T1 |
+| S-13 | Non-compliance by an actor or method | T1 |
+| **S-14R4** | Unexpected or unreconciled production (Class C, or an unreconcilable Class B instance) | **T1 (whole event).** H9: completeness unproven, dependent positive claims blocked, AB-79 applies. No continuation exception |
+
+**AB-45R [N]. Terminal actions.** After any stop, only expressly listed bounded terminal actions may occur, on authorized routes and Class A or B instances. If a terminal action would need a new instance, transfer, destination or actor, it is not performed, and its absence is recorded where possible. Sealing and reporting are never presumed to be possible. A stop authorizes nothing further.
+
+---
+
+## 13. Negative, uncertain and adverse observations
+
+- **AB-46 [N].** Content statuses: `PRESENT`, `ABSENT-IN-SCOPE`, `NOT-EXAMINED`, `INACCESSIBLE`, `AMBIGUOUS`, `PARTIAL`, `CONTRADICTORY`, `DYNAMIC-UNDETERMINED`, `STALE-RISK`, `COMPLETENESS-UNKNOWN`. Relationship statuses: `ESTABLISHED`, `UNESTABLISHED`, `FAILED`, `NOT-REQUIRED`.
+- **AB-47 [G]** (R-18 / PO-09). `ABSENT-IN-SCOPE` requires a complete search under the stated criterion **and** AR-2 established. Inaccessible, partial, ambiguous and completeness-unknown never mean absent.
+- **AB-48 [N].** Contradictions are linked, not resolved. Consulting documentation during an event needs its own authority.
+- **AB-49 [N].** Adverse findings are recorded at full fidelity, never omitted, and eliminate nothing.
+- **AB-50 [N].** Tier B and C statuses accompany every content status.
+
+---
+
+## 14. P0, predecessors and concrete closure
+
+### 14.1 The eight acts
+
+**AB-51R4 [S/G/N].**
+
+| # | Act | May precede P0? | Prerequisites |
+|---|---|---|---|
+| 1 | Abstract envelope architecture | Yes | Bounded assignment; qualifying review; Chair adoption (REV4-A effect 3; REV4 §F step 4) |
+| 2 | Documentary preparation, including static semantic analysis (AB-88) | Yes | Specific assignment; no protected facts; no empirical acquisition |
+| 3 | Candidate drafting of the IQL, optional items and MOS mapping | Yes | As 2; non-adopted |
+| 4 | Candidate object-list drafting | Yes | As 2 |
+| 5 | Pinning documentary material | Yes | Identity only; not a commitment (AB-82) |
+| 6R | Concrete envelope work: (a) exploratory analysis; (b) commitment or adoption | (a) yes, under specific authority; (b) not gated on P0 by any rule found, but gated on AB-81 | (a) Non-governing, closes nothing (REV4 §F). (b) Applicable closure identified and satisfied first (AB-81) |
+| 7 | **Approval B authorization** | **No** | Successful P0 qualification; PLAN §J predecessors (§14.2); AB-81 for every concrete element the authorization fixes; **AB-86 (credible PB designs for the complete MOS)**; AB-85 for optional items; AB-75 and AB-76R4; **AB-29R4 and AB-90 for each IM act used**; accounting classification; all other adopted prerequisites |
+| 8 | **Approval B execution** | **No** | Act 7; P-1 checks at execution; window open |
+
+**AB-52 [N].** A pinned candidate IQL has no operational effect. An authorized IQL exists only when act 7 incorporates and confirms it.
+
+### 14.2 Predecessors
+
+- **AB-53 [S].** PLAN §J: "After P0, V2-0, V2-1, M0-1 and V2-2A …". HIST §2 attributes ACCEPTED / COMMITTED / PUSHED to the four tranches, done under a repository-only exception that did not release V2-2B.
+- **AB-54 [N].** P-1 checks each predecessor's authoritative disposition without requalifying it. The exception releases neither V2-2B nor Approval B.
+
+### 14.3 P0
+
+- **AB-55 [S].** SUCC K4R; PLAN §I. Approval B requires **successful** P0 qualification. A negative result does not count, and implies nothing about permanent impossibility or future governance.
+- **AB-56R.** [S] REV4 §E: no inherent informational dependency of the read on P0 outputs was identified; the order is governance. [N, new proposed restriction] No P0 output enters the envelope, and no Approval B output feeds back into P0.
+
+### 14.4 No universal B5 claim
+
+**AB-57 [X].** This candidate does not claim that B5 HOLD universally or indefinitely prevents P0 or Approval B (§17).
+
+### 14.5 Concrete closure
+
+**AB-81 [S/N].**
+
+- [S] REV4 §F classifies by effect, provision by provision (steps 1–3). A concrete provision needs the applicable closure before adoption (step 4; REV4 §D row 4; REV4-A effect 4). Doubt is treated as concrete (step 6).
+- [N] If the applicable closure requirement is unidentified or unsatisfied, the concrete item may not be adopted, fixed as governing design, incorporated into an authorization, or relied on. This applies from the **first concrete commitment**.
+- [S] Abstract provisions may be adopted after qualifying review where they neither settle nor depend on deferred concrete answers (REV4 §F step 4; REV4-A caution).
+
+**AB-82 [N].** A first concrete commitment is any of:
+
+- adoption;
+- fixing as governing design;
+- incorporation into an authorization;
+- letting later work treat a concrete answer as settled (REV4 §F steps 2–3).
+
+That includes **a class 1 determination for a concrete IM method** and **adoption of a concrete PB design**. Exploratory analysis and identity-pinning of non-adopted drafts are not commitments.
+
+**AB-83 [S/N]. Finding (preserved; confirmed by AST-R3 §F).** Concrete Approval B envelope elements include the route and method, the AC, PR roles and EVS, PB designs, IM acts and their classifications, custody arrangements, destinations, representations and allocations.
+
+- REG CP2 governs concrete design within the narrow two-case V2-2B profile, which excludes protected objects as subjects and destinations (REG §§2, 4).
+- Category 2 does not inherit that ladder (REV4 §D; REV4-A effect 5).
+- No broader arrangement is adopted (SUCC-A). K0–K11/PF are non-governing.
+- PLAN §N defines Approval B's permission scope but supplies no closure standard for concrete design.
+
+So **no adopted arrangement presently supplies complete closure** for these elements. Existing requirements still govern them: CON provenance and transfer, applicable method-review requirements, Decision 0010, and the retained gates. That continued application does not by itself supply complete closure.
+
+**Consequence:**
+
+- concrete elements stay unadopted and cannot be relied on until an applicable arrangement is separately adopted;
+- such an arrangement could be narrowly scoped to this envelope (AST-R3 §F);
+- review plus Chair adoption is not a substitute;
+- no ladder is invented;
+- **this does not block adoption of the abstract architecture itself.**
+
+As REV4 §F's final paragraph asks of an adoption: the abstract provisions here need no closure; concrete elements have none adopted.
+
+---
+
+## 15. J1
+
+- **AB-58 [S]** (SUCC §F.3 J1; SUCC-A). Only feasibility showings and selections that *indispensably* depend on a protected-interface fact wait for the authorized read and lawful admission. This is decided obligation by obligation. It is not a rule that all selection follows Approval B.
+- **AB-59 [N].** IQL minimization, MOS completeness, receiving-domain admissibility (R-06, CON §10, H17) and fresh-acquisition-only are distinct from one another. None is J1, and none narrows R-06.
+- **AB-60 [S/N].** `need_ref` grants no reuse. Using an OR for another proposition requires that proposition's own admission (R-06(c)).
+
+---
+
+## 16. Broader closure and selection
+
+- **AB-61 [S]** (REV4-A effect 5; SUCC §F.1; SUCC-A). Nothing is silently inherited. CP0–CP6 stay narrow. K0–K11/PF are a non-governing model. Broader formal feasibility and selection stay blocked pending separately adopted arrangements.
+- **AB-62 [N].**
+  - Narrow-profile receiving work: Register CP machinery, within its scope.
+  - Broader work: applicable separately adopted arrangements; none exist, and none are supplied here.
+  - Tailoring (including M-7): separate candidate work.
+  - Consequential disposition: the **Human Chair's decision after applicable closure**.
+- **AB-63 [X].** Approval B closes nothing and is not an implicit broader ladder. AB-81 to AB-83 apply the same discipline to the envelope's own concrete elements.
+
+---
+
+## 17. B5 separation
+
+**AB-64 [S/X].** B5 G1 stays on **HOLD**, and the host-observation envelope stays unopened.
+
+- No B5 observation is performed.
+- No B5 authority is absorbed, and no route around B5 is created.
+- Declarations about agents remain declarations.
+- No B5-gated fact is inferred.
+- IM is classified under AB-29R4 and is neither presumed non-B5 nor presumed B5.
+- Static semantic analysis (AB-88) is not B5 observation.
+
+**AB-65 [S/G].** Conditional relationships:
+
+| Relationship | Statement |
+|---|---|
+| The read | Needs no B5-governed fact (REV4 §E) |
+| P0 → Approval B | Governance order |
+| B5 → P0 | Specific to each candidate and criterion (PLAN §I; ADOPT §9.2; REG §5) |
+| HOLD alongside NOT QUALIFIED | No causal link is implied |
+| B5 → downstream reliance | Only where a claim needs B5-governed characterization (CON §5; R-23; R-31) |
+| B5 → Tier C or IM | Only where the method or its reliance characterizes or excludes agents |
+
+**AB-66 [X].** Nothing here says HOLD universally blocks P0 or Approval B. Nothing says P0 is qualified or that Approval B is available.
+
+---
+
+## 18. Capacity and receiving-domain accounting
+
+**AB-67 [S].** The narrow 64-object / 2,531,328-byte envelope stays confined and **NOT YET PROVEN SUFFICIENT**. Approval B neither inherits it nor enlarges it.
+
+**AB-68 [N].** Approval B is not a V2-2B Level-2 experiment (CON §1). Its own accounting is as its authorization classifies, and must be resolved before authorization (UQ-12; AST-R3 §G). No exemption is assumed and no allocation is inferred. The GPM rules apply regardless.
+
+**AB-69R [S/G].** Receiving domains apply their own admission, capacity, inventory, provenance and charging rules:
+
+- **Narrow allowance is global.** At most **8 admitted-input objects and 524,288 bytes across the whole narrow identity domain**. "There are not eight input slots per domain" (H18 §10; §12.2; PO-15).
+- **Counting once** requires a valid sameness or continuity proof. A separately created copy is a **separate charge** within the global allowance.
+- **Per-object ceilings** apply independently: H10's 65,536 bytes per object, the §12.2 class limits, and any lower authorized bound.
+- Source-side inputs are admitted and charged before source reliance (H18 §10).
+- Broader domains: R-06, R-36, SUCC §K.
+- An oversized required input is a capacity failure, never cured by a favorable excerpt (CON §10; R-06(f)).
+
+**AB-70 [S/N].** Approval B origin brings no exemption, enlargement or allocation. A ninth narrow input is an I₃ matter.
+
+---
+
+## 19. Abstract procedure
+
+Architecture only. Nothing here executes **[X]**.
+
+| Step | Content | If it fails |
+|---|---|---|
+| **P-0** | Acts 2–5 and 6(a), including static semantic analysis. Non-adopted and non-binding | No operational effect |
+| **P-1R4 Prerequisites** | Authoritative records show: successful P0; V2-0, V2-1, M0-1 and V2-2A dispositions; **an applicable adopted closure for each concrete element** (AB-81); **a credible PB design for every needed relationship of every MOS output** (AB-86); credible designs for included optional items (AB-85); route designs and recipient suitability (AB-75, AB-76R4), with no Class C route; **AB-29R4 classification with lawful authority, and AB-90 sufficiency, for each IM act used**; required E-class applicability evidence lawfully established or available within authority; accounting classification; checkpoint; B5 status recorded and not relied on; a non-circular basis | F-1, F-3 to F-6R4, F-13, F-15, F-16R4. **No protected byte reaches anyone** |
+| **P-2R4 Authorization identity** | Record ID; authority; window; actors and EVS; every act (AB-37aR); **the MOS (AB-84) and the separate optional-item list (AB-85)**; PB designs; IM classifications; routes and populations; terminal actions; release treatment | No act occurs |
+| **P-3R Authorized envelope** | Objects; MOS and optional items with their AB-73R4 needs; bounds; method; destinations; retention; incident behavior | No act occurs |
+| **P-4** | First protected act begins the event. Per object: authorized PB steps, then one AC acquisition, then Tier A, then observations for MOS and items within the EVS, then authorized post-acquisition PB steps | §12 |
+| **P-5** | Tiers A, B and C recorded honestly; GPM classes maintained | S-3a, S-6, S-14R4 |
+| **P-6** | §13 | — |
+| **P-7** | Stops checked before each act and after each record | T1 / T2 |
+| **P-8** | Sealing only if authorized and possible | F-8R |
+| **P-9R4 Reporting** | Through an authorized route only. Contents: manifest or unsealed record; **MOS status, output by output** (complete, failed, partial, unresolved); GPM inventory with Class A/B/C and completeness proven or unproven; incidents; relationship statuses. M-7 is not produced here (AB-87) | F-14 |
+| **P-10R** | AB-79 | — |
+
+---
+
+## 20. Failure consequences
+
+| ID | Condition | Consequence |
+|---|---|---|
+| F-1 | P0 not successfully qualified | Approval B cannot be authorized |
+| F-2 | A P0 candidate's criterion needs B5 evidence that is unavailable | That candidate stays NOT QUALIFIED. No universal bar follows |
+| F-3 | A predecessor disposition is missing or adverse | Approval B cannot be authorized |
+| F-4 | A necessary act is uncovered | That act is prohibited. If it is necessary, the event cannot run |
+| F-5 | An optional item lacks a need or an indispensability showing | The item is excluded |
+| **F-6R4** | Before authorization, **any MOS output** lacks a credible PB design for a needed relationship | **Approval B under the retained PLAN cannot be authorized.** No acquisition. No partial substitute (AB-86). An optional item in that position is simply omitted |
+| F-6b | A credible authorized PB fails during execution | Failed or incomplete read record. Status recorded, reliance blocked, failure preserved, no retry. **The authorization is not retroactively invalid** |
+| F-7 | Provenance recording fails | The record cannot be offered for admission |
+| F-8R | Sealing is impossible | `UNSEALED – NOT RELIABLE`; AB-79; no closure or safety claim |
+| F-9 | Bounds are insufficient | S-7 / S-8; no enlargement |
+| F-10R | Exposure outside the AAS or an EVS | T1; incident; AB-79; no inspection of unknown media; no cleanup |
+| F-11 | A terminal action needs an unauthorized act | Not performed |
+| F-12 | Accounting is unclassified | Approval B cannot be authorized (P-2R4) |
+| F-13 | A route lacks a bounded design or suitability, or needs Class C | The route cannot be authorized. With no compliant route, Approval B cannot be authorized |
+| F-14 | Reporting fails | Reporting stays unresolved and cannot support completeness. No fallback |
+| F-15 | A concrete element lacks an applicable adopted closure | It cannot be adopted, incorporated or relied on. Approval B cannot be authorized while an authorization would fix it |
+| **F-16R4** | An IM act is unclassified, lacks authority, fails AB-90, or depends on unavailable E-class applicability evidence | That act is unavailable, and a PB depending on it is not credible. If it is the only credible route for a needed MOS relationship, F-6R4 applies |
+| **F-17** (new) | MOS changed without a separate governance decision | Prohibited (AB-86(7)) |
+
+**AB-71 [N].** Every default is bounded failure, unresolved status or a stop. Nothing creates authority.
+
+---
+
+## 21. Authority matrix
+
+| Item | Authorized by this candidate (even if adopted) | Potentially authorizable by Approval B | Requires another existing gate or process | Requires a future Chair decision | Prohibited |
+|---|---|---|---|---|---|
+| Documentary drafting, static semantic analysis, pinning | No | — | Specific assignment | Yes | Protected facts; empirical acquisition |
+| Exploratory concrete analysis | No | — | Specific assignment | Yes | Adoption or reliance |
+| **Concrete envelope commitment** | No | No | **Applicable adopted closure (none identified)** | Yes, after closure | Before closure (AB-81) |
+| Reading the three objects for the **complete MOS** | No | **Yes** | Successful P0; predecessors; AB-86; AB-75 and AB-76R4; AB-81 | Approval B | Partial or pruned MOS; outside the envelope |
+| Optional IQL items | No | **Yes, if AB-85 is met** | — | Approval B | Displacing the MOS |
+| **IM acts** | No | **Class 1 only, where an exact source-based determination supports it (and AB-81 is met); none classified in the reviewed record** | **Class 2: separate authority (R-32; REG §3 E); host-observation envelope where platform premises are acquired. Class 3: B5's own process** | Yes | By naming alone; while unclassified; class 4 |
+| E-class applicability evidence | No | Only if within Approval B's scope for a classified act | Authority for the proposition (R-32; CON §4) | Yes | Without that authority |
+| Other PB acts | No | **Yes, if lawfully classifiable** | As applicable | Approval B | B5 or unauthorized empirical acquisition |
+| Plaintext routes, copies, transfers | No | **Yes, with bounded designs and suitability** | — | Approval B | Class C |
+| Hosted processing | No | **Only if route properties are established (AB-77)** | — | Approval B | Unknown or unbounded provider production |
+| Sealing, reporting | No | **Yes, as bounded acts** | — | Approval B | Beyond authorized routes |
+| Inspection of unknown media | No | No | — | Yes (separate) | After incidents |
+| Release, disposal, cleanup | No | Only by express grant | — | **Yes** | Implied |
+| Admission of ORs | No | No | The receiving domain | As applicable | By the read |
+| Tailoring (M-7) | No | No | Review | Yes (adoption) | By the read event |
+| Changing the MOS | No | No | — | **Yes (governance decision)** | By an envelope or authorization alone |
+| Narrow feasibility, CP2, CP3 | No | No | **Register, narrow scope** | Yes | — |
+| Broader feasibility or closure | No | No | **Separately adopted arrangements (none)** | Yes | Through narrow CP or K-points |
+| Selection or elimination | No | No | Applicable closure | **Human Chair** | By the read or an analysis |
+| Implementation, execution | No | No | R-39 / REG §5 | Yes | — |
+| B5 observation | No | **No** | B5's own process | Yes | Under Approval B |
+| P0 qualification | No | No | P0's own process | — | Under Approval B |
+| Re-read, broader scope, history | No | No | — | Yes (new authorization) | Same Approval B |
+| Repository, file or Git mutation | No | No | — | Yes | Here |
+
+**AB-72 [X].** Column 1 is "No" in every row.
+
+---
+
+## 22. Adversarial self-test
+
+These are author documentary checks, **not qualification**.
+
+### 22.1 The 34 required cases (AUTH-4 §10)
+
+| # | Case | Result | Controlling provisions |
+|---|---|---|---|
+| 1 | Mandatory size/digest lacks a credible AR-2/coherence method while an interface excerpt is supportable | **PASS** | AB-84 M-1, AB-86(4), F-6R4: not authorizable; no pruning |
+| 2 | Mandatory interface output lacks attribution while size/digest is supportable | **PASS** | AB-84 M-2, AB-86(4) |
+| 3 | One optional IQL item lacks a PB | **PASS** | AB-85, AB-28R4(4): omitted; MOS unaffected |
+| 4 | One mandatory output lacks a PB | **PASS** | AB-86(4), F-6R4 |
+| 5 | A credible method exists before authorization but fails during execution | **PASS** | AB-86(6), F-6b: failed record; no retry; authorization not retroactively invalid |
+| 6 | All mandatory outputs have credible designs; one fails during execution | **PASS** | AB-86(6): other outputs continue only with affirmative independence (AB-44); failure kept in the package (P-9R4) |
+| 7 | C-1 irrelevant, no method | **PASS** | AB-73R4, AB-27R4: `NOT-REQUIRED` |
+| 8 | C-1 required, no credible method | **PASS** | AB-28R4(5) → (2). If it is needed by a MOS output, AB-86(4) applies; if by an optional item, the item is omitted |
+| 9 | Proposed IM act demonstrably within Approval B under exact source-based analysis | **PASS WITH NOTE** | AB-29R4 class 1 stays available (AB-80R4). Its determination is a concrete commitment under AB-81, and its sufficiency is separate (AB-90). None is classified in the reviewed record |
+| 10 | Proposed IM act needs separate filesystem/platform authority | **PASS** | AB-29R4 class 2; F-16R4 |
+| 11 | Proposed IM act is B5-governed | **PASS** | AB-29R4 class 3; AB-64 |
+| 12 | Proposed IM act unresolved; no authority assumed | **PASS** | AB-29R4 (doubt → restrictive); AB-18R4(6); F-16R4 |
+| 13 | Static authoritative semantics available; applicability to the actual environment not established | **PASS** | AB-88: static analysis is valid as S; only reliance needing E is blocked |
+| 14 | Empirical applicability evidence needed and unavailable | **PASS** | AB-88, AB-90, F-16R4. If it is the only route for a MOS relationship, F-6R4 applies |
+| 15 | Same-handle method has documentation but no proof of actual applicability | **PASS** | AB-74, AB-88, AB-90: not credible for reliance that needs applicability |
+| 16 | Class A custody route | **PASS** | AB-38R, AB-75 |
+| 17 | Bounded unreconciled Class B instance | **PASS** | AB-38R, AB-78: reserved, completeness unproven; S-14R4 if it cannot be reconciled |
+| 18 | Class C unknown population | **PASS** | AB-38R, AB-75 (not authorizable); S-14R4 if it arises |
+| 19 | Secret to a suitable recipient | **PASS** | AB-76R4, AB-15R |
+| 20 | Secret to an unsuitable recipient | **PASS** | AB-15R(5), S-4, T1; not cured afterwards |
+| 21 | Screening component sees full content; downstream actor gets only screened content | **PASS** | AB-14R, AB-76R4: screener suitable for full content; downstream suitable for its screened EVS; screening is a governed transformation |
+| 22 | S-14 event occurs | **PASS** | S-14R4 whole-event T1; AB-79 |
+| 23 | Sealing fails after S-14 | **PASS** | F-8R, AB-45R, AB-79 |
+| 24 | Concrete PB analyzed without closure | **PASS** | AB-51R4 act 6(a): non-governing |
+| 25 | Concrete PB adopted without closure | **PASS** | AB-81, AB-82, F-15 |
+| 26 | Abstract PB requirements adopted while concrete PB stays blocked | **PASS** | AB-81 [S] (REV4 §F step 4); AB-83 does not block abstract adoption |
+| 27 | Approval B attempted while the AB-83 closure blocker remains | **PASS** | F-15, P-1R4 |
+| 28 | Hosted route with bounded retention but other custody properties unresolved | **PASS** | AB-77: retention alone is not sufficient; AB-75 items unmet → F-13 |
+| 29 | Provider route with unknown production | **PASS** | AB-77, Class C, F-13 |
+| 30 | Ninth narrow input in a receiving domain | **PASS** | AB-69R, AB-70 (I₃) |
+| 31 | Copy charged once without continuity proof | **PASS** | AB-69R |
+| 32 | Negative P0 result mistaken for qualification | **PASS** | AB-55, F-1 |
+| 33 | B5 HOLD treated as a universal blocker | **PASS** | AB-57, AB-65, AB-66 |
+| 34 | Mandatory package deliberately pruned to what is easy to prove | **PASS** | AB-86(4) and (7), F-6R4, F-17 |
+
+### 22.2 Regression on Astra's Revision 3 FAIL entries
+
+| AST-R3 entry | Result | Basis |
+|---|---|---|
+| Required #3: AR-1 established, AR-2 fails | **PASS** | Before authorization: AB-86(4). During execution: AB-86(6) |
+| Required #4: C-0 (now AR-3) unavailable | **PASS** | AR-3 is required for M-1. Lacking a design → AB-86(4) |
+| Required #7: IM genuinely within Approval B | **PASS WITH NOTE** | As case 9 |
+| IC-0 lacks AR-2; interface excerpt supportable | **PASS** | As case 1 |
+| Static semantics available, applicability unproved | **PASS** | As case 13 |
+| Prior #8: B5/IM conflict | **PASS** | AB-29R4, AB-64 |
+| Prior #10: provenance unavailable | **PASS** | AB-86, F-6R4 |
+| Prior Chair #7, 8, 9, 11 | **PASS WITH NOTE** | AB-28R4, AB-74, AB-86, AB-90. Note: no credible PB design is established in the reviewed record (§24) |
+| §22.1 #34: content beyond the sensitivity scope | **PASS** | AB-76R4, §6.2(f) |
+| Whole-content proof without a separate metadata observation | **PASS WITH NOTE** | IC-0 note; AB-73R4. Permissible in principle; no method is qualified |
+
+**Author note.** Under this architecture, Approval B becomes authorizable only when credible designs support the *entire* MOS, its concrete elements have an applicable adopted closure, and its routes are qualified. That is the intended result of R3-B1. It is a consequence for executability, not a defect, and it does not block adoption of the abstract architecture (AST-R3 §§F, L).
+
+---
+
+## 23. Source and dependency crosswalk
+
+| Provision | Label | Governing basis | Verification |
+|---|---|---|---|
+| AB-01 to AB-04 | X/N | REV4-A non-authority; SUCC-A; AUTH-1 to AUTH-4 | Read |
+| AB-05R4, AB-84 to AB-86 | S/N | **PLAN §J verbatim** (re-read); CON §4; CON §7; R-06(e); R-26; REV4 §D; AST-R3 §J (R3-B1) | Read |
+| AB-84 M-4 reading | S/N | PLAN §J; PLAN §F file-map row ("`P/probe.c` — Protected runtime implementation"); SUCC §L row 7 | Read |
+| AB-87 | S/N/U | PLAN §J (M-7); SUCC §F.2 (K4R vs K4T); REV4 §H (tailored work after Approval B) | Read; reviewer to verify |
+| AB-06 to AB-12 | S/G/N | PLAN §§E, J, N; REV4 §§E, G, H; REV4-A 3–5; SUCC §§F, L; REG §§4–5; PO-22 | Read |
+| Bindings | S | IC-0: R-06, R-26 · IC-1: R-01, R-03, R-09 · IC-2: R-02, R-34 · IC-3: R-03, R-23 · IC-4: R-26, R-38 · IC-5: R-38; BR→R per SUCC §E.9 | Read |
+| AB-13R to AB-17, AB-76R4 | N/S | CON §§4, 5, 7; HP H8–H9; PLAN §J; AST-R2 §F; AST-R3 §§H, K-4 | Read |
+| AB-18R4 | N | REV4 §§D, H; CON §§1, 4; R-32; REG §3; AST-R3 §§E, J (R3-B2) | Read |
+| AB-21 to AB-24R4 | G/N | CON §§4, 7, 10; R-06; R-26 | Read |
+| AB-25R | N | CON §4; H15; R-26; R-27 | Read |
+| AB-26, AB-27R4, AB-28R4, AB-73R4, AB-74 | N | CON §4 items 1, 2, 8 and last paragraph; CON §7; H15; R-26; R-27; AST-R3 §§H, K-1, K-2 | Read |
+| **AB-29R4, AB-80R4, AB-88 to AB-90** | S/N | PLAN §§J, N; REV4 §H; **REG §3 (S/E/X classes, verbatim)**; SUCC §E.0; R-32; CON §4 last paragraph; REG §5; R-23; AST-R3 §E | Read |
+| AB-30R4 | N | R-23; REG §5 | Read |
+| AB-31 to AB-35 | N | CON §§7, 10; R-06(f); R-33; H17 | Read |
+| AB-36 to AB-41, AB-75, AB-77 to AB-79 | N/G | CON §§4, 5, 7; HP H8, H9, H15, H16; R-30, R-31, R-33, R-35; AST-R3 §H | Read |
+| AB-42R, AB-43R4 | N/S | PLAN §J; R-07 | Read |
+| AB-44, AB-45R, S-14R4 | N | HP H9; CON §5; AST-R3 §K-3 | Read |
+| AB-46 to AB-50 | N/G | R-18 (per E.9; body read by Astra) | Partly read |
+| AB-51R4 to AB-57 | S/G/N | REV4-A 3; REV4 §§D, E, F, H, M; SUCC K4R; PLAN §§E, I, J; HIST §2 | Read |
+| AB-81 to AB-83 | S/N | REV4 §F (steps 1–6; last paragraph); §D row 4; REV4-A 4, 5 and caution; **REG §§2, 4**; SUCC §F.1; SUCC-A; PLAN §N; **AST-R3 §F (confirmation)** | Read |
+| AB-58 to AB-63 | S/N | SUCC §F.1, §F.3; SUCC-A; REV4 §G; R-06(c); R-39 | Read |
+| AB-64 to AB-66 | S/G | REG §5; PO-22; REV4 §E; PLAN §I; ADOPT §9.2; CON §§5, 11; R-23; R-31 | Read |
+| AB-67 to AB-70 | S/G/N | REV4-A 6; SUCC-A; CON §§1, 10; HP H10, H17; H18 §§10, 12.2; PO-15; R-06; R-36 | Read; PO-19 body not read |
+| PO-03 clarification | — | Not engaged: there are no slot, retry, cancellation, recovery or disposal semantics (AST-R3 §C) | Not read |
+| Decision 0010 | — | Governs review, and PB reviewer independence in AB-28R4(e), as applied in AST-R2 and AST-R3 | Not read; attributed |
+
+---
+
+## 24. Unresolved items, deferral points and blockers
+
+### Resolved in Revision 4
+
+- **R3-B1:** AB-84 to AB-86.
+- **R3-B2:** AB-29R4, AB-80R4, AB-88 to AB-90.
+- NB-1 to NB-5: §0.2.
+
+### Previously resolved, preserved
+
+- **UQ-1:** AB-14R.
+- **UQ-3:** AB-39R, AB-40, AB-75 to AB-79.
+- **UQ-6:** AB-69R.
+- **UQ-10:** reformulated in AB-29R4 and AB-80R4 as a method-specific classification rule.
+- **UQ-11:** AB-77.
+- **UQ-13:** replaced by AB-81 to AB-83.
+- **UQ-8:** withdrawn.
+
+### Deferred, with timing per AST-R3 §G
+
+| Item | Deferral point | Constraint |
+|---|---|---|
+| UQ-2 Tracking status | Approval B authorization | Optional and separately authorized. Never replaces AR-1, AR-2 or AR-3 |
+| UQ-4 M-A vs M-B | **Before concrete commitment of the route** (including when first fixed by an authorization) | §§6, 9, 10; AB-81 |
+| UQ-5 Earlier-exposure declaration | Approval B authorization | Records limitations; no search |
+| UQ-7 All S-8 as T1 | Approval B authorization | T2 only with affirmative independence |
+| UQ-9 Verifier roles | **Before adopting the PB or custody design that relies on them**; the particular actor may be bound later where that design permits | Non-circular; independence suited to the claim |
+| UQ-12 Accounting classification | **Before Approval B authorization**; any earlier concrete allocation falls under AB-81 | No exemption |
+| AB-87 reading of M-7 | Reviewer verification at the next review | If wrong, the conflict is exposed under AB-02 |
+
+### Blockers
+
+**To architectural adoption:** none perceived by the author. The independent reviewer decides.
+
+**To executability.** These are findings about the reviewed record plus attributed status, not defects:
+
+1. No P0 candidate has been successfully qualified (attributed).
+2. No adopted arrangement presently supplies complete closure for concrete Approval B envelope elements (AB-83, confirmed by AST-R3 §F).
+3. **No credible, lawful PB design for AR-1, AR-2 and AR-3 across the complete MOS is established in the reviewed record.** No IM method has been classified or qualified there. Whether any method can be lawfully classified class 1, or supported through class 2 authority, is open method by method. The category is **not** held to be empty.
+4. No plaintext route, hosted or otherwise, has yet been qualified under AB-75 and AB-76R4 in the reviewed record.
+5. Approval B is unauthorized.
+
+### Deliberately deferred concrete choices
+
+- acquisition method and AC;
+- PR roles, EVS and any screening;
+- PB designs;
+- IM methods and their classifications (AB-89 template);
+- E-class applicability routes;
+- routes, destinations and populations;
+- hosted provider or configuration, if any;
+- the content-sensitivity envelope;
+- retention locations and durations;
+- byte, excerpt and OR limits;
+- the window;
+- optional IQL items;
+- terminal actions;
+- accounting classification.
+
+None may be committed before AB-81 is satisfied.
+
+### Next decision needed from you
+
+Whether to send this exact Revision 4, pinned as returned, to the OpenAI/Astra reviewer for renewed Decision 0010 **FORMAL ADOPTION / QUALIFICATION** review of the whole revision. I ask the reviewer in particular to verify:
+
+- AB-84's MOS against PLAN §J, including the M-4 reading;
+- AB-87's staged reading of M-7;
+- AB-80R4 and AB-88 against PLAN §§J, N and REG §3.
+
+---
+
+## 25. Final authority statement
+
+This candidate grants none of the following:
+
+- Approval B;
+- `P/` inspection or any protected read;
+- PB or IM acquisition, or empirical applicability acquisition;
+- protected copying, transfer or hosted protected processing;
+- inspection of unknown media;
+- retention, release, disposal or custody transition;
+- P0 qualification;
+- B5 progression;
+- host, platform or runtime observation;
+- CP or K-point closure;
+- any broader closure arrangement;
+- concrete-envelope adoption;
+- any change to the MOS;
+- backend selection or elimination;
+- implementation or execution;
+- F/Q/O authority;
+- cleanup;
+- protected evidence acquisition;
+- repository, file or Git mutation;
+- external-model review.
+
+B5 G1 stays on **HOLD**. P0 candidates stay **NOT QUALIFIED**. Approval B stays **UNAUTHORIZED**. V2-2B implementation and execution stay **UNAUTHORIZED**. All of these statuses are attributed. My authorship is self-reported. I do not qualify or adopt this revision.
+
+**STOP FOR HUMAN CHAIR REVIEW.**
