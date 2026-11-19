@@ -1,0 +1,429 @@
+# Sequence 11 Revision 2 — UQ-4 Acquisition/Custody Route Closure Analysis
+
+**For:** Amy, Human Chair  
+**Date:** November 19, 2026  
+**Author:** OpenAI Codex, primary analytical author  
+**Status:** Authored revision for independent adversarial review; not independently qualified or adopted.  
+**Supersedes:** Sequence 11 Revision 1 as the author’s analytical submission only.
+
+**Final determination: B. UQ-4 cannot yet be resolved; specified additional inputs are required.**
+
+## 1. Scope and authority
+
+This bounded revision re-evaluates UQ-4 using the recovered meanings of M-A and M-B. It does not select either alternative, revise governing architecture or begin a successor sequence.
+
+The local branch and checkpoint were freshly confirmed:
+
+- Branch: `m1-live-adapter-dev`
+- HEAD: `f236f2af60248876f32740918b0f80807fa26aee`
+
+The governing sources remain:
+
+| Reference | Controlling material |
+|---|---|
+| **SEQ** | [Sequencing Architecture Revision 4 adoption](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-SEQUENCING-ARCHITECTURE-REV4-ADOPTION.md), including its effect-based abstract/concrete distinction. |
+| **ABE** | [Approval B Inspection-Envelope Revision 4](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/provenance/approval-b-inspection-envelope-rev4-2026-11-14/OPUS-APPROVAL-B-INSPECTION-ENVELOPE-REV4.txt), read with its adoption and retained notes. |
+| **CLOS** | [Concrete Approval B Envelope Closure Revision 2](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/provenance/concrete-approval-b-envelope-closure-rev2-2026-11-14/FABLE-CONCRETE-APPROVAL-B-ENVELOPE-CLOSURE-REV2.txt), with adopted Option B and retained earlier deadlines. |
+| **SUCC** | [Adopted Opus successor architecture](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/provenance/opus-successor-2026-11-12/OPUS-SUCCESSOR-ARCHITECTURE.md), particularly R-24–25, R-30–33 and R-38–40. Its non-governing closure-point model is not an adopted ladder. |
+| **CON** | [Level-2 Evidence Contract](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md), as applied through ABE and CLOS. |
+| **U12** | [Sequence 10 Revision 1 adoption](/Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-SEQUENCE-10-REV1-UQ12-ADOPTION.md), including U12-01–U12-20. |
+| **D10** | [Decision 0010](/Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md), governing revision-scoped independence and qualifying review. |
+
+### Material changes from Revision 1
+
+1. **U4-I01 is satisfied.** The recovered definitions replace the earlier inspection limitation. There is no present claim that the governing lineage lacks recoverable definitions.
+2. **The analysis now addresses M-A and M-B directly.** Revision 1’s generic route classes are not treated as definitions of those alternatives.
+3. **The abstract-resolution test is repeated using the actual choice.** Outcome B no longer relies on uncertainty about what the labels mean.
+4. **The input register is narrowed.** U4-I03–05 are components of one scoped showing, not three mandatory documents or serial gates. Conditional dependencies remain conditional.
+5. **Closure procedure and consequential choice are distinguished from factual inputs.** U4-I06 and U4-I07 remain required acts, not additional empirical questions.
+
+The unaffected separation of source provenance, custody, transfer, receiving-domain admission, accounting, operational evidence and authority is preserved.
+
+## 2. UQ-4 definition and closure condition
+
+### Recovered documentary meaning
+
+**M-A — executor direct read:** the executor directly obtains the authorized source objects through device access.
+
+**M-B — Chair-mediated transfer:** the Chair supplies the authorized objects and Chair-computed digests to an executor without device access, introducing a custody handoff.
+
+These definitions appear explicitly in the [original candidate’s AB-19](</Users/aclab/.codex/attachments/8f88ce07-4517-4ed8-bb9f-f6efcafd2cff/Pasted text.txt:245>). The recovered attachment is 51,974 bytes, SHA-256:
+
+`f1bcb0c494e3df2786161c12340f3cee4340de3570c21074750f2e81516646c2`
+
+That candidate was not adopted. The same named question was carried through Revisions 2 and 3 into adopted ABE Revision 4, then expressly retained by CLOS CR-10 and CR-43. This establishes the alternatives’ documentary meaning without adopting the original draft’s procedural assumptions, sufficiency claims, timing or preference.
+
+**U4-I01 — SATISFIED for documentary label definition and provenance.**
+
+### What UQ-4 asks
+
+UQ-4 asks which acquisition arrangement will govern: executor direct acquisition or Chair acquisition/supply to an executor without device access.
+
+Its subject is therefore a consequential allocation of acquisition responsibility and an associated custody relationship. It is not merely a request to state conditions applicable to every acquisition route.
+
+ABE §24 requires resolution **before concrete commitment of the route**, including its first fixation in an authorization. CLOS CR-43 preserves that deadline.
+
+### Scope distinctions
+
+- **Acquisition route** identifies how the authorized source objects are first obtained and by whom. This is central to UQ-4.
+- **Transfer route** concerns subsequent conveyance. M-B necessarily introduces the identified Chair-to-executor handoff; M-A does not eliminate other transfers.
+- **Custody arrangement** concerns holders, effective control and the evidentiary basis for continuity and retrieval. Both alternatives require one.
+- **Custody transitions** are changes in holders or control. A design commitment does not prove they occurred.
+- **Receiving-domain transition** is entry into another governed evidence/accounting domain. It is not synonymous with every custody handoff.
+- **Provider identity and intermediary involvement** are separate concrete matters unless the choice fixes or relies on them.
+- **Possession** does not establish exclusive control. **Control** concerns effective capabilities, including capabilities shared within a protection domain.
+- **Protected access, evidence production, evidence transfer and retention** remain separately governed acts and obligations. Choosing an alternative authorizes none of them.
+
+### Closure versus resolution
+
+A non-governing proposal can identify an answer without selecting it. Applicable concrete closure makes an exact item eligible for commitment. Only the Chair’s consequential decision settles the choice.
+
+Thus:
+
+- Closing an M-A candidate alone does not select M-A.
+- Closing an M-B candidate alone does not select M-B.
+- Closing both does not resolve UQ-4.
+- Declaring both potentially permissible does not resolve UQ-4.
+
+Closure and commitment may be recorded on one occasion as distinct acts. No extra meeting or new gate is introduced. The choice must be settled no later than the act that first commits the affected route; it cannot be postponed until after protected exposure.
+
+## 3. M-A, M-B and bounded comparison
+
+### 3.1 M-A — executor direct read
+
+**Responsibility, access and visibility.** M-A places direct acquisition responsibility with the executor’s device-access path. The proposed design must identify how that executor relates to ABE’s acquisition component, tools and plaintext recipients. “Executor” does not automatically mean one process, one protection domain or universal plaintext visibility.
+
+The AC acquires the complete authorized bytes as required by ABE. Other actors receive only their authorized visibility scope. Read-only source access does not establish absence of output production elsewhere.
+
+**Source provenance and PB.** Direct access to the named path does not establish:
+
+- AR-1 source binding;
+- AR-2 completeness;
+- AR-3 acquisition coherence.
+
+The needed relationships require credible, lawful, independently reviewable proof bases. Direct acquisition does not make the executor’s account independent. Later stability and nonreplacement claims remain separately required only where relied upon.
+
+**IM.** No particular metadata method follows from M-A. Any proposed source-identification or IM act must receive its method-specific authority classification, with sufficiency assessed separately. Read-only operation, proximity to the source or convenience does not establish permission.
+
+**Production and custody.** “Direct” does not establish absence of copies, buffers, intermediaries, framework outputs, caches, diagnostics, provider processing or retained artifacts. Relevant routes require declared treatment or evidenced exclusions. A caller-supplied inventory cannot prove completeness.
+
+The custody basis must cover the acquired material and relied-on support through the relevant interval. A pathname or matching digest cannot alone establish that chain.
+
+**Independence and UQ-9.** Source, production, transfer, receiver and accounting claims must identify the producer being evaluated and the independent basis. Logical role separation does not establish capability separation. UQ-9 becomes a predecessor where the PB/custody design relies on a particular verifier-independence arrangement.
+
+**B5 and P0.** M-A creates no universal B5 or P0 factual dependency. A claim that autonomous agents cannot copy, alter, expose or remove material may create a B5 dependency. A relied-on actual Q-parent proposition creates its specific P0 dependency. Neither is established merely by direct device access.
+
+**Concrete U12 consequences.** The eventual showing must cover governed acquisition-side, executor-side, tool, receiver and support production, including relevant failure and terminal paths. The absence of the defining M-B handoff does not prove a smaller population or lower allocation.
+
+**Failure, adverse outcomes and retention.** Wrong-source, partial, incoherent, unauthorized-exposure, unbounded-production and custody failures retain their applicable status and stop consequences. No retry or fallback arises from failure. Retention follows the established design; completion or stopping grants no cleanup or release authority.
+
+**Facts needed before legitimate selection.** The proposed commitment must identify what direct-access arrangement it settles and supply the facts necessary to judge that commitment lawful, credible and sufficient. These include its acquisition responsibility, relevant access boundaries, material production/custody assumptions, independent grounding and reliance on other elements. A device or provider identity is needed at this stage if the conformance argument depends on its properties—not simply because the eventual implementation will have a name.
+
+### 3.2 M-B — Chair-mediated transfer
+
+**The Chair’s acquisition act.** M-B places source acquisition/supply with the Chair and denies device access to the receiving executor. The first protected read, digest or copy by the Chair is a governed act and can begin the Approval B event. It cannot be treated as ungoverned preparation for a later executor-only event.
+
+**Chair-computed digests.** The digests are producer accounts. They may participate in integrity comparisons under stated assumptions, but do not independently establish source identity, completeness, coherence or custody history.
+
+The Human Chair’s decision authority does not make the Chair’s produced evidence independent.
+
+**Custody handoff and transfer provenance.** The design must account for acquisition by the Chair, emitted material, the handoff, received material, transformations and retention. Receipt, validation, acceptance for a use and admission remain distinct.
+
+Equality between supplied and received bytes does not prove that the supplied bytes came from the authorized source or constituted its complete coherent content.
+
+**Executor lack of device access.** This is a substantive characteristic of M-B, not an inference from the executor’s role name. Its design basis must be supported wherever the selection relies on it. Required actual-environment facts receive their proper CLOS timing classification.
+
+Lack of device access removes the executor’s direct source-access role as defined by this alternative. It does not remove exposure through supplied plaintext, recipient-side production, provider processing or custody obligations.
+
+**Source provenance, PB and IM.** The original-acquisition relationships remain necessary. They must be supported at the acquisition stage and preserved through transfer. A receiver cannot repair missing original evidence by recomputing the Chair’s digest.
+
+No PB or IM method is selected. Chair-performed source-identification acts remain subject to the same authority and sufficiency tests; human performance grants no exemption.
+
+**Production and custody.** Relevant Chair tools, source copies, digest production, transfer representations, intermediaries, receiver copies, transformations and support must be declared and bounded where governed. No assumption is made about exact artifact counts or whether M-B produces more total material than a particular M-A realization.
+
+**Independence and UQ-9.** Both the Chair’s acquisition account and the executor’s receipt/production account must be assessed against the claims they support. Agreement between them is not automatically independent evidence. UQ-9 becomes necessary for the particular PB/custody arrangements relying on design-internal verifier roles.
+
+**B5 and P0.** Chair mediation changes neither gate. B5 becomes relevant where source-side, transfer-side or retention claims rely on agent characterization or exclusion. Actual Q-parent reliance retains its P0 requirements. Moving an act to the Chair does not change its evidence or authority classification.
+
+**Concrete U12 consequences.** Required support for Chair acquisition, digesting, handoff, receiver production and associated reconciliation/finalization belongs within the applicable accounting boundaries. Calling the handoff a manual action does not exempt its governed production. A receiving-domain transition, if present, adds that domain’s separate admission and accounting obligations.
+
+**Failure, adverse outcomes and retention.** Incomplete transfer, mismatch, omission, substitution, uncertain receipt, unexpected production and loss of custody support must remain distinguishable. Failure grants no automatic resend, recapture, replacement representation or direct-read fallback. Relevant evidence remains subject to established retention, including adverse and uncertain outcomes.
+
+**Facts needed before legitimate selection.** The commitment must specify the Chair’s acquisition/supply responsibility, the executor’s lack-of-device-access boundary, the material custody handoff and the supported basis for their conformance. Any transfer, protection, source-provenance or independence fact necessary to judge that choice must already be established at its required stage. Neither an identified Chair nor a planned digest comparison supplies that showing.
+
+### 3.3 Direct comparison
+
+This comparison identifies structural consequences, not preference or relative safety.
+
+| Dimension | M-A | M-B |
+|---|---|---|
+| Protected-access topology | Executor directly obtains source objects through device access. | Chair supplies objects to an executor without device access. |
+| Custody transitions | No defining Chair-to-executor handoff; other transitions remain possible. | The Chair-to-executor custody handoff is inherent. |
+| Actor visibility | AC and per-actor EVS must be distinguished. | Chair-side acquisition and receiver EVS must both be covered; lack of device access is not lack of plaintext exposure. |
+| Source/provenance burden | Direct acquisition needs AR-1/2/3 support where required. | Chair acquisition needs the same relationships; transfer must preserve their evidentiary connection. |
+| Transfer burden | Depends on actual tools, components and recipients. | Necessarily includes the defining handoff, plus any other actual transfers. |
+| Independent support | Executor/AC and other relevant producer accounts need claim-specific grounding. | Chair, transfer and receiver accounts need claim-specific grounding. Neither party is independent by title. |
+| Production accounting | Relevant acquisition, device/tool, receiver and support production. | Relevant Chair-side, handoff, receiver and support production. No numerical comparison is established. |
+| Failure surfaces | Direct-access scope, acquisition, production and custody failures. | Chair-side acquisition plus handoff and receiver failures; device-access exclusion also needs support. |
+| Retention | All governed instances and relied-on evidence under the established design. | Coverage extends across the handoff’s relevant holders and instances. |
+| Before selection | Supported conformance for the exact direct-access commitment and its dependencies. | Supported conformance for the exact mediated commitment, access exclusion, handoff and dependencies. |
+
+Hosting, intermediaries and receiving-domain crossings are possible attributes of implementations. They are not third alternatives created by this revision.
+
+## 4. Dependency analysis
+
+The recovered distinction makes dependency analysis more precise without imposing a universal sequence.
+
+| Target | What an M-A/M-B choice would narrow | What it would not establish |
+|---|---|---|
+| **UQ-9** | Which acquisition and handoff roles exist, and therefore which producer claims and independence arrangements require examination. | Independence, verifier eligibility or an arrangement sufficient for every claim. |
+| **Concrete U12 realization** | Relevant acquisition and custody paths, including M-B’s necessary handoff. | Exact population, numerical allocation, supported fit or operational reconciliation. |
+| **P0 qualification** | Only a separately established shared or candidate-specific proposition creates factual leverage. | No general requirement that UQ-4 precede P0, and no qualification from route selection. |
+| **B5-dependent propositions** | The locations and claims for which agent characterization or exclusion may be relied upon. | No clearance of B5 or proof that a route is independent of B5. |
+| **Approval B package** | A definite acquisition/custody choice and the concrete elements it settles. | Complete package coherence, mandatory-output support or authorization. |
+
+UQ-9 can constrain the legitimacy of a proposed UQ-4 commitment where the latter depends on an independence arrangement. It need not wait until after selection.
+
+Mutually reliant items may be determined together under CLOS, but every claim still requires non-circular grounding. Grouping is not evidence.
+
+Later occurrence alone does not establish a dependency. Successful P0 before Approval B remains a categorical governance order, distinct from the factual dependencies of any particular route element.
+
+## 5. UQ-9 implications
+
+Revision-review independence, concrete closure-verification independence and design-internal evidentiary independence remain distinct. CLOS CR-79 expressly separates the closure verifier from a verifier inside a design.
+
+**For M-A**, UQ-9 is implicated when the proposed source, custody or related PB design relies on an arrangement for independently evaluating the executor/AC or another relevant producer.
+
+**For M-B**, the same question applies to the Chair’s acquisition account, the handoff and the receiver’s account. The Chair and executor are not independent merely because they are different actors; conversely, the existence of a handoff does not prove that a particular separate-verifier arrangement is mandatory.
+
+The applicable cases remain:
+
+- **Necessarily relevant:** a PB/custody design relies on a particular verifier-independence arrangement.
+- **Potentially relevant:** a role might perform verification, but its function and relied-on claims remain unspecified.
+- **Not a predecessor to this analytical act:** describing the alternatives and their obligations does not assert a sufficient concrete arrangement.
+- **Proposition-specific:** one claim’s grounding does not establish independence for source production, transfer, receiver production, accounting and finalization collectively.
+
+No M-A or M-B design is declared wholly exempt from UQ-9. No universal verifier number, topology or family arrangement is prescribed.
+
+## 6. P0 implications
+
+**P0 candidates remain NOT QUALIFIED.**
+
+The recovered definitions establish no new P0 qualification fact.
+
+- Successful P0 qualification remains a categorical predecessor to Approval B authorization.
+- Concrete route analysis and closure are not universally gated on P0 merely because the eventual inspection is.
+- A claim relying on an actual Q-parent fact requires the applicable P0 qualification and lawful support for that fact.
+- P0 qualification status proves no underlying empirical proposition.
+- Where a closure claim needs separately admitted P0 evidence, U-6 remains unresolved; affected closure cannot proceed without resolution of the governing interpretation and lawful admission route.
+- P0 candidates remain excluded as Approval B subjects or destinations.
+- No P0 output enters the Approval B envelope, and no Approval B output feeds back into P0.
+
+Neither executor direct access nor Chair mediation permits protected inspection to generate a missing P0 prerequisite. No actual candidate-specific dependency is asserted without its supporting proposition.
+
+## 7. B5 implications
+
+**B5 G1 remains HOLD.**
+
+For either alternative, a B5 dependency arises where a relied-on proposition characterizes or excludes indexing, backup, synchronization, autonomous cleanup or comparable agents.
+
+For M-A this may concern the direct-access environment, production bounds or retention. For M-B it may concern the Chair’s acquisition environment, the handoff, receiver-side production or retention. The additional locations identify possible reliance questions; they do not prove that every such question requires B5.
+
+Static semantic analysis is not itself host observation. “Not B5” does not establish that an empirical observation is authorized within Approval B. A platform-premise acquisition may remain blocked by U-4 independently.
+
+An affected item cannot close while necessary B5 support is unavailable. Such support cannot be scheduled under Option B when its required gate remains on hold. Doubt receives the applicable restrictive treatment.
+
+No B5 progression or host-observation-envelope design follows.
+
+## 8. UQ-12 implications
+
+**UQ-12 remains RESOLVED AT THE ABSTRACT GOVERNANCE LEVEL.**
+
+No contradiction with the adopted rule is identified.
+
+M-A and M-B affect later concrete realization by determining different acquisition responsibilities and, for M-B, a necessary custody handoff. Relevant production must then be identified and treated under U12 regardless of whether it occurs through a device tool, a human action, an intermediary or a hosted service.
+
+The existing distinctions remain controlling:
+
+- Classification is not allocation.
+- Allocation is not reservation or supported fit.
+- Charging is not reconciliation.
+- Reconciliation does not replace AR-1, AR-2 or AR-3.
+- Finalization does not prove successful execution.
+- Receipt does not establish admission.
+- Retention can continue after production closes without permitting missing original evidence to be manufactured later.
+
+The required accounting interval includes original acquisition, transfer, receiver and closure support wherever applicable. A later-review label cannot remove an unfinished original obligation.
+
+Neither alternative is shown to require a larger or smaller allocation. This revision supplies no exact accountable population, finite numerical allocation, supported worst-case fit, reconciliation implementation or finalization implementation.
+
+## 9. Abstract-resolution test
+
+### 9.1 Would permitting either alternative subject to existing requirements resolve UQ-4?
+
+**No.** It would preserve two possible answers. The recovered question asks which acquisition method will govern.
+
+Such permission would also not establish that either alternative has a compliant concrete realization.
+
+### 9.2 Would specifying mandatory characteristics for both resolve UQ-4?
+
+**No.** Bounded production, lawful access, suitable recipients, independent support and custody protection constrain both alternatives. They do not decide who acquires and supplies the objects.
+
+ABE and CLOS already impose such obligations while expressly retaining UQ-4 as unresolved. Repeating or supplementing them cannot be represented as settling the choice.
+
+### 9.3 Could an abstract conditional rule select between them without becoming a concrete route commitment?
+
+A genuinely abstract rule can state criteria for a future choice. If application of those criteria and the consequential choice remain open, UQ-4 remains open.
+
+A rule that fixes which acquisition responsibility applies under specified conditions can instead settle a contingent acquisition architecture. Its classification depends on its substantive effect, not its lack of provider names. If later work may rely on that architecture as settled, applicable concrete closure is required.
+
+Neither a conditional label nor a deferred runtime branch supplies an exemption. A policy that delegates or automates later selection would require its own authority and analysis; none is proposed here.
+
+### 9.4 Does the wording and lineage make the choice itself unresolved?
+
+**Yes.** The defining text identifies two acquisition methods. The successors carry that same choice forward, and the adopted texts require it to be resolved before route commitment.
+
+Recovery removes Revision 1’s uncertainty about whether the labels might denote some different, purely classificatory policy question.
+
+This conclusion does not depend solely on the original draft. Current ABE AB-41/§24 and CLOS CR-10/43 preserve the choice and its governing consequence.
+
+### 9.5 Can a genuine governance-level distinction still be resolved separately?
+
+**Yes, but it would answer a different proposition.**
+
+Governance may separately settle general evidentiary duties, authority boundaries, closure standards or selection criteria without settling implementation. Existing architecture already does much of this.
+
+A high-level M-A/M-B choice can also leave implementation details open. However, choosing who directly acquires and who receives through a Chair handoff fixes substantive acquisition/custody structure. It is not abstract merely because it is described at a governance level or leaves a provider unnamed.
+
+### 9.6 What may remain open after the choice?
+
+A detail may remain open only if the exact commitment neither fixes it nor relies on treating it as settled, and its applicable deadline remains respected.
+
+Potential residue includes a particular provider, component realization, transfer implementation, actor binding, representation or accounting implementation. These are not automatically deferrable: any such detail becomes required earlier when its properties are necessary to judge the proposed commitment lawful, credible or sufficient.
+
+The following cannot remain unspecified where material to the choice:
+
+- who acquires and supplies the source objects;
+- the access/custody distinction being committed;
+- the requirements reaching that commitment;
+- its necessary independent grounding and dependencies;
+- design-validity premises;
+- the legitimate boundary between settled matters and later decisions.
+
+Execution outcomes remain unestablished before execution. A valid design may carry execution-observable premises only under the adopted conditions.
+
+### Result of the repeated test
+
+**Outcome B remains supported, on a stronger and narrower basis.**
+
+The recovered definitions strengthen the finding that UQ-4’s unresolved proposition is an acquisition-method choice. They remove the missing-definition premise and the alternative interpretation associated with it.
+
+They do not establish that either choice is currently eligible for commitment. Nor do they establish that every implementation detail must precede the choice.
+
+UQ-12 remains materially different: its adopted resolution answers which accounting regime and governing allocation rule apply while expressly preserving concrete realization. A rule allowing both acquisition alternatives would leave UQ-4’s named question unanswered.
+
+## 10. Concrete-selection threshold and revised input register
+
+### Stage boundaries
+
+| Stage | Required showing |
+|---|---|
+| **Analytical consideration** | Recovered meanings and applicable obligations. These are now available; this revision performs that analysis. |
+| **Non-governing candidate preparation** | An exact proposed M-A or M-B answer, its commitment scope and legitimate residue. Preparation selects nothing. |
+| **Applicable concrete closure** | A scoped conformance showing satisfying CLOS, including necessary dependencies, grounding and premise timing; eligible verification and Chair determination. |
+| **Consequential choice** | The Chair’s explicit decision settling the eligible answer. Closure alone does not choose. |
+| **Approval B authorization** | Complete incorporated-element closure, package evaluation, MOS support, accounting/allocation readiness, successful P0 and all other prerequisites. |
+| **Operational satisfaction** | Lawfully obtained execution evidence of actual acquisition, transfer, production, custody and closure outcomes. |
+
+This framework does not require both alternatives to be fully implemented, both to be closed, or an exhaustive comparative study before one may be considered for selection. Any comparative claim actually relied upon must nevertheless be supported.
+
+### Revised U4-I01–U4-I07 register
+
+| ID | Revised status | Minimum remaining requirement |
+|---|---|---|
+| **U4-I01 — Definition and provenance** | **SATISFIED — documentary definition and provenance recovered.** | M-A and M-B are identified through the preserved lineage. No additional label clarification is required on this record. This supplies no selection, conformance proof, closure or operational authority. |
+| **U4-I02 — Exact proposed answer and scope** | **PARTLY SATISFIED; a scoped candidate remains required.** | The alternatives are now definite. A future proposal must still identify the exact answer offered for commitment, what it settles, what remains open and what dependencies it assumes. This revision offers neither alternative for adoption. |
+| **U4-I03 — Conformance basis** | **REQUIRED, scoped to the proposed commitment.** | A CLOS showing for that exact item: applicable requirements, conformance, material production/custody/access assumptions, failure treatment and supported design-validity premises. It does not require the entire Approval B package unless the commitment actually settles or depends on it. |
+| **U4-I04 — Reliance and timing** | **REQUIRED as part of U4-I03; specific gated inputs are CONDITIONALLY REQUIRED.** | Claim-level dependencies and premise classifications must be ascertainable. P0, B5, U-4, U-6 and particular empirical facts are prerequisites only where relied upon. Scheduled and carried premises must satisfy CR-29/30. No separate document or serial gate is required. |
+| **U4-I05 — Independence consequences** | **REQUIRED as part of U4-I03; UQ-9 resolution is CONDITIONALLY REQUIRED.** | Identify evaluated producers, effective capability unions and independent grounding for material claims. Resolve the particular UQ-9 arrangement before adopting any PB/custody design that relies on it. No universal verifier arrangement is added. |
+| **U4-I06 — Closure record** | **REQUIRED procedural acts, not an additional factual prerequisite.** | Complete showing, eligible independent verification without unresolved blocking findings, and the Chair’s exact-item/set closure determination. This does not require a second parallel qualification process or an invented gate. |
+| **U4-I07 — Chair choice and disposition** | **REQUIRED consequential act.** | The Chair explicitly settles the M-A/M-B answer and its limits after applicable closure. Closure and commitment may occur on one occasion as distinguishable acts. This report supplies no preference or decision. |
+
+The minimum remaining work therefore comprises **one scoped candidate answer, one integrated applicable showing, the existing closure process and the Chair’s consequential choice**.
+
+U4-I03–05 can be consolidated in the same showing. Their substance cannot be omitted through consolidation. No additional prerequisite is created to replace the now-satisfied U4-I01.
+
+## 11. Mandatory later closure requirements
+
+Even after a future UQ-4 resolution:
+
+1. **Each additional concrete element requires its own applicable closure before commitment.** Selecting a method does not close an entire class of routes, PBs, IM acts, custody arrangements or allocations.
+
+2. **Premise timing remains unchanged.** Design-validity premises must be established before closure. Pre-effect premises may be scheduled only under every CR-29 condition. Execution-observable premises require the reserved route and bounded failure treatment of CR-30. Earlier deadlines prevail.
+
+3. **Mandatory outputs cannot be pruned.** Before Approval B authorization, every required relationship across the MOS needs credible lawful PB support. An unsupported mandatory output cannot be dropped to make either alternative appear viable.
+
+4. **The exact authorization package needs independently verified coherence evaluation.** This is an input to authorization, not a newly invented Chair determination.
+
+5. **Approval B remains a separate authorization.** Successful P0 and all retained prerequisites remain necessary.
+
+6. **Actual outcomes require execution evidence.** A credible authorized design may fail. Partial, adverse, conflicting and uncertain outcomes must remain visible; missing original evidence cannot be reconstructed by later review.
+
+7. **Retention and release remain separate.** Completion, failure or stopping grants no cleanup, deletion, movement, release or disposal authority.
+
+These are later requirements only to the extent their own earlier deadlines or dependencies do not require satisfaction before the proposed UQ-4 commitment.
+
+## 12. Reopening conditions
+
+This revision leaves UQ-4 unresolved and creates no closed UQ-4 status.
+
+The earlier documentary-definition uncertainty has been removed. It should not be retained as a hypothetical blocker without new contrary evidence.
+
+This analysis would require reconsideration if an authoritative source contradicted the recovered meanings, changed the question or established a material defect in the effect-based reasoning.
+
+For later concrete closures, CLOS CR-96–106 remains controlling. Material changes or original defects include altered acquisition responsibility, access boundaries, handoffs, capability unions, provider properties, production or retention assumptions, failed conditions, unavailable observation routes, hidden dependencies, circular support or defective verification.
+
+Suspension propagates through affected reliance. Original records remain preserved; renewed closure follows the applicable process. No reopening authorizes acquisition or operational action.
+
+A problem with a concrete realization does not itself reopen UQ-12. Its abstract rule would be reconsidered only upon a genuine contradiction or defect.
+
+## 13. Authority boundaries and review posture
+
+This revision chooses neither M-A nor M-B and expresses no Human Chair preference. It selects no provider, acquisition implementation, PB, IM method, verifier arrangement, ledger, reconciliation mechanism or finalization mechanism.
+
+No protected evidence was acquired, no operational activity was performed, no repository file was modified, and no staging, commit or push occurred. No subagent or independent reviewer was invoked.
+
+| Matter | Retained disposition |
+|---|---|
+| U4-I01 | **SATISFIED — documentary definition and provenance recovered** |
+| UQ-4 | Unresolved |
+| UQ-9 | Unresolved |
+| UQ-12 | **RESOLVED AT THE ABSTRACT GOVERNANCE LEVEL** |
+| U-4 / U-6 | Unresolved where applicable |
+| P0 candidates | **NOT QUALIFIED** |
+| B5 G1 | **HOLD** |
+| Approval B | **UNAUTHORIZED** |
+| V2-2B implementation/execution | **UNAUTHORIZED** |
+
+This is authored analysis, not independent qualification. Historical qualification of governing sources does not qualify this revision. The Human Chair remains the sole consequential decision-maker.
+
+## 14. Final determination
+
+**B. UQ-4 cannot yet be resolved; specified additional inputs are required**
+
+The repeated analysis supports Outcome B because the recovered governing question concerns a sufficiently definite choice between executor direct acquisition and Chair-mediated supply to an executor without device access. Permitting or constraining both alternatives leaves that choice open.
+
+**U4-I01 is satisfied.** Its former documentary uncertainty is no longer a basis for withholding resolution.
+
+The remaining requirements are:
+
+- **U4-I02:** an exact, scoped proposed answer;
+- **U4-I03–05:** one integrated conformance showing, including only the dependencies and independence arrangements actually required by that commitment;
+- **U4-I06:** the existing applicable independent verification and Chair closure determination;
+- **U4-I07:** the Chair’s explicit consequential choice.
+
+Particular provider, PB, IM, empirical, UQ-9, P0 or B5 inputs are not universal prerequisites merely because they may arise later. They become necessary at the stage required by the proposed commitment’s actual reliance and the governing deadlines.
+
+The recovered definitions strengthen the identification of the choice itself as unresolved; they do not select or qualify either answer. UQ-12 and all retained gate and authority boundaries remain unchanged.
+
+**Sequence 11 Revision 2 ends here. No successor sequence is begun.**

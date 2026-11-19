@@ -1,0 +1,259 @@
+Ran verify candidate byte length and SHA-256 hash · Exited with code 1
+Ran verify candidate byte identity from transcript
+Ran print complete 429-line candidate text with line numbers
+Analyzed output.txt:L1-434
+Analyzed DECISION-0009-SEQUENCING-ARCHITECTURE-REV4-ADOPTION.md:L1-84
+Analyzed FABLE-SEQUENCING-ARCHITECTURE-REV4.txt:L1-303
+Analyzed DECISION-0009-APPROVAL-B-INSPECTION-ENVELOPE-REV4-ADOPTION.md:L1-128
+Analyzed OPUS-APPROVAL-B-INSPECTION-ENVELOPE-REV4.txt:L1-800
+Analyzed DECISION-0009-CONCRETE-APPROVAL-B-ENVELOPE-CLOSURE-REV2-ADOPTION.md:L1-157
+Analyzed FABLE-CONCRETE-APPROVAL-B-ENVELOPE-CLOSURE-REV2.txt:L1-700
+Analyzed OPUS-APPROVAL-B-INSPECTION-ENVELOPE-REV4.txt:L550-1061
+Analyzed FABLE-CONCRETE-APPROVAL-B-ENVELOPE-CLOSURE-REV2.txt:L473-700
+Analyzed DECISION-0009-PRE-GATE-V2-2B-OPUS-SUCCESSOR-ADOPTION.md:L1-83
+Analyzed OPUS-SUCCESSOR-ARCHITECTURE.md:L420-650
+Analyzed DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md:L1-450
+Analyzed OPUS-SUCCESSOR-ARCHITECTURE.md:L651-800
+Analyzed OPUS-SUCCESSOR-ARCHITECTURE.md:L801-860
+Analyzed ASTRA-REV4-WHOLE-REVISION-QUALIFICATION.txt:L1-379
+Analyzed DECISION-0009-SEQUENCE-8-QUALIFICATION.md:L1-95
+Analyzed DECISION-0009-SEQUENCE-7-REV2-QUALIFICATION.md:L1-93
+Ran search governance docs for UQ-4, M-A, and M-B references
+Ran verify repository HEAD and clean docs state
+
+# Model Council Lab — Sequence 11 Revision 2
+## Formal Adoption/Qualification Independent Review
+
+**Review Date:** November 19, 2026  
+**Human Chair:** Amy  
+**Assigned Governance Tier:** **FORMAL ADOPTION/QUALIFICATION** under [Decision 0010](file:///Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md)  
+**Whole-Revision Verdict:** **ACCEPT** (0 blocking findings, 0 non-blocking corrections, 0 non-blocking notes)  
+**Formal Qualification Status:** **FORMALLY QUALIFIED under Decision 0010**
+
+---
+
+## 1. Exact Candidate Identity
+
+The complete candidate text supplied in turn `step_index: 37` of [transcript_full.jsonl](file:///Users/aclab/.gemini/antigravity/brain/f628d6f0-0165-49dd-aeb7-79598482e879/.system_generated/logs/transcript_full.jsonl) was independently measured and hashed before substantive review:
+
+| Identity Attribute | Expected Assignment Target | Independently Verified Candidate | Match |
+|---|---|---|---|
+| Title | `Sequence 11 Revision 2 — UQ-4 Acquisition/Custody Route Closure Analysis` | `Sequence 11 Revision 2 — UQ-4 Acquisition/Custody Route Closure Analysis` | **EXACT MATCH** |
+| Reference filename | `Pasted text(20261119-185644).txt` | Supplied inline body matching `Pasted text(20261119-185644).txt` | **EXACT MATCH** |
+| Exact byte length | `38,193` bytes (`[0, 38193)`) | `38,193` bytes (`[0, 38193)`) | **EXACT MATCH** |
+| SHA-256 | `cc0e5975fac96c3242905fe2f220bb375d00f0b99e8ccd7dc432e7d40ba025e4` | `cc0e5975fac96c3242905fe2f220bb375d00f0b99e8ccd7dc432e7d40ba025e4` | **EXACT MATCH** |
+| Encoding | UTF-8, no BOM | Valid UTF-8, no BOM | **EXACT MATCH** |
+| Line endings | LF | 428 LF (`0x0A`) bytes (429 lines); 0 CR (`0x0D`) bytes | **EXACT MATCH** |
+| Terminal newline | Absent | Absent (final byte `0x2A` `*`) | **EXACT MATCH** |
+| Opening line (line 1) | `# Sequence 11 Revision 2 — UQ-4 Acquisition/Custody Route Closure Analysis` | `# Sequence 11 Revision 2 — UQ-4 Acquisition/Custody Route Closure Analysis` | **EXACT MATCH** |
+| Closing line (line 429) | `**Sequence 11 Revision 2 ends here. No successor sequence is begun.**` | `**Sequence 11 Revision 2 ends here. No successor sequence is begun.**` | **EXACT MATCH** |
+
+With the exact 38,193-byte candidate independently pinned to `cc0e5975fac96c3242905fe2f220bb375d00f0b99e8ccd7dc432e7d40ba025e4`, the earlier procedural input deficiency (**S11R2-I01**) is **RESOLVED**.
+
+---
+
+## 2. Reviewer Identity and Family Evidence
+
+1. **Candidate author (attributed):** OpenAI Codex, primary analytical author (OpenAI GPT/Codex foundation-model family, as attributed in candidate line 5 and the Human Chair assignment record).
+2. **Qualifying reviewer observed/runtime model identity:** Gemini 4 Argon (Medium), running in the Google DeepMind Antigravity agent runtime (`"model": "gemini-4-argon-medium"` in [transcript.jsonl](file:///Users/aclab/.gemini/antigravity/brain/f628d6f0-0165-49dd-aeb7-79598482e879/.system_generated/logs/transcript.jsonl) step metadata; active session configuration `Gemini 4 Argon (Medium)`).
+3. **Qualifying reviewer underlying foundation-model family:** Google DeepMind Gemini foundation-model family.
+4. **Evidence supporting family identification:** Runtime harness step records (`"model": "gemini-4-argon-medium"`) and session model-selection metadata (`Gemini 4 Argon (Medium)`) in the Antigravity environment establish that this reviewer belongs to the Google DeepMind Gemini family, which is an independent foundation-model lineage from the OpenAI GPT/Codex family of the candidate's author. *(Provenance boundary: This family evidence is verified from runtime harness and session metadata under Decision 0010 clause 8; it does not claim an external cryptographic audit of provider hosting infrastructure.)*
+
+---
+
+## 3. Decision 0010 Eligibility Determination
+
+Applying operative [Decision 0010](file:///Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md) (including the prospective November 8, 2026 amendment):
+
+| Gate Requirement | Assessment |
+|---|---|
+| **1. Observed/runtime model identity** | Gemini 4 Argon (Medium) (`gemini-4-argon-medium`). |
+| **2. Underlying foundation-model family** | Google DeepMind Gemini family. |
+| **3. Supporting family evidence** | Harness transcript metadata and session configuration confirming Google DeepMind Gemini lineage, distinct from OpenAI GPT/Codex. |
+| **4. Authorship in Sequence 11 Revision 2** | **None.** This reviewer did not draft, edit, or co-author Sequence 11 Revision 1 or Revision 2. |
+| **5. Prior wording adopted verbatim or with non-substantive edits** | **None.** Inspection of the complete 429-line candidate identifies no substantive language authored by this reviewer adopted verbatim or with only non-substantive edits. |
+| **6. Decision 0010 clause 2 implication** | **Not implicated.** No clause 2(c)(i) author rewrite or clause 2(c)(ii) third-party check is required. |
+| **7. Disqualifying current-revision contribution** | **None.** Historical participation as an independent reviewer on prior MCL sequences (such as Sequences 8, 9, and 10) does not constitute authorship of Sequence 11 Revision 2 and does not disqualify under Decision 0010. |
+| **8. Formal Adoption/Qualification eligibility rationale** | This reviewer is a Google Gemini-family model independent of the OpenAI Codex author, has zero authorship or verbatim-wording contribution in Sequence 11 Revision 2, and was explicitly assigned the **FORMAL ADOPTION/QUALIFICATION** review of the exact pinned revision by the Human Chair. |
+
+**Eligibility Determination:** **ELIGIBLE — QUALIFYING CROSS-FAMILY REVIEWER AT FORMAL ADOPTION/QUALIFICATION TIER UNDER DECISION 0010.**
+
+---
+
+## 4. Formal Tier Confirmation
+
+- **Assigned Governance Tier:** **FORMAL ADOPTION/QUALIFICATION** under [Decision 0010](file:///Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md) clause 7, expressly assigned by the Human Chair.
+- **Tier Status:** Non-provisional, whole-revision qualifying review of the exact pinned 38,193-byte artifact (`cc0e5975fac96c3242905fe2f220bb375d00f0b99e8ccd7dc432e7d40ba025e4`).
+- **Disposition of Prior Review Limitation (`S11R2-Q01`):** The prior separate OpenAI Codex review operated at the provisional Routine tier without a higher-tier assignment or cross-family independence (`S11R2-Q01`). Because the Human Chair expressly assigned this review at the **FORMAL ADOPTION/QUALIFICATION** tier and this whole-revision review is performed independently by an eligible cross-family (Google Gemini) reviewer with a complete clause-9 provenance record, `S11R2-Q01` is **SUPERSEDED / DISCHARGED** by this formal qualification record.
+
+---
+
+## 5. Sources and Review Coverage
+
+### Governing Repository Checkpoint
+- **Worktree:** `/Users/aclab/aclab/model-council-lab`
+- **Branch:** `m1-live-adapter-dev`
+- **HEAD commit:** `f236f2af60248876f32740918b0f80807fa26aee` (`docs(governance): record Sequence 10 Rev 1 UQ-12 adoption`)
+- **Verification:** Read-only inspection confirmed that all tracked files under `docs/` match `f236f2af60248876f32740918b0f80807fa26aee` with zero diff, and all pre-existing modified/untracked worktree entries were left untouched.
+
+### Inspected Governing Sources
+1. **Decision 0010:** [0010-mandatory-cross-family-review.md](file:///Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md) (complete file, lines 1–62).
+2. **Sequencing Architecture Revision 4 & Adoption:** [DECISION-0009-SEQUENCING-ARCHITECTURE-REV4-ADOPTION.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-SEQUENCING-ARCHITECTURE-REV4-ADOPTION.md) (complete) and [FABLE-SEQUENCING-ARCHITECTURE-REV4.txt](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/provenance/sequencing-rev4-2026-11-12/FABLE-SEQUENCING-ARCHITECTURE-REV4.txt) (complete, §§A–O, especially §D, §E, §F steps 1–6, and §G).
+3. **Approval B Inspection-Envelope Revision 4, Qualification & Adoption:** [DECISION-0009-APPROVAL-B-INSPECTION-ENVELOPE-REV4-ADOPTION.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-APPROVAL-B-INSPECTION-ENVELOPE-REV4-ADOPTION.md) (complete, including retained notes NB-1–NB-4), [OPUS-APPROVAL-B-INSPECTION-ENVELOPE-REV4.txt](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/provenance/approval-b-inspection-envelope-rev4-2026-11-14/OPUS-APPROVAL-B-INSPECTION-ENVELOPE-REV4.txt) (complete, lines 1–1061, including §§6, 7, 8, 9, 10, 11–25, `AB-13R`–`AB-16R`, `AB-18R4`, `AB-25R`–`AB-30R4`, `AB-36`–`AB-41`, `AB-73R4`–`AB-90`, and `§24`), and [ASTRA-REV4-WHOLE-REVISION-QUALIFICATION.txt](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/provenance/approval-b-inspection-envelope-rev4-2026-11-14/ASTRA-REV4-WHOLE-REVISION-QUALIFICATION.txt) (complete).
+4. **Concrete Approval B Envelope Closure Revision 2 & Adoption:** [DECISION-0009-CONCRETE-APPROVAL-B-ENVELOPE-CLOSURE-REV2-ADOPTION.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-CONCRETE-APPROVAL-B-ENVELOPE-CLOSURE-REV2-ADOPTION.md) (complete, including adopted Option B, retained notes R2-N1–R2-N3, and U-1–U-7 dispositions) and [FABLE-CONCRETE-APPROVAL-B-ENVELOPE-CLOSURE-REV2.txt](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/provenance/concrete-approval-b-envelope-closure-rev2-2026-11-14/FABLE-CONCRETE-APPROVAL-B-ENVELOPE-CLOSURE-REV2.txt) (complete, lines 1–700, including `GC-1`–`GC-12`, `CR-01`–`CR-109`, and §§4–28).
+5. **Opus Successor Pre-Gate V2-2B Architecture & Adoption:** [DECISION-0009-PRE-GATE-V2-2B-OPUS-SUCCESSOR-ADOPTION.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-PRE-GATE-V2-2B-OPUS-SUCCESSOR-ADOPTION.md) (complete) and [OPUS-SUCCESSOR-ARCHITECTURE.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/provenance/opus-successor-2026-11-12/OPUS-SUCCESSOR-ARCHITECTURE.md) (Group II–VIII requirements, including `R-14`–`R-41`, especially `R-22`–`R-28`, `R-30`–`R-37`, and `R-38`–`R-41`).
+6. **Level-2 Evidence Contract:** [DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-V2-2B-LEVEL-2-EVIDENCE-CONTRACT.md) (adoption records and verbatim Draft 2 §§1–13).
+7. **Sequence 10 Revision 1 UQ-12 Adoption & Prior Qualification Records:** [DECISION-0009-SEQUENCE-10-REV1-UQ12-ADOPTION.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-SEQUENCE-10-REV1-UQ12-ADOPTION.md) (complete, including exact `U12-01`–`U12-20`), [DECISION-0009-SEQUENCE-9-QUALIFICATION.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-SEQUENCE-9-QUALIFICATION.md), [DECISION-0009-SEQUENCE-8-QUALIFICATION.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-SEQUENCE-8-QUALIFICATION.md), and [DECISION-0009-SEQUENCE-7-REV2-QUALIFICATION.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-SEQUENCE-7-REV2-QUALIFICATION.md).
+
+### Candidate Coverage & Lineage Verification Boundary
+- **Candidate coverage:** Complete whole-revision inspection of `Sequence 11 Revision 2` (all 38,193 bytes, lines 1–429, header and §§1–14).
+- **UQ-4 definition-lineage boundary:** The continuity of `UQ-4 (M-A versus M-B)` under the heading `Chair-mediated acquisition` (`AB-41`) and deferral table (`§24`), and its inclusion in concrete custody/acquisition element classes (`CLOS CR-10(10)`, `CR-43`), is directly verified in the tracked repository artifacts ([OPUS-APPROVAL-B-INSPECTION-ENVELOPE-REV4.txt](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/provenance/approval-b-inspection-envelope-rev4-2026-11-14/OPUS-APPROVAL-B-INSPECTION-ENVELOPE-REV4.txt#L581-L584), [FABLE-CONCRETE-APPROVAL-B-ENVELOPE-CLOSURE-REV2.txt](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/provenance/concrete-approval-b-envelope-closure-rev2-2026-11-14/FABLE-CONCRETE-APPROVAL-B-ENVELOPE-CLOSURE-REV2.txt#L128)). The external `.codex` attachment path (`/Users/aclab/.codex/attachments/8f88ce07-4517-4ed8-bb9f-f6efcafd2cff/Pasted text.txt`, 51,974 bytes, SHA-256 `f1bcb0c494e3df2786161c12340f3cee4340de3570c21074750f2e81516646c2`) lies outside the standard workspace sandbox and was not re-opened directly from `.codex`; its recovered AB-19 definition text and hash are consistent with the tracked `ABE` §10.7 / `AB-41` text, the Human Chair handoff (§6), and the prior verification record.
+
+---
+
+## 6. Whole-Revision Verdict and Mandatory Adversarial Coverage
+
+### Whole-Revision Verdict: **ACCEPT**
+
+Sequence 11 Revision 2 is analytically sound, faithful to the adopted architecture, and free of substantive or authority defects.
+
+### Mandatory Adversarial Coverage (A–L)
+
+| Case | Adversarial Review Dimension | Verdict | Independent Assessment & Governing Basis |
+|---|---|---|---|
+| **A** | **Definition continuity** | **PASS** | Section 2 (lines 44–65) recovers `M-A` (executor direct read through device access) and `M-B` (Chair-mediated transfer supplying authorized objects and Chair-computed digests to an executor without device access, introducing a custody handoff) solely for documentary meaning, explicitly rejecting the un-adopted draft's sufficiency assumptions, exposure-control theory, deadlines, and M-B preference. |
+| **B** | **M-A exemptions rejected** | **PASS** | Section 3.1 (lines 92–120) explicitly rejects any automatic exemption under M-A from `AR-1`/`AR-2`/`AR-3` source provenance and PB requirements (`ABE AB-26`, `AB-73R4`), `IM` method classification and sufficiency (`AB-29R4`, `AB-80R4`, `AB-88`–`AB-90`), copies/buffers/intermediaries/framework outputs (`CON §5`, `ABE AB-75`), provider transfers (`AB-77`), custody chains (`SUCC R-30`), and evaluated-producer independence (`SUCC R-25`). |
+| **C** | **M-B obligations & Chair digests** | **PASS** | Section 3.2 (lines 122–152) confirms that the Chair's first read/digest/copy is a governed act that can start the Approval B event (`ABE AB-36`, `AB-41`), that Chair-computed digests are producer accounts (`AB-26(3)`, `AB-41`, `CLOS CR-34`) rather than independent provenance proof, that Chair decision authority is not evidentiary independence, and that the Chair-to-executor handoff introduces genuine transfer, custody, and preservation obligations (`CON §7`, `SUCC R-33`). |
+| **D** | **Access and visibility separation** | **PASS** | Sections 2, 3.1, 3.2, and 3.3 (lines 73–74, 94–96, 134–136, 162) keep the executor, `AC` (`AB-13R(1)`), plaintext recipients (`PR`) and per-actor `EVS` (`AB-13R(2)`), providers (`AB-77`), and effective capability unions (`SUCC R-24`) strictly separate. In M-B, lack of device access is properly distinguished from lack of plaintext exposure. |
+| **E** | **Conditional rules** | **PASS** | Section 9.3 (lines 274–280) distinguishes a genuinely abstract rule stating criteria for a future choice (which leaves UQ-4 unresolved) from a conditional architecture that already fixes which acquisition route applies under specified conditions (which is a concrete commitment under `SEQ §F` requiring prior `CLOS` closure). |
+| **F** | **Effect-based classification** | **PASS** | Sections 3.1, 9.3, and 9.5 (lines 120, 278–280, 296) apply `SEQ §F` steps 1–3 by substantive effect: leaving a provider, tool, or device unnamed does not make a provision abstract if it fixes who acquires the source objects and whether the Chair-to-executor custody handoff governs. |
+| **G** | **Input register (`U4-I01`–`U4-I07`)** | **PASS** | Section 10 (lines 340–354) and Section 14 (lines 416–425) properly mark `U4-I01` satisfied, scope `U4-I02` without demanding unnecessary implementation detail, consolidate `U4-I03`–`05` into a single scoped `CLOS` showing while retaining every substantive conformance, reliance/timing (`CR-28`–`CR-32`), and independence (`SUCC R-24`/`R-25`, `UQ-9`) obligation, treat `U4-I06` as existing `CLOS CR-76` closure procedure rather than a new gate, and keep `U4-I07` (Chair consequential choice) distinct from closure (`CR-17`–`CR-18`, `CR-80`, `CR-90F`). |
+| **H** | **UQ-9** | **PASS** | Sections 3.1, 3.2, 4, 5, and 10 (lines 112, 144, 179, 185, 191–206, 348) preserve claim-specific independence analysis under `SUCC R-24`/`R-25`, keep `CLOS CR-79` closure-verifier independence separate from design-internal verifier roles, grant neither M-A nor M-B an exemption, and prescribe no universal verifier count, topology, or family structure. |
+| **I** | **P0 / B5 / U-4 / U-6** | **PASS** | Sections 4, 6, 7, and 10 (lines 181–182, 187–189, 208–236, 347) preserve `P0 candidates — NOT QUALIFIED` as a categorical predecessor to Approval B authorization (`CLOS CR-55`) without inventing a universal P0 gate on pre-incorporation route closure (`CR-57`), separate P0 status from P0 outputs and Q-parent propositions (`CR-58`–`CR-60`, `U-6`), prohibit P0/Approval B cross-feeding (`AB-56R`, `CR-62`), and preserve `B5 G1 — HOLD` and `U-4` while barring Option B scheduling of any premise whose required gate is on hold (`CR-29(2)`). |
+| **J** | **UQ-12** | **PASS** | Sections 3.1, 3.2, 4, 8, 9, and 12 (lines 116, 148, 180, 238–258, 323, 388) preserve `UQ-12 — RESOLVED AT THE ABSTRACT GOVERNANCE LEVEL` ([DECISION-0009-SEQUENCE-10-REV1-UQ12-ADOPTION.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-SEQUENCE-10-REV1-UQ12-ADOPTION.md)), keep `U12-01`–`U12-20` distinctions intact, and infer no exact population, numerical allocation, supported fit, or reconciliation/finalization implementation. |
+| **K** | **Failure / retention** | **PASS** | Sections 3.1, 3.2, 8, 11, and 12 (lines 118, 150, 254, 362, 370–372, 386) prohibit retry, resend, recapture, or M-B-to-M-A fallback (`ABE AB-42R`, `AB-86(6)`, `SUCC R-33`), preserve adverse and uncertain outcomes (`AB-49`, `CON §8`), keep execution-observable facts subject to `CLOS CR-30` and execution reconciliation, and confirm that completion, failure, or stopping grants no cleanup, deletion, movement, or release authority (`ABE AB-40`, `AB-79`, `U12-12`). |
+| **L** | **Authority** | **PASS** | Sections 1, 2, 3.3, 10, 13, and 14 confirm zero hidden recommendation or ranking of M-A or M-B, zero provider/PB/IM/verifier selection, zero P0 qualification or B5 progression, zero Approval B or operational permission, and zero successor sequence initiation. |
+
+---
+
+## 7. Stable Findings Register
+
+**Candidate findings:**
+- **Zero blocking findings.**
+- **Zero non-blocking corrections.**
+- **Zero non-blocking notes.**
+
+No candidate-defect identifiers are assigned.
+
+### Disposition of Prior Procedural / Qualification Entries
+
+| ID | Prior Status | Current Disposition | Basis |
+|---|---|---|---|
+| **S11R2-I01** | BLOCKING (Input/Identity Deficiency — candidate text not supplied in initial turn) | **RESOLVED / CLOSED** | Complete 38,193-byte candidate supplied in turn `step_index: 37` and independently verified to match SHA-256 `cc0e5975fac96c3242905fe2f220bb375d00f0b99e8ccd7dc432e7d40ba025e4`. |
+| **S11R2-Q01** | Prior provisional review limitation (same-family Codex review at Routine tier) | **SUPERSEDED / DISCHARGED** | Human Chair expressly assigned **FORMAL ADOPTION/QUALIFICATION** review to this independent cross-family Google Gemini reviewer (`Gemini 4 Argon (Medium)`), and all Decision 0010 clauses 1–11 requirements are satisfied. |
+
+---
+
+## 8. Central-Question Disposition (Including Strongest Contrary Interpretation)
+
+### The Central Question
+Does Sequence 11 Revision 2 correctly conclude that **UQ-4 cannot be resolved merely by an abstract rule permitting or constraining both alternatives, because the unresolved proposition itself is the consequential M-A/M-B acquisition/custody choice**?
+
+### Strongest Contrary Interpretation (Challenging Outcome B)
+The strongest contrary argument is that UQ-4 could be resolved at the abstract governance level—analogous to Sequence 10's resolution of UQ-12—In one of two ways:
+1. **Permissive/constraining abstract rule:** Governance could adopt an abstract rule stating the binding evidentiary, provenance (`AR-1`–`AR-3`), custody (`SUCC R-30`), independence (`SUCC R-24`–`R-25`), and accounting (`U12-01`–`U12-20`) invariants that any M-A or M-B realization must satisfy, while deferring the selection of M-A versus M-B to concrete route closure or Approval B authorization; or
+2. **High-level policy choice as abstract architecture:** The Human Chair could choose between M-A (executor direct read) and M-B (Chair-mediated transfer without executor device access) today as a high-level architectural policy choice while leaving concrete provider names, tool implementations, PB designs, and IM classifications deferred.
+
+### Independent Evaluation of Questions 1–6
+
+1. **Does Revision 2 wrongly classify a legitimately abstract governance decision as concrete?**
+   **No.** Under [FABLE-SEQUENCING-ARCHITECTURE-REV4.txt](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/provenance/sequencing-rev4-2026-11-12/FABLE-SEQUENCING-ARCHITECTURE-REV4.txt#L83-L103) (`SEQ §F` steps 1–3), whether a provision is abstract or concrete is determined by what adopting it settles, never by its level of generality or lack of implementation names. A decision that chooses whether the executor directly reads `P/` via device access (`M-A`) or the Chair acquires and transfers the objects to a device-isolated executor (`M-B`) fixes *"the path that evidence or capabilities travel, or the arrangement of the parts that handle them"* (`SEQ §F` step 2, bullet 2) and *"identif[ies] which actual components carry the enforcing responsibilities"* (`SEQ §F` step 2, bullet 4), allowing downstream work to treat that answer to "how" as settled (`SEQ §F` step 3). Moreover, adopted `ABE AB-83` and `CLOS CR-10(4)` / `CR-10(10)` explicitly classify acquisition method and the `M-A/M-B choice (UQ-4)` as concrete envelope elements subject to `ABE AB-81` and `CLOS` closure before first commitment.
+
+2. **Could UQ-4 be resolved by a policy-level M-A/M-B rule while leaving concrete realization open?**
+   **No, not without either leaving UQ-4 unanswered or making a concrete commitment requiring prior `CLOS` closure.**
+   - If the policy-level rule *permits or constrains both M-A and M-B* without choosing between them (Candidate §§9.1–9.2), it leaves the exact question asked by UQ-4 (*M-A versus M-B*) undecided. Indeed, `ABE` and `CLOS` already establish the abstract constraints governing both routes while explicitly retaining UQ-4 as unresolved (`ABE AB-41`, `§24`; `CLOS CR-10(10)`, `CR-43`).
+   - If the policy-level rule *selects M-A or M-B* (or fixes a conditional rule that binds which route applies under specified conditions, Candidate §9.3), it is by definition a concrete commitment under `SEQ §F` and `ABE AB-82`, which `ABE AB-81` and `CLOS CR-108` prohibit making until a scoped `CLOS` closure showing, independent verification, and Chair closure determination (`CLOS CR-76`) have been completed for that commitment.
+
+3. **Does the effect-based architecture make the M-A/M-B choice itself a concrete element because it fixes acquisition responsibility and the defining custody structure?**
+   **Yes.** Choosing M-A vs. M-B determines who performs the initial protected read, whether the receiving executor is barred from device access, and whether an inherent Chair-to-executor custody handoff exists. Under `SEQ §F` steps 2–3, `ABE AB-81`–`AB-83`, and `CLOS CR-10(10)` / `CR-43`, fixing that acquisition responsibility and custody topology is a concrete element commitment even if downstream implementation details remain open.
+
+4. **Does Revision 2 require too much detail before the Chair may make a limited choice?**
+   **No.** Revision 2 (§3.1 line 120, §3.2 line 152, §9.6 lines 298–313, §10 lines 338–354, §14 line 425) explicitly rejects any requirement to complete the entire Approval B authorization package, close both alternatives, perform an exhaustive comparative study, or bind every downstream provider, tool, PB, IM method, or numerical allocation before making a scoped M-A/M-B commitment. Under `CLOS CR-13`, `CR-19` (`GC-1`, `GC-12`), and `CR-90A`, a scoped commitment requires closure only for what that exact commitment settles and relies on, while legitimate residue that the commitment neither fixes nor relies on treating as settled remains open until its own applicable deadline.
+
+5. **Does it defer any fact actually necessary to judge such a choice lawful, credible or sufficient?**
+   **No.** Sections 3.1 (line 120), 3.2 (line 152), 9.6 (lines 302–313), 10 (lines 346–348), and 11 (line 362) explicitly enforce `CLOS CR-28` and `U-1`: any premise or detail (including a provider, device, access-exclusion, source-provenance, or independence property) without which the proposed commitment cannot be judged lawful, credible, or sufficient is a **design-validity premise** that must be established **before closure** and cannot be deferred or scheduled under Option B.
+
+6. **Does the distinction from UQ-12 hold under the adopted architecture?**
+   **Yes.** UQ-12 asked *what accounting classification and governing allocation rule* apply to Approval B—a question answered at the abstract governance level by adopting the bounded cumulative event-support regime and criteria (`U12-01`–`U12-20`) while leaving concrete population, numerical allocation, and fit open (`U12-18`). By contrast, the abstract rules governing acquisition, custody, and Chair-mediated transfer (`ABE §§6, 9, 10`, `AB-41`, `CLOS CR-21`) are *already adopted*, and the remaining question in UQ-4 is the concrete choice between two specific acquisition/custody topologies (`M-A` vs. `M-B`).
+
+**Disposition on Central Question:** **Outcome B is independently verified and sustained.**
+
+---
+
+## 9. Assessment of Input Register `U4-I01`–`U4-I07`
+
+| Input ID | Candidate Status in Revision 2 | Independent Qualifying Reviewer Assessment |
+|---|---|---|
+| **U4-I01 — Definition and provenance** | **SATISFIED — documentary definition and provenance recovered** | **SUPPORTED.** The documentary meanings of M-A and M-B and their continuity into adopted `ABE AB-41`/`§24` and `CLOS CR-10(10)`/`CR-43` are established. Revision 2 properly limits this satisfaction to documentary meaning without claiming conformance, closure, or selection. |
+| **U4-I02 — Exact proposed answer and scope** | **PARTLY SATISFIED; a scoped candidate remains required** | **SUPPORTED.** While M-A and M-B are defined, any concrete closure requires an exact nominated item (`CLOS CR-13`, `CR-47`, `GC-1`) stating which alternative is proposed, the exact commitment scope sought, and what residue remains deferred (`GC-12`). Revision 2 rightly refrains from proposing either alternative. |
+| **U4-I03 — Conformance basis** | **REQUIRED, scoped to the proposed commitment** | **SUPPORTED.** Properly maps to `CLOS CR-19` (`GC-1`–`GC-12`) and `CR-21` for the exact proposed commitment scope without artificially requiring the entire Approval B authorization package before a limited route commitment (`CLOS CR-90A`). |
+| **U4-I04 — Reliance and timing** | **REQUIRED as part of U4-I03; specific gated inputs CONDITIONALLY REQUIRED** | **SUPPORTED.** Preserves `GC-4`, `GC-5`, `GC-8`, `CR-28`–`CR-32`, and `CR-45`. Design-validity premises must be established before closure; pre-effect premises may be scheduled only under all five `CR-29` conditions (including that no required gate is on hold); execution-observable premises require `CR-30`. P0, B5, U-4, and U-6 are prerequisites where actually relied upon. |
+| **U4-I05 — Independence consequences** | **REQUIRED as part of U4-I03; UQ-9 resolution CONDITIONALLY REQUIRED** | **SUPPORTED.** Preserves `GC-7`, `CR-37`–`CR-43`, and `SUCC R-24`/`R-25` (evaluated-producer identification, effective capability-union assessment, and non-circular grounding). Correctly enforces `ABE §24` and `CLOS CR-43`: UQ-9 must be resolved before adopting any PB or custody design that relies on a verifier-independence arrangement. |
+| **U4-I06 — Closure record** | **REQUIRED procedural acts, not an additional factual prerequisite** | **SUPPORTED.** Accurately reflects `CLOS CR-76`, `CR-78`, and `CR-91`–`CR-92` (complete showing, eligible non-provisional independent verification of the whole showing with zero unresolved blocking findings, and recorded Human Chair closure determination making `CR-92` information ascertainable), without inventing a second parallel qualification ladder. |
+| **U4-I07 — Chair choice and disposition** | **REQUIRED consequential act** | **SUPPORTED.** Accurately reflects `SEQ §G` and `CLOS CR-17`–`CR-18`, `CR-80`, and `CR-90F`: concrete closure makes an item eligible for commitment but does not select it; only the Human Chair's explicit consequential decision settles M-A vs. M-B, and closure determination plus commitment may be recorded as distinct acts on a single occasion. |
+
+Consolidating `U4-I03`, `U4-I04`, and `U4-I05` into a single integrated `CLOS` showing is fully consistent with `CLOS CR-19` (*"These state what must be shown. They are not parts of a document"*) and omits no substantive obligation.
+
+---
+
+## 10. Decision 0010 Clause-2 Assessment
+
+Under [Decision 0010](file:///Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md) clause 2:
+- **Check for verbatim or non-substantively edited reviewer wording:** I compared the complete 38,193-byte candidate against prior review records. Sequence 11 Revision 2 was authored and revised by OpenAI Codex. It incorporates no substantive language authored by this qualifying reviewer (`Gemini 4 Argon (Medium)`).
+- **Check for other reviewer-authored wording:** Revision 2 incorporates the author's own analytical reformulation addressing the recovered M-A/M-B definitions from the historical Opus draft (`AB-19`) and restates or applies already-adopted governing provisions (`SEQ`, `ABE`, `CLOS`, `SUCC`, `CON`, `U12`, `D10`). Restating or applying Human Chair–adopted governing text is not adoption of unverified reviewer wording under Decision 0010 clause 2.
+- **Conclusion:** **Decision 0010 clause 2 is satisfied without triggering clause 2(c)(i) or clause 2(c)(ii). No additional independent clause-2 checker is required.**
+
+---
+
+## 11. Formal Qualification Status
+
+### **FORMALLY QUALIFIED under Decision 0010**
+
+All requirements of [Decision 0010](file:///Users/aclab/aclab/model-council-lab/docs/decisions/0010-mandatory-cross-family-review.md) clauses 1–11 for **Formal Adoption/Qualification** are satisfied for this exact candidate:
+
+1. **Explicit Human Chair tier assignment:** Assigned at **FORMAL ADOPTION/QUALIFICATION** tier by Human Chair Amy.
+2. **Exact pinned artifact:** `Sequence 11 Revision 2 — UQ-4 Acquisition/Custody Route Closure Analysis` (`Pasted text(20261119-185644).txt`), **38,193 bytes**, SHA-256 `cc0e5975fac96c3242905fe2f220bb375d00f0b99e8ccd7dc432e7d40ba025e4`, UTF-8, no BOM, 428 LF bytes, no terminal newline.
+3. **Eligible independent cross-family qualifying reviewer:** Gemini 4 Argon (Medium) (`gemini-4-argon-medium`, Google DeepMind Gemini family), independent of the OpenAI Codex author (OpenAI GPT/Codex family), with zero authorship in the candidate.
+4. **Complete whole-revision review:** All 14 sections (38,193 bytes, lines 1–429) independently reviewed against governing sources and mandatory adversarial cases A–L.
+5. **Consensus verdict and findings record:** Explicit **ACCEPT** with **zero blocking findings**, **zero non-blocking corrections**, and **zero non-blocking notes**.
+6. **Clause 2 satisfaction:** Zero verbatim-adopted substantive reviewer wording requiring remediation or third-party check.
+7. **Complete clause-9 provenance and disposition record:** Recorded in Sections 1–12 of this review.
+
+---
+
+## 12. Authority Statement and Preserved Statuses
+
+This qualifying review and formal qualification determination establish the analytical standing of **Sequence 11 Revision 2** (`cc0e5975fac96c3242905fe2f220bb375d00f0b99e8ccd7dc432e7d40ba025e4`) only. Human Chair adoption or recording of this qualification remains a separate Human Chair decision under Decision 0002 and Decision 0010 clause 5.
+
+This review does **not** select M-A or M-B, close UQ-4, close any concrete envelope element, nominate any candidate design, select any provider, PB, IM method/classification, or verifier arrangement, acquire evidence, access protected objects, qualify P0, progress B5, authorize Approval B, authorize V2-2B implementation or execution, mutate the repository, or initiate Sequence 12 or any other successor work.
+
+### Preserved Governing Statuses
+
+| Matter | Preserved Controlling Disposition |
+|---|---|
+| **U4-I01** | **SATISFIED — documentary definition and provenance recovered** (analytical finding within Sequence 11 Revision 2) |
+| **UQ-4** | **Unresolved** |
+| **UQ-9** | **Unresolved** |
+| **UQ-12** | **RESOLVED AT THE ABSTRACT GOVERNANCE LEVEL** ([DECISION-0009-SEQUENCE-10-REV1-UQ12-ADOPTION.md](file:///Users/aclab/aclab/model-council-lab/docs/governance/decision-0009/DECISION-0009-SEQUENCE-10-REV1-UQ12-ADOPTION.md)); concrete accounting/allocation obligations remain open |
+| **U-4 / U-6** | **Unresolved where applicable** |
+| **P0 candidates** | **NOT QUALIFIED** |
+| **B5 G1** | **HOLD** |
+| **Approval B** | **UNAUTHORIZED** |
+| **V2-2B implementation/execution** | **UNAUTHORIZED** |
+
+### Repository Preservation Confirmation
+- **Branch:** `m1-live-adapter-dev`
+- **HEAD:** `f236f2af60248876f32740918b0f80807fa26aee`
+- **Mutations:** None. No files were created, modified, deleted, staged, committed, or pushed. All pre-existing working-tree entries remain intact.
+
+**STOP — Formal qualifying independent review complete and delivered for Human Chair consideration.**
